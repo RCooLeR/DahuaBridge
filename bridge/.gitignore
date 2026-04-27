@@ -1,0 +1,17 @@
+bin/
+dist/
+var/
+data/
+.gotmp*/
+.tmp-go/
+.idea/
+config.yaml
+config.local.yaml
+.env
+.env.local
+*.log
+*.out
+*.test
+coverage.out
+*.exe
+dahuabridge

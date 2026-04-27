@@ -1,0 +1,28 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Connect to DahuaBridge",
+        "description": "Add a DahuaBridge instance that will expose camera and state entities as one Home Assistant integration.",
+        "data": {
+          "bridge_url": "Bridge URL",
+          "scan_interval": "Poll interval in seconds"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "The bridge could not be reached",
+      "invalid_url": "Enter a full http:// or https:// bridge URL"
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "DahuaBridge Options",
+        "data": {
+          "scan_interval": "Poll interval in seconds"
+        }
+      }
+    }
+  }
+}
