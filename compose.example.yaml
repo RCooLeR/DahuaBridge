@@ -1,0 +1,17 @@
+services:
+  dahuabridge:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: dahuabridge
+    restart: unless-stopped
+    ports:
+      - "9205:8080"
+    environment:
+      TZ: Europe/Kiev
+    volumes:
+      - ./config.yaml:/config/config.yaml:ro
+      - ./data:/data
+    # Optional if you want hardware acceleration through the host iGPU.
+    # devices:
+    #   - /dev/dri:/dev/dri

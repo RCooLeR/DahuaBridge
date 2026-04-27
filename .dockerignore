@@ -1,0 +1,14 @@
+.git
+.gitignore
+.idea
+.tmp-go
+data
+config.yaml
+config.local.yaml
+bin/
+dist/
+var/
+*.log
+config.yaml
+config.local.yaml
+dahuabridge.exe
