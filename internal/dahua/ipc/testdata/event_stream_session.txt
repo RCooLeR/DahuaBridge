@@ -1,0 +1,16 @@
+--myboundary
+Content-Type: text/plain
+
+Code=VideoMotion;action=Pulse
+--myboundary
+Content-Type: text/plain
+
+Code=SmartMotionVehicle
+action=Start
+index=1
+
+--myboundary
+Content-Type: text/plain
+
+Code=CrossLineDetection;action=Stop;index=0
+--myboundary--

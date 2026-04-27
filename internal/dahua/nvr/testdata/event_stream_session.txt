@@ -1,0 +1,16 @@
+--myboundary
+Content-Type: text/plain
+
+Code=VideoMotion;action=Start;index=0
+--myboundary
+Content-Type: text/plain
+
+Code=SmartMotionHuman
+action=Pulse
+index=1
+
+--myboundary
+Content-Type: text/plain
+
+Code=CrossRegionDetection;action=Stop;index=2
+--myboundary--

@@ -1,0 +1,131 @@
+log:
+  level: info
+  pretty: true
+
+http:
+  listen_address: ":8080"
+  metrics_path: /metrics
+  health_path: /healthz
+  read_timeout: 5s
+  write_timeout: 10s
+  idle_timeout: 60s
+  admin_rate_limit_per_minute: 30
+  admin_rate_limit_burst: 10
+  snapshot_rate_limit_per_minute: 240
+  snapshot_rate_limit_burst: 40
+  media_rate_limit_per_minute: 60
+  media_rate_limit_burst: 12
+
+mqtt:
+  enabled: true
+  broker: tcp://127.0.0.1:1883
+  client_id: dahuabridge
+  username: ""
+  password: ""
+  topic_prefix: dahuabridge
+  discovery_prefix: homeassistant
+  qos: 1
+  retain: true
+  clean_session: false
+  keep_alive: 30s
+  connect_timeout: 15s
+  publish_timeout: 10s
+
+media:
+  enabled: true
+  ffmpeg_path: ffmpeg
+  idle_timeout: 30s
+  start_timeout: 15s
+  max_workers: 14
+  frame_rate: 5
+  jpeg_quality: 7
+  threads: 1
+  scale_width: 960
+  scale_height: 0
+  read_buffer_size: 1048576
+  hls_segment_time: 2s
+  hls_list_size: 6
+  hwaccel_args: []
+  # Optional STUN/TURN config for bridge-hosted WebRTC pages and peer connections.
+  # webrtc_ice_servers:
+  #   - urls:
+  #       - stun:stun.l.google.com:19302
+  #   - urls:
+  #       - turn:turn.example.com:3478?transport=udp
+  #       - turns:turn.example.com:5349?transport=tcp
+  #     username: bridge-turn-user
+  #     credential: bridge-turn-password
+  # Optional RTP export targets for browser microphone uplink from bridge-hosted WebRTC intercom sessions.
+  # Audio is forwarded as incoming Opus RTP exactly as received by the bridge; this is not VTO talkback by itself.
+  # webrtc_uplink_targets:
+  #   - udp://127.0.0.1:5004
+  #   - 127.0.0.1:5006
+
+home_assistant:
+  enabled: true
+  node_id: dahuabridge
+  public_base_url: http://127.0.0.1:8080
+  # api_base_url: http://homeassistant.local:8123
+  # access_token: your-home-assistant-long-lived-token
+  request_timeout: 15s
+
+state_store:
+  enabled: true
+  path: ./var/dahuabridge-state.json
+  flush_interval: 5s
+
+devices:
+  nvr:
+    - id: example_nvr
+      name: "Example NVR"
+      manufacturer: Dahua
+      model: DHI-NVR5232-EI
+      base_url: http://nvr.example.local
+      username: admin
+      password: change-me
+      onvif_enabled: true
+      onvif_username: admin
+      onvif_password: change-me-onvif
+      # onvif_service_url: http://nvr.example.local/onvif/device_service
+      poll_interval: 30s
+      request_timeout: 10s
+      insecure_skip_tls: false
+      enabled: true
+  ipc:
+    - id: example_ipc_30
+      name: "Example IPC 30"
+      manufacturer: Dahua
+      model: IPC
+      base_url: http://ipc30.example.local
+      username: admin
+      password: change-me
+      onvif_enabled: true
+      poll_interval: 30s
+      request_timeout: 10s
+      insecure_skip_tls: false
+      enabled: true
+    - id: example_ipc_20
+      name: "Example IPC 20"
+      manufacturer: Dahua
+      model: IPC
+      base_url: https://ipc20.example.local
+      username: admin
+      password: change-me
+      onvif_enabled: true
+      poll_interval: 30s
+      request_timeout: 10s
+      insecure_skip_tls: true
+      enabled: true
+  vto:
+    - id: example_vto
+      name: "Example VTO"
+      manufacturer: Dahua
+      model: DHI-VTO2311R-WP
+      base_url: http://vto.example.local
+      username: admin
+      password: change-me
+      onvif_enabled: true
+      poll_interval: 30s
+      request_timeout: 10s
+      insecure_skip_tls: false
+      enabled: true
