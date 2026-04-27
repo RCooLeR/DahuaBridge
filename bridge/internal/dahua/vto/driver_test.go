@@ -1,0 +1,480 @@
+package vto
+
+import (
+	"context"
+	"crypto/md5"
+	"encoding/hex"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+	"time"
+
+	"RCooLeR/DahuaBridge/internal/config"
+	"RCooLeR/DahuaBridge/internal/dahua"
+	"github.com/rs/zerolog"
+)
+
+func TestParseVTOEncode(t *testing.T) {
+	values := map[string]string{
+		"table.Encode[0].MainFormat[0].Video.resolution":   "1280x720",
+		"table.Encode[0].MainFormat[0].Video.Compression":  "H.265",
+		"table.Encode[0].ExtraFormat[0].Video.resolution":  "1920x1080",
+		"table.Encode[0].ExtraFormat[0].Video.Compression": "H.265",
+		"table.Encode[0].MainFormat[0].Audio.Compression":  "PCM",
+	}
+
+	mainRes, mainCodec, subRes, subCodec, audioCodec := parseVTOEncode(values)
+
+	if mainRes != "1280x720" || mainCodec != "H.265" {
+		t.Fatalf("unexpected main format: %s %s", mainRes, mainCodec)
+	}
+	if subRes != "1920x1080" || subCodec != "H.265" {
+		t.Fatalf("unexpected sub format: %s %s", subRes, subCodec)
+	}
+	if audioCodec != "PCM" {
+		t.Fatalf("unexpected audio codec: %s", audioCodec)
+	}
+}
+
+func TestParseVTOLocks(t *testing.T) {
+	values := map[string]string{
+		"table.AccessControl[0].Name":               "Door1",
+		"table.AccessControl[0].State":              "Normal",
+		"table.AccessControl[0].SensorEnable":       "false",
+		"table.AccessControl[0].LockMode":           "2",
+		"table.AccessControl[0].UnlockHoldInterval": "2",
+	}
+
+	locks := parseVTOLocks(values)
+	if len(locks) != 1 {
+		t.Fatalf("expected 1 lock, got %d", len(locks))
+	}
+	if locks[0].Name != "Door1" || locks[0].State != "Normal" {
+		t.Fatalf("unexpected lock inventory: %+v", locks[0])
+	}
+}
+
+func TestParseVTOAlarms(t *testing.T) {
+	values := map[string]string{
+		"table.Alarm[3].Name":        "Nonamed",
+		"table.Alarm[3].SenseMethod": "Button",
+		"table.Alarm[3].Enable":      "true",
+	}
+
+	alarms := parseVTOAlarms(values)
+	if len(alarms) != 1 {
+		t.Fatalf("expected 1 alarm, got %d", len(alarms))
+	}
+	if alarms[0].SenseMethod != "Button" || !alarms[0].Enabled {
+		t.Fatalf("unexpected alarm inventory: %+v", alarms[0])
+	}
+}
+
+func TestNormalizeEvent(t *testing.T) {
+	event, ok := normalizeEvent("west20_vto", map[string]string{
+		"Code":   "AlarmLocal",
+		"action": "Start",
+		"index":  "3",
+	})
+	if !ok {
+		t.Fatal("expected event to normalize")
+	}
+	if event.ChildID != "west20_vto_alarm_03" {
+		t.Fatalf("child id mismatch: %q", event.ChildID)
+	}
+	if event.Channel != 4 {
+		t.Fatalf("channel mismatch: %d", event.Channel)
+	}
+}
+
+func TestBuildVTOStreamURL(t *testing.T) {
+	got := buildVTOStreamURL("http://vto.example.local", 1)
+	want := "rtsp://vto.example.local:554/cam/realmonitor?channel=1&subtype=1"
+	if got != want {
+		t.Fatalf("rtsp url mismatch:\nwant: %s\ngot:  %s", want, got)
+	}
+}
+
+func TestEventTypeForAppCanonicalizesAccessCtl(t *testing.T) {
+	eventType := EventTypeForApp(dahua.Event{
+		Code:   "AccessCtl",
+		Action: dahua.EventActionStart,
+	})
+
+	if eventType != "accesscontrol_start" {
+		t.Fatalf("unexpected event type: %q", eventType)
+	}
+}
+
+func TestSessionStateUpdatesForAppTracksCallLifecycle(t *testing.T) {
+	info := map[string]any{
+		"call_state": "idle",
+	}
+	startedAt := time.Date(2026, 4, 27, 12, 0, 0, 0, time.UTC)
+	endedAt := startedAt.Add(45 * time.Second)
+
+	startUpdates := SessionStateUpdatesForApp(info, dahua.Event{
+		Code:       "Call",
+		Action:     dahua.EventActionStart,
+		OccurredAt: startedAt,
+		Data: map[string]string{
+			"CallSrc": "Villa-01",
+		},
+	})
+	if startUpdates["call_state"] != "ringing" {
+		t.Fatalf("unexpected call start state: %+v", startUpdates)
+	}
+	if startUpdates["last_call_started_at"] != startedAt.Format(time.RFC3339Nano) {
+		t.Fatalf("unexpected call start timestamp: %+v", startUpdates)
+	}
+	if startUpdates["last_call_source"] != "Villa-01" {
+		t.Fatalf("unexpected call source: %+v", startUpdates)
+	}
+
+	stopUpdates := SessionStateUpdatesForApp(info, dahua.Event{
+		Code:       "Call",
+		Action:     dahua.EventActionStop,
+		OccurredAt: endedAt,
+	})
+	if stopUpdates["call_state"] != "idle" {
+		t.Fatalf("unexpected call stop state: %+v", stopUpdates)
+	}
+	if stopUpdates["last_call_ended_at"] != endedAt.Format(time.RFC3339Nano) {
+		t.Fatalf("unexpected call stop timestamp: %+v", stopUpdates)
+	}
+	if stopUpdates["last_call_duration_seconds"] != "45" {
+		t.Fatalf("unexpected call duration update: %+v", stopUpdates)
+	}
+	if _, ok := info["call_started_at"]; ok {
+		t.Fatalf("expected call_started_at to be cleared, got %+v", info)
+	}
+	if info["call_state"] != "idle" {
+		t.Fatalf("expected stored call state to be idle, got %+v", info)
+	}
+}
+
+func TestSessionStateUpdatesForAppTracksDoorbellRing(t *testing.T) {
+	info := map[string]any{
+		"call_state": "idle",
+	}
+	occurredAt := time.Date(2026, 4, 27, 12, 1, 0, 0, time.UTC)
+
+	updates := SessionStateUpdatesForApp(info, dahua.Event{
+		Code:       "DoorBell",
+		Action:     dahua.EventActionStart,
+		OccurredAt: occurredAt,
+		Data: map[string]string{
+			"Source": "Front Gate",
+		},
+	})
+	if updates["last_ring_at"] != occurredAt.Format(time.RFC3339Nano) {
+		t.Fatalf("unexpected ring timestamp: %+v", updates)
+	}
+	if updates["last_call_source"] != "Front Gate" {
+		t.Fatalf("unexpected ring source: %+v", updates)
+	}
+}
+
+func TestDriverHangupCallUsesConsoleRunCmd(t *testing.T) {
+	var command string
+	var loginPassword string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+
+		switch r.URL.Path {
+		case "/RPC2_Login":
+			session, _ := payload["session"].(float64)
+			if session == 0 {
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"id":      payload["id"],
+					"result":  false,
+					"session": 123,
+					"params": map[string]any{
+						"realm":      "Login to Dahua",
+						"random":     "abc123",
+						"encryption": "Default",
+					},
+					"error": map[string]any{
+						"code":    401,
+						"message": "challenge",
+					},
+				})
+				return
+			}
+			params, ok := payload["params"].(map[string]any)
+			if !ok {
+				t.Fatalf("unexpected login params payload: %+v", payload)
+			}
+			loginPassword, _ = params["password"].(string)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"id":      payload["id"],
+				"result":  true,
+				"session": 123,
+			})
+		case "/RPC2":
+			switch payload["method"] {
+			case "VideoTalkPhone.factory.instance":
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"id":      payload["id"],
+					"result":  20737192,
+					"session": 123,
+				})
+			case "VideoTalkPhone.getCallState":
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"id":      payload["id"],
+					"result":  true,
+					"session": 123,
+					"params": map[string]any{
+						"callState": "Idle",
+					},
+				})
+			case "console.runCmd":
+				params, ok := payload["params"].(map[string]any)
+				if !ok {
+					t.Fatalf("unexpected params payload: %+v", payload)
+				}
+				command, _ = params["command"].(string)
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"id":      payload["id"],
+					"result":  true,
+					"session": 123,
+				})
+			default:
+				t.Fatalf("unexpected rpc method: %+v", payload)
+			}
+		default:
+			t.Fatalf("unexpected request path %q", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	cfg := config.DeviceConfig{
+		ID:             "front_vto",
+		BaseURL:        server.URL,
+		Username:       "admin",
+		Password:       "secret",
+		RequestTimeout: 5 * time.Second,
+	}
+	rpc, err := newRPCClient(cfg)
+	if err != nil {
+		t.Fatalf("newRPCClient returned error: %v", err)
+	}
+
+	driver := &Driver{
+		cfg:    cfg,
+		rpc:    rpc,
+		logger: zerolog.Nop(),
+	}
+
+	if err := driver.HangupCall(context.Background()); err != nil {
+		t.Fatalf("HangupCall returned error: %v", err)
+	}
+	if command != "hc" {
+		t.Fatalf("unexpected console command %q", command)
+	}
+	if loginPassword != uppercaseMD5("admin:abc123:"+uppercaseMD5("admin:Login to Dahua:secret")) {
+		t.Fatalf("unexpected rpc login password %q", loginPassword)
+	}
+}
+
+func TestDriverHangupCallUsesVideoTalkPhoneDisconnectWhenActive(t *testing.T) {
+	var usedConsole bool
+	var disconnectObjectID float64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+
+		switch r.URL.Path {
+		case "/RPC2_Login":
+			session, _ := payload["session"].(float64)
+			if session == 0 {
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"id":      payload["id"],
+					"result":  false,
+					"session": 123,
+					"params": map[string]any{
+						"realm":      "Login to Dahua",
+						"random":     "abc123",
+						"encryption": "Default",
+					},
+					"error": map[string]any{
+						"code":    401,
+						"message": "challenge",
+					},
+				})
+				return
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"id":      payload["id"],
+				"result":  true,
+				"session": 123,
+			})
+		case "/RPC2":
+			switch payload["method"] {
+			case "VideoTalkPhone.factory.instance":
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"id":      payload["id"],
+					"result":  20737192,
+					"session": 123,
+				})
+			case "VideoTalkPhone.getCallState":
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"id":      payload["id"],
+					"result":  true,
+					"session": 123,
+					"params": map[string]any{
+						"callState": "Talking",
+					},
+				})
+			case "VideoTalkPhone.disconnect":
+				disconnectObjectID, _ = payload["object"].(float64)
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"id":      payload["id"],
+					"result":  true,
+					"session": 123,
+				})
+			case "console.runCmd":
+				usedConsole = true
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"id":      payload["id"],
+					"result":  true,
+					"session": 123,
+				})
+			default:
+				t.Fatalf("unexpected rpc method: %+v", payload)
+			}
+		default:
+			t.Fatalf("unexpected request path %q", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	cfg := config.DeviceConfig{
+		ID:             "front_vto",
+		BaseURL:        server.URL,
+		Username:       "admin",
+		Password:       "secret",
+		RequestTimeout: 5 * time.Second,
+	}
+	rpc, err := newRPCClient(cfg)
+	if err != nil {
+		t.Fatalf("newRPCClient returned error: %v", err)
+	}
+
+	driver := &Driver{
+		cfg:    cfg,
+		rpc:    rpc,
+		logger: zerolog.Nop(),
+	}
+
+	if err := driver.HangupCall(context.Background()); err != nil {
+		t.Fatalf("HangupCall returned error: %v", err)
+	}
+	if disconnectObjectID != 20737192 {
+		t.Fatalf("unexpected VideoTalkPhone object id %.0f", disconnectObjectID)
+	}
+	if usedConsole {
+		t.Fatal("expected hangup to avoid console fallback when disconnect succeeds")
+	}
+}
+
+func TestDriverAnswerCallUsesVideoTalkPhoneService(t *testing.T) {
+	var answerObjectID float64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+
+		switch r.URL.Path {
+		case "/RPC2_Login":
+			session, _ := payload["session"].(float64)
+			if session == 0 {
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"id":      payload["id"],
+					"result":  false,
+					"session": 123,
+					"params": map[string]any{
+						"realm":      "Login to Dahua",
+						"random":     "abc123",
+						"encryption": "Default",
+					},
+					"error": map[string]any{
+						"code":    401,
+						"message": "challenge",
+					},
+				})
+				return
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"id":      payload["id"],
+				"result":  true,
+				"session": 123,
+			})
+		case "/RPC2":
+			switch payload["method"] {
+			case "VideoTalkPhone.factory.instance":
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"id":      payload["id"],
+					"result":  20737192,
+					"session": 123,
+				})
+			case "VideoTalkPhone.answer":
+				answerObjectID, _ = payload["object"].(float64)
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"id":      payload["id"],
+					"result":  true,
+					"session": 123,
+				})
+			default:
+				t.Fatalf("unexpected rpc method: %+v", payload)
+			}
+		default:
+			t.Fatalf("unexpected request path %q", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	cfg := config.DeviceConfig{
+		ID:             "front_vto",
+		BaseURL:        server.URL,
+		Username:       "admin",
+		Password:       "secret",
+		RequestTimeout: 5 * time.Second,
+	}
+	rpc, err := newRPCClient(cfg)
+	if err != nil {
+		t.Fatalf("newRPCClient returned error: %v", err)
+	}
+
+	driver := &Driver{
+		cfg:    cfg,
+		rpc:    rpc,
+		logger: zerolog.Nop(),
+	}
+
+	if err := driver.AnswerCall(context.Background()); err != nil {
+		t.Fatalf("AnswerCall returned error: %v", err)
+	}
+	if answerObjectID != 20737192 {
+		t.Fatalf("unexpected VideoTalkPhone object id %.0f", answerObjectID)
+	}
+}
+
+func uppercaseMD5(value string) string {
+	sum := md5.Sum([]byte(value))
+	return strings.ToUpper(hex.EncodeToString(sum[:]))
+}
