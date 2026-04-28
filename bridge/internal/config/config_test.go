@@ -50,6 +50,12 @@ func TestMediaDefaults(t *testing.T) {
 	if cfg.Media.MaxWorkers != 14 {
 		t.Fatalf("unexpected default media max_workers %d", cfg.Media.MaxWorkers)
 	}
+	if cfg.Media.VideoEncoder != "software" {
+		t.Fatalf("unexpected default media video_encoder %q", cfg.Media.VideoEncoder)
+	}
+	if cfg.Media.InputPreset != "low_latency" {
+		t.Fatalf("unexpected default media input_preset %q", cfg.Media.InputPreset)
+	}
 	if cfg.Media.Threads != 1 {
 		t.Fatalf("unexpected default media threads %d", cfg.Media.Threads)
 	}
@@ -109,6 +115,9 @@ func TestHomeAssistantAPIDefaultTimeout(t *testing.T) {
 	if cfg.HomeAssistant.EntityMode != "hybrid" {
 		t.Fatalf("unexpected home assistant entity mode %q", cfg.HomeAssistant.EntityMode)
 	}
+	if cfg.HomeAssistant.CameraSnapshotSource != "device" {
+		t.Fatalf("unexpected home assistant camera snapshot source %q", cfg.HomeAssistant.CameraSnapshotSource)
+	}
 }
 
 func TestValidateRequiresHomeAssistantTokenWhenAPIBaseURLIsSet(t *testing.T) {
@@ -151,6 +160,7 @@ func TestNormalizeHomeAssistantAPIBaseURL(t *testing.T) {
 	cfg := defaultConfig()
 	cfg.HomeAssistant.APIBaseURL = " http://homeassistant.local:8123/ "
 	cfg.HomeAssistant.EntityMode = " Native "
+	cfg.HomeAssistant.CameraSnapshotSource = " Logo "
 
 	if err := cfg.normalize(); err != nil {
 		t.Fatalf("normalize returned error: %v", err)
@@ -160,6 +170,9 @@ func TestNormalizeHomeAssistantAPIBaseURL(t *testing.T) {
 	}
 	if cfg.HomeAssistant.EntityMode != "native" {
 		t.Fatalf("unexpected normalized entity mode %q", cfg.HomeAssistant.EntityMode)
+	}
+	if cfg.HomeAssistant.CameraSnapshotSource != "logo" {
+		t.Fatalf("unexpected normalized camera snapshot source %q", cfg.HomeAssistant.CameraSnapshotSource)
 	}
 }
 
@@ -181,8 +194,28 @@ func TestValidateRejectsUnsupportedHomeAssistantEntityMode(t *testing.T) {
 	}
 }
 
+func TestValidateRejectsUnsupportedHomeAssistantCameraSnapshotSource(t *testing.T) {
+	cfg := defaultConfig()
+	cfg.MQTT.Enabled = false
+	cfg.HomeAssistant.CameraSnapshotSource = "broken"
+	cfg.Devices.NVR = []DeviceConfig{{
+		ID:       "nvr",
+		BaseURL:  "http://127.0.0.1",
+		Username: "admin",
+		Password: "secret",
+		Enabled:  boolPtr(true),
+	}}
+
+	err := cfg.validate()
+	if err == nil || !strings.Contains(err.Error(), "home_assistant.camera_snapshot_source") {
+		t.Fatalf("expected home assistant camera snapshot source validation error, got %v", err)
+	}
+}
+
 func TestNormalizeMediaWebRTCICEServers(t *testing.T) {
 	cfg := defaultConfig()
+	cfg.Media.VideoEncoder = " QSV "
+	cfg.Media.InputPreset = " Stable "
 	cfg.Media.WebRTCICEServers = []WebRTCICEServerConfig{
 		{
 			URLs:       []string{" stun:stun1.example.net:3478 ", "", "turn:turn.example.net:3478?transport=udp"},
@@ -193,6 +226,12 @@ func TestNormalizeMediaWebRTCICEServers(t *testing.T) {
 
 	if err := cfg.normalize(); err != nil {
 		t.Fatalf("normalize returned error: %v", err)
+	}
+	if cfg.Media.VideoEncoder != "qsv" {
+		t.Fatalf("unexpected normalized video encoder %q", cfg.Media.VideoEncoder)
+	}
+	if cfg.Media.InputPreset != "stable" {
+		t.Fatalf("unexpected normalized input preset %q", cfg.Media.InputPreset)
 	}
 
 	if len(cfg.Media.WebRTCICEServers) != 1 {
@@ -227,5 +266,111 @@ func TestNormalizeMediaWebRTCUplinkTargets(t *testing.T) {
 	}
 	if cfg.Media.WebRTCUplinkTargets[0] != "udp://127.0.0.1:5004" {
 		t.Fatalf("unexpected first uplink target %q", cfg.Media.WebRTCUplinkTargets[0])
+	}
+}
+
+func TestValidateRejectsUnsupportedMediaVideoEncoder(t *testing.T) {
+	cfg := defaultConfig()
+	cfg.MQTT.Enabled = false
+	cfg.Media.VideoEncoder = "broken"
+	cfg.Devices.NVR = []DeviceConfig{{
+		ID:       "nvr",
+		BaseURL:  "http://127.0.0.1",
+		Username: "admin",
+		Password: "secret",
+		Enabled:  boolPtr(true),
+	}}
+
+	err := cfg.validate()
+	if err == nil || !strings.Contains(err.Error(), "media.video_encoder") {
+		t.Fatalf("expected media video encoder validation error, got %v", err)
+	}
+}
+
+func TestValidateRejectsUnsupportedMediaInputPreset(t *testing.T) {
+	cfg := defaultConfig()
+	cfg.MQTT.Enabled = false
+	cfg.Media.InputPreset = "broken"
+	cfg.Devices.NVR = []DeviceConfig{{
+		ID:       "nvr",
+		BaseURL:  "http://127.0.0.1",
+		Username: "admin",
+		Password: "secret",
+		Enabled:  boolPtr(true),
+	}}
+
+	err := cfg.validate()
+	if err == nil || !strings.Contains(err.Error(), "media.input_preset") {
+		t.Fatalf("expected media input preset validation error, got %v", err)
+	}
+}
+
+func TestNormalizeDeviceChannelAllowlist(t *testing.T) {
+	cfg := DeviceConfig{
+		ID:               "nvr",
+		BaseURL:          "http://127.0.0.1",
+		ChannelAllowlist: []int{6, 2, 6, -1, 0, 11},
+	}
+
+	if err := normalizeDevice(&cfg); err != nil {
+		t.Fatalf("normalizeDevice returned error: %v", err)
+	}
+
+	want := []int{2, 6, 11}
+	if len(cfg.ChannelAllowlist) != len(want) {
+		t.Fatalf("unexpected normalized allowlist %+v", cfg.ChannelAllowlist)
+	}
+	for i, value := range want {
+		if cfg.ChannelAllowlist[i] != value {
+			t.Fatalf("unexpected normalized allowlist %+v", cfg.ChannelAllowlist)
+		}
+	}
+}
+
+func TestDeviceConfigAllowsChannel(t *testing.T) {
+	cfg := DeviceConfig{ChannelAllowlist: []int{2, 6, 11}}
+
+	if !cfg.AllowsChannel(6) {
+		t.Fatal("expected channel 6 to be allowed")
+	}
+	if cfg.AllowsChannel(7) {
+		t.Fatal("expected channel 7 to be rejected")
+	}
+	if cfg.AllowsChannel(0) {
+		t.Fatal("expected channel 0 to be rejected")
+	}
+}
+
+func TestNormalizeDeviceAccessoryAllowlists(t *testing.T) {
+	cfg := DeviceConfig{
+		ID:             "vto",
+		BaseURL:        "http://127.0.0.1",
+		LockAllowlist:  []int{1, 1, 3, -1},
+		AlarmAllowlist: []int{2, 0, 2, 5},
+	}
+
+	if err := normalizeDevice(&cfg); err != nil {
+		t.Fatalf("normalizeDevice returned error: %v", err)
+	}
+
+	if len(cfg.LockAllowlist) != 2 || cfg.LockAllowlist[0] != 1 || cfg.LockAllowlist[1] != 3 {
+		t.Fatalf("unexpected normalized lock allowlist %+v", cfg.LockAllowlist)
+	}
+	if len(cfg.AlarmAllowlist) != 2 || cfg.AlarmAllowlist[0] != 2 || cfg.AlarmAllowlist[1] != 5 {
+		t.Fatalf("unexpected normalized alarm allowlist %+v", cfg.AlarmAllowlist)
+	}
+}
+
+func TestDeviceConfigAllowsVTOAccessories(t *testing.T) {
+	cfg := DeviceConfig{
+		LockAllowlist:  []int{1},
+		AlarmAllowlist: []int{2, 4},
+	}
+
+	if !cfg.AllowsLock(1) || cfg.AllowsLock(2) {
+		t.Fatalf("unexpected lock allowlist behavior %+v", cfg.LockAllowlist)
+	}
+	if !cfg.AllowsAlarm(2) || cfg.AllowsAlarm(3) {
+		t.Fatalf("unexpected alarm allowlist behavior %+v", cfg.AlarmAllowlist)
 	}
 }

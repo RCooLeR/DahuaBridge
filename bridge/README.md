@@ -115,13 +115,15 @@ That endpoint is the source of truth for:
 The repo includes:
 
 - `Dockerfile`
+- `Dockerfile.baked`
 - `compose.example.yaml`
+- `compose.baked.example.yaml`
 
 Container defaults:
 
 - config path: `/config/config.yaml`
 - state path: `/data/dahuabridge-state.json`
-- listen port: `8080`
+- listen port: `9205`
 
 Typical flow:
 
@@ -129,6 +131,29 @@ Typical flow:
 2. Mount it to `/config/config.yaml`.
 3. Mount a writable `/data` directory.
 4. Start with `compose.example.yaml` or your own compose file.
+
+Alternative baked-image flow:
+
+1. Copy `config.example.yaml` to `config.image.yaml`.
+2. Put your real config in `config.image.yaml`.
+3. Build with `Dockerfile.baked`.
+4. Run the container with no config or data mounts.
+
+Notes:
+
+- `config.image.yaml` is ignored by Git.
+- This is useful when host-volume permissions are a problem.
+- State is then stored in the container writable layer unless your config points elsewhere.
+
+Intel QSV notes:
+
+- The image includes `ffmpeg`, `intel-media-driver`, and `libva-utils`.
+- For hardware acceleration, pass `/dev/dri` into the container.
+- The container user may also need access to the host `render` / `video` groups.
+- `media.input_preset: stable` is the safer choice when RTSP feeds show gray artifacts, freeze bursts, or recover only on keyframes.
+- Set `media.video_encoder: qsv` if you want bridge-hosted `HLS` and playback `WebRTC` video encoded with Intel `h264_qsv`.
+- `MJPEG` output is still software-encoded JPEG; the bridge does not currently provide hardware MJPEG encode.
+- If QSV still fails, set `media.hwaccel_args: []` and/or `media.video_encoder: software` to fall back to software decode/transcode.
 
 ## Configuration Notes
 
@@ -140,6 +165,15 @@ It is used in generated stream URLs and media pages.
 ### `home_assistant.api_base_url` and `home_assistant.access_token`
 
 These are only needed if the bridge should create Home Assistant ONVIF config entries for you.
+
+### `home_assistant.camera_snapshot_source`
+
+Controls what the bridge publishes to MQTT-discovered camera snapshot topics during probe refresh:
+
+- `device`: fetch a real snapshot from the camera or NVR
+- `logo`: skip device snapshot HTTP calls and publish a built-in placeholder image
+
+Use `logo` if snapshot fetches are slow, noisy, or unreliable and you do not want probe-time snapshot traffic.
 
 ### `media.webrtc_ice_servers`
 
@@ -160,6 +194,30 @@ media:
     - udp://127.0.0.1:5004
     - 127.0.0.1:5006
 ```
+
+### `media.video_encoder`
+
+Controls the video encoder used by bridge-hosted `HLS` and playback `WebRTC` ffmpeg workers:
+
+- `software`: use `libx264`
+- `qsv`: use Intel `h264_qsv` when the hardware acceleration path is active
+
+If `qsv` is selected but the worker falls back to a non-hardware retry, the bridge automatically reverts that retry to `libx264`.
+
+### `media.input_preset`
+
+Controls the ffmpeg RTSP input flags used by bridge-hosted `MJPEG`, `HLS`, and playback `WebRTC` workers:
+
+- `low_latency`: uses aggressive low-latency ffmpeg input flags
+- `stable`: removes those low-latency flags and keeps corruption discard enabled
+
+For `MJPEG` and `HLS`, the bridge now retries in this order when a worker start fails:
+
+1. configured mode with hardware acceleration
+2. configured mode without hardware acceleration
+3. `stable` mode without hardware acceleration
+
+That gives you an automatic escape path from brittle `QSV` or low-latency RTSP behavior without changing the primary config every time.
 
 ### `state_store`
 

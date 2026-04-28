@@ -48,22 +48,20 @@ RUN sed -i 's/Components: main/Components: main contrib non-free non-free-firmwa
     && rm -rf /var/lib/apt/lists/* \
     && groupadd --system dahuabridge \
     && useradd --system --no-create-home --home-dir /app --shell /usr/sbin/nologin --gid dahuabridge dahuabridge \
-    && mkdir -p /app /config /data \
+    && mkdir -p /app /app/var /app/data /config /data \
     && chown -R dahuabridge:dahuabridge /app /config /data
 
 WORKDIR /app
 
 COPY --from=build /out/dahuabridge /app/dahuabridge
 COPY docker-entrypoint.sh /app/docker-entrypoint.sh
-RUN chmod 0755 /app/docker-entrypoint.sh
+COPY --chown=dahuabridge:dahuabridge config.image.yaml /app/config.yaml
+RUN chmod 0644 /app/config.yaml /app/docker-entrypoint.sh
 
 EXPOSE 9205
-VOLUME ["/config"]
-
-ENV DAHUABRIDGE_CONFIG=/config/config.yaml
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
   CMD wget -qO- http://127.0.0.1:9205/readyz >/dev/null || exit 1
 
 ENTRYPOINT ["/app/docker-entrypoint.sh"]
-CMD ["--config", "/config/config.yaml"]
+CMD ["--config", "/app/config.yaml"]

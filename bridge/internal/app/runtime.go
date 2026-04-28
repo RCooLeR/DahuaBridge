@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"strconv"
 	"sync"
+	"time"
 
 	"RCooLeR/DahuaBridge/internal/config"
 	"RCooLeR/DahuaBridge/internal/dahua"
@@ -17,32 +18,42 @@ import (
 )
 
 type runtimeServices struct {
-	mu           sync.RWMutex
-	cfg          config.Config
-	probes       *store.ProbeStore
-	media        intercomStatusReader
-	nvrSnapshots map[string]dahua.SnapshotProvider
-	nvrConfigs   map[string]config.DeviceConfig
-	vtoSnapshots map[string]dahua.SnapshotProvider
-	vtoConfigs   map[string]config.DeviceConfig
-	ipcSnapshots map[string]dahua.SnapshotProvider
-	ipcConfigs   map[string]config.DeviceConfig
+	mu            sync.RWMutex
+	cfg           config.Config
+	probes        *store.ProbeStore
+	media         intercomStatusReader
+	nvrSnapshots  map[string]dahua.SnapshotProvider
+	nvrConfigs    map[string]config.DeviceConfig
+	vtoSnapshots  map[string]dahua.SnapshotProvider
+	vtoConfigs    map[string]config.DeviceConfig
+	ipcSnapshots  map[string]dahua.SnapshotProvider
+	ipcConfigs    map[string]config.DeviceConfig
+	snapshotCache map[string]cachedSnapshot
 }
 
 type intercomStatusReader interface {
 	IntercomStatus(string) media.IntercomStatus
 }
 
+type cachedSnapshot struct {
+	body        []byte
+	contentType string
+	expiresAt   time.Time
+}
+
+const snapshotCacheTTL = 2 * time.Second
+
 func newRuntimeServices(cfg config.Config, probes *store.ProbeStore) *runtimeServices {
 	return &runtimeServices{
-		cfg:          cfg,
-		probes:       probes,
-		nvrSnapshots: make(map[string]dahua.SnapshotProvider),
-		nvrConfigs:   make(map[string]config.DeviceConfig),
-		vtoSnapshots: make(map[string]dahua.SnapshotProvider),
-		vtoConfigs:   make(map[string]config.DeviceConfig),
-		ipcSnapshots: make(map[string]dahua.SnapshotProvider),
-		ipcConfigs:   make(map[string]config.DeviceConfig),
+		cfg:           cfg,
+		probes:        probes,
+		nvrSnapshots:  make(map[string]dahua.SnapshotProvider),
+		nvrConfigs:    make(map[string]config.DeviceConfig),
+		vtoSnapshots:  make(map[string]dahua.SnapshotProvider),
+		vtoConfigs:    make(map[string]config.DeviceConfig),
+		ipcSnapshots:  make(map[string]dahua.SnapshotProvider),
+		ipcConfigs:    make(map[string]config.DeviceConfig),
+		snapshotCache: make(map[string]cachedSnapshot),
 	}
 }
 
@@ -109,6 +120,11 @@ func (r *runtimeServices) UpdateDeviceConfig(deviceID string, cfg config.DeviceC
 }
 
 func (r *runtimeServices) NVRSnapshot(ctx context.Context, deviceID string, channel int) ([]byte, string, error) {
+	cacheKey := snapshotCacheKey("nvr", deviceID, channel)
+	if body, contentType, ok := r.cachedSnapshot(cacheKey); ok {
+		return body, contentType, nil
+	}
+
 	r.mu.RLock()
 	provider, ok := r.nvrSnapshots[deviceID]
 	r.mu.RUnlock()
@@ -116,10 +132,20 @@ func (r *runtimeServices) NVRSnapshot(ctx context.Context, deviceID string, chan
 		return nil, "", fmt.Errorf("snapshot provider not found for device %q", deviceID)
 	}
 
-	return provider.Snapshot(ctx, channel)
+	body, contentType, err := provider.Snapshot(ctx, channel)
+	if err != nil {
+		return nil, "", err
+	}
+	r.storeSnapshot(cacheKey, body, contentType)
+	return body, contentType, nil
 }
 
 func (r *runtimeServices) VTOSnapshot(ctx context.Context, deviceID string) ([]byte, string, error) {
+	cacheKey := snapshotCacheKey("vto", deviceID, 0)
+	if body, contentType, ok := r.cachedSnapshot(cacheKey); ok {
+		return body, contentType, nil
+	}
+
 	r.mu.RLock()
 	provider, ok := r.vtoSnapshots[deviceID]
 	r.mu.RUnlock()
@@ -127,10 +153,20 @@ func (r *runtimeServices) VTOSnapshot(ctx context.Context, deviceID string) ([]b
 		return nil, "", fmt.Errorf("snapshot provider not found for vto %q", deviceID)
 	}
 
-	return provider.Snapshot(ctx, 0)
+	body, contentType, err := provider.Snapshot(ctx, 0)
+	if err != nil {
+		return nil, "", err
+	}
+	r.storeSnapshot(cacheKey, body, contentType)
+	return body, contentType, nil
 }
 
 func (r *runtimeServices) IPCSnapshot(ctx context.Context, deviceID string) ([]byte, string, error) {
+	cacheKey := snapshotCacheKey("ipc", deviceID, 1)
+	if body, contentType, ok := r.cachedSnapshot(cacheKey); ok {
+		return body, contentType, nil
+	}
+
 	r.mu.RLock()
 	provider, ok := r.ipcSnapshots[deviceID]
 	r.mu.RUnlock()
@@ -138,7 +174,12 @@ func (r *runtimeServices) IPCSnapshot(ctx context.Context, deviceID string) ([]b
 		return nil, "", fmt.Errorf("snapshot provider not found for ipc %q", deviceID)
 	}
 
-	return provider.Snapshot(ctx, 1)
+	body, contentType, err := provider.Snapshot(ctx, 1)
+	if err != nil {
+		return nil, "", err
+	}
+	r.storeSnapshot(cacheKey, body, contentType)
+	return body, contentType, nil
 }
 
 func (r *runtimeServices) RenderHomeAssistantCameraPackage(options ha.CameraPackageOptions) (string, error) {
@@ -215,17 +256,20 @@ func (r *runtimeServices) AdminSettings() map[string]any {
 			"publish_timeout":  cfg.MQTT.PublishTimeout.String(),
 		},
 		"home_assistant": map[string]any{
-			"enabled":         cfg.HomeAssistant.Enabled,
-			"node_id":         cfg.HomeAssistant.NodeID,
-			"entity_mode":     cfg.HomeAssistant.EntityMode,
-			"public_base_url": cfg.HomeAssistant.PublicBaseURL,
-			"api_base_url":    cfg.HomeAssistant.APIBaseURL,
-			"access_token":    redactedSecret(cfg.HomeAssistant.AccessToken),
-			"request_timeout": cfg.HomeAssistant.RequestTimeout.String(),
+			"enabled":                cfg.HomeAssistant.Enabled,
+			"node_id":                cfg.HomeAssistant.NodeID,
+			"entity_mode":            cfg.HomeAssistant.EntityMode,
+			"camera_snapshot_source": cfg.HomeAssistant.CameraSnapshotSource,
+			"public_base_url":        cfg.HomeAssistant.PublicBaseURL,
+			"api_base_url":           cfg.HomeAssistant.APIBaseURL,
+			"access_token":           redactedSecret(cfg.HomeAssistant.AccessToken),
+			"request_timeout":        cfg.HomeAssistant.RequestTimeout.String(),
 		},
 		"media": map[string]any{
 			"enabled":               cfg.Media.Enabled,
 			"ffmpeg_path":           cfg.Media.FFmpegPath,
+			"video_encoder":         cfg.Media.VideoEncoder,
+			"input_preset":          cfg.Media.InputPreset,
 			"idle_timeout":          cfg.Media.IdleTimeout.String(),
 			"start_timeout":         cfg.Media.StartTimeout.String(),
 			"max_workers":           cfg.Media.MaxWorkers,
@@ -369,6 +413,36 @@ func cloneDeviceConfigMap(src map[string]config.DeviceConfig) map[string]config.
 		cloned[key] = value
 	}
 	return cloned
+}
+
+func snapshotCacheKey(kind string, deviceID string, channel int) string {
+	return fmt.Sprintf("%s:%s:%d", kind, deviceID, channel)
+}
+
+func (r *runtimeServices) cachedSnapshot(cacheKey string) ([]byte, string, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	entry, ok := r.snapshotCache[cacheKey]
+	if !ok || time.Now().After(entry.expiresAt) {
+		return nil, "", false
+	}
+
+	return append([]byte(nil), entry.body...), entry.contentType, true
+}
+
+func (r *runtimeServices) storeSnapshot(cacheKey string, body []byte, contentType string) {
+	if len(body) == 0 {
+		return
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.snapshotCache[cacheKey] = cachedSnapshot{
+		body:        append([]byte(nil), body...),
+		contentType: contentType,
+		expiresAt:   time.Now().Add(snapshotCacheTTL),
+	}
 }
 
 func buildONVIFTargets(

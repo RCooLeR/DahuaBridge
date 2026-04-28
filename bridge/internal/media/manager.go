@@ -141,6 +141,11 @@ type hlsWorker struct {
 	startErr     chan error
 }
 
+type ffmpegStartAttempt struct {
+	useHWAccel  bool
+	inputPreset string
+}
+
 func New(cfg config.MediaConfig, resolver StreamResolver, logger zerolog.Logger, metricsRegistry *metrics.Registry) *Manager {
 	manager := &Manager{
 		cfg:                   cfg,
@@ -625,56 +630,93 @@ func (w *worker) run() {
 	defer w.parent.removeMJPEGWorker(w.key, w)
 	defer w.closeSubscribers()
 
-	args := w.buildFFmpegArgs()
-	cmd := exec.CommandContext(w.ctx, w.parent.cfg.FFmpegPath, args...)
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		w.setError(fmt.Errorf("ffmpeg stdout pipe: %w", err))
-		return
-	}
-	stderr, err := cmd.StderrPipe()
-	if err != nil {
-		w.setError(fmt.Errorf("ffmpeg stderr pipe: %w", err))
-		return
-	}
-
-	w.mu.Lock()
-	w.cmd = cmd
-	w.startedAt = time.Now()
-	w.mu.Unlock()
-
-	if err := cmd.Start(); err != nil {
-		w.setError(fmt.Errorf("start ffmpeg: %w", err))
-		return
-	}
-
-	stderrDone := make(chan string, 1)
-	go func() {
-		body, _ := io.ReadAll(io.LimitReader(stderr, 64*1024))
-		stderrDone <- strings.TrimSpace(string(body))
-	}()
-
-	readErr := w.readMJPEG(stdout)
-	waitErr := cmd.Wait()
-	stderrText := <-stderrDone
-
-	switch {
-	case errors.Is(w.ctx.Err(), context.Canceled):
-		return
-	case readErr != nil:
-		if stderrText != "" {
-			readErr = fmt.Errorf("%w: %s", readErr, stderrText)
+	attempts := buildFFmpegStartAttempts(w.parent.cfg)
+	for index, attempt := range attempts {
+		if index > 0 {
+			w.logger.Warn().
+				Bool("hwaccel", attempt.useHWAccel).
+				Str("input_preset", attempt.inputPreset).
+				Msg("retrying mjpeg worker with fallback")
 		}
-		w.setError(readErr)
-	case waitErr != nil:
-		if stderrText != "" {
-			waitErr = fmt.Errorf("%w: %s", waitErr, stderrText)
+
+		args := w.buildFFmpegArgs(attempt)
+		w.logger.Debug().
+			Bool("hwaccel", attempt.useHWAccel).
+			Str("input_preset", attempt.inputPreset).
+			Strs("ffmpeg_args", redactFFmpegArgs(args)).
+			Msg("starting mjpeg worker")
+		cmd := exec.CommandContext(w.ctx, w.parent.cfg.FFmpegPath, args...)
+		stdout, err := cmd.StdoutPipe()
+		if err != nil {
+			w.setError(fmt.Errorf("ffmpeg stdout pipe: %w", err))
+			return
 		}
-		w.setError(waitErr)
+		stderr, err := cmd.StderrPipe()
+		if err != nil {
+			w.setError(fmt.Errorf("ffmpeg stderr pipe: %w", err))
+			return
+		}
+
+		w.mu.Lock()
+		w.cmd = cmd
+		if w.startedAt.IsZero() {
+			w.startedAt = time.Now()
+		}
+		w.mu.Unlock()
+
+		if err := cmd.Start(); err != nil {
+			w.setError(fmt.Errorf("start ffmpeg: %w", err))
+			return
+		}
+
+		stderrDone := make(chan string, 1)
+		go func() {
+			body, _ := io.ReadAll(io.LimitReader(stderr, 64*1024))
+			stderrDone <- strings.TrimSpace(string(body))
+		}()
+
+		readErr := w.readMJPEG(stdout)
+		waitErr := cmd.Wait()
+		stderrText := <-stderrDone
+
+		switch {
+		case errors.Is(w.ctx.Err(), context.Canceled):
+			return
+		case readErr != nil:
+			if stderrText != "" {
+				w.logger.Debug().
+					Bool("hwaccel", attempt.useHWAccel).
+					Str("input_preset", attempt.inputPreset).
+					Str("ffmpeg_stderr", stderrText).
+					Msg("mjpeg worker stderr")
+				readErr = fmt.Errorf("%w: %s", readErr, stderrText)
+			}
+			if index < len(attempts)-1 {
+				continue
+			}
+			w.setError(readErr)
+			return
+		case waitErr != nil:
+			if stderrText != "" {
+				w.logger.Debug().
+					Bool("hwaccel", attempt.useHWAccel).
+					Str("input_preset", attempt.inputPreset).
+					Str("ffmpeg_stderr", stderrText).
+					Msg("mjpeg worker stderr")
+				waitErr = fmt.Errorf("%w: %s", waitErr, stderrText)
+			}
+			if index < len(attempts)-1 {
+				continue
+			}
+			w.setError(waitErr)
+			return
+		default:
+			return
+		}
 	}
 }
 
-func (w *worker) buildFFmpegArgs() []string {
+func (w *worker) buildFFmpegArgs(attempt ffmpegStartAttempt) []string {
 	frameRate := w.parent.cfg.FrameRate
 	if w.profile.FrameRate > 0 {
 		frameRate = w.profile.FrameRate
@@ -682,16 +724,13 @@ func (w *worker) buildFFmpegArgs() []string {
 
 	args := []string{
 		"-hide_banner",
-		"-loglevel", "error",
+		"-loglevel", ffmpegLogLevel(w.parent.cfg),
 	}
-	args = append(args, w.parent.cfg.HWAccelArgs...)
-	args = append(args,
-		"-rtsp_transport", firstNonEmpty(w.profile.RTSPTransport, "tcp"),
-		"-fflags", "nobuffer",
-		"-flags", "low_delay",
-		"-an",
-		"-i", w.profile.StreamURL,
-	)
+	if attempt.useHWAccel {
+		args = append(args, w.parent.cfg.HWAccelArgs...)
+	}
+	args = append(args, buildRTSPInputArgs(w.profile, attempt.inputPreset)...)
+	args = append(args, "-an")
 	if w.parent.cfg.Threads > 0 {
 		args = append(args, "-threads", strconv.Itoa(w.parent.cfg.Threads))
 	}
@@ -882,52 +921,87 @@ func (w *hlsWorker) run() {
 
 	w.mu.Lock()
 	w.outputDir = outputDir
-	w.startedAt = time.Now()
+	if w.startedAt.IsZero() {
+		w.startedAt = time.Now()
+	}
 	w.mu.Unlock()
 
-	args := w.buildFFmpegArgs()
-	cmd := exec.CommandContext(w.ctx, w.parent.cfg.FFmpegPath, args...)
-	cmd.Dir = outputDir
-	stderr, err := cmd.StderrPipe()
-	if err != nil {
-		w.setError(fmt.Errorf("ffmpeg stderr pipe: %w", err))
-		return
-	}
-
-	w.mu.Lock()
-	w.cmd = cmd
-	w.mu.Unlock()
-
-	if err := cmd.Start(); err != nil {
-		w.setError(fmt.Errorf("start ffmpeg: %w", err))
-		return
-	}
-
-	go func() {
-		body, _ := io.ReadAll(io.LimitReader(stderr, 64*1024))
-		stderrDone <- strings.TrimSpace(string(body))
-	}()
 	go w.stopWhenIdle()
 
-	waitErr := cmd.Wait()
-	stderrText := <-stderrDone
-
-	if errors.Is(w.ctx.Err(), context.Canceled) {
-		return
-	}
-	if waitErr != nil {
-		if stderrText != "" {
-			waitErr = fmt.Errorf("%w: %s", waitErr, stderrText)
+	attempts := buildFFmpegStartAttempts(w.parent.cfg)
+	for index, attempt := range attempts {
+		if index > 0 {
+			w.logger.Warn().
+				Bool("hwaccel", attempt.useHWAccel).
+				Str("input_preset", attempt.inputPreset).
+				Msg("retrying hls worker with fallback")
 		}
-		w.setError(waitErr)
+
+		args := w.buildFFmpegArgs(attempt)
+		w.logger.Debug().
+			Bool("hwaccel", attempt.useHWAccel).
+			Str("input_preset", attempt.inputPreset).
+			Strs("ffmpeg_args", redactFFmpegArgs(args)).
+			Msg("starting hls worker")
+		cmd := exec.CommandContext(w.ctx, w.parent.cfg.FFmpegPath, args...)
+		cmd.Dir = outputDir
+		stderr, err := cmd.StderrPipe()
+		if err != nil {
+			w.setError(fmt.Errorf("ffmpeg stderr pipe: %w", err))
+			return
+		}
+
+		w.mu.Lock()
+		w.cmd = cmd
+		w.mu.Unlock()
+
+		if err := cmd.Start(); err != nil {
+			w.setError(fmt.Errorf("start ffmpeg: %w", err))
+			return
+		}
+
+		go func() {
+			body, _ := io.ReadAll(io.LimitReader(stderr, 64*1024))
+			stderrDone <- strings.TrimSpace(string(body))
+		}()
+
+		waitErr := cmd.Wait()
+		stderrText := <-stderrDone
+
+		if errors.Is(w.ctx.Err(), context.Canceled) {
+			return
+		}
+		if waitErr != nil {
+			if stderrText != "" {
+				w.logger.Debug().
+					Bool("hwaccel", attempt.useHWAccel).
+					Str("input_preset", attempt.inputPreset).
+					Str("ffmpeg_stderr", stderrText).
+					Msg("hls worker stderr")
+				waitErr = fmt.Errorf("%w: %s", waitErr, stderrText)
+			}
+			if index < len(attempts)-1 {
+				continue
+			}
+			w.setError(waitErr)
+			return
+		}
+		if stderrText != "" {
+			w.logger.Debug().
+				Bool("hwaccel", attempt.useHWAccel).
+				Str("input_preset", attempt.inputPreset).
+				Str("ffmpeg_stderr", stderrText).
+				Msg("hls worker stderr")
+			if index < len(attempts)-1 {
+				continue
+			}
+			w.setError(errors.New(stderrText))
+		}
 		return
-	}
-	if stderrText != "" {
-		w.setError(errors.New(stderrText))
 	}
 }
 
-func (w *hlsWorker) buildFFmpegArgs() []string {
+func (w *hlsWorker) buildFFmpegArgs(attempt ffmpegStartAttempt) []string {
 	frameRate := w.parent.cfg.FrameRate
 	if w.profile.FrameRate > 0 {
 		frameRate = w.profile.FrameRate
@@ -938,15 +1012,12 @@ func (w *hlsWorker) buildFFmpegArgs() []string {
 
 	args := []string{
 		"-hide_banner",
-		"-loglevel", "error",
+		"-loglevel", ffmpegLogLevel(w.parent.cfg),
 	}
-	args = append(args, w.parent.cfg.HWAccelArgs...)
-	args = append(args,
-		"-rtsp_transport", firstNonEmpty(w.profile.RTSPTransport, "tcp"),
-		"-fflags", "nobuffer",
-		"-flags", "low_delay",
-		"-i", w.profile.StreamURL,
-	)
+	if attempt.useHWAccel {
+		args = append(args, w.parent.cfg.HWAccelArgs...)
+	}
+	args = append(args, buildRTSPInputArgs(w.profile, attempt.inputPreset)...)
 	if w.parent.cfg.Threads > 0 {
 		args = append(args, "-threads", strconv.Itoa(w.parent.cfg.Threads))
 	}
@@ -956,14 +1027,9 @@ func (w *hlsWorker) buildFFmpegArgs() []string {
 	args = append(args,
 		"-map", "0:v:0",
 		"-map", "0:a:0?",
-		"-c:v", "libx264",
-		"-preset", "veryfast",
-		"-tune", "zerolatency",
-		"-pix_fmt", "yuv420p",
-		"-profile:v", "baseline",
-		"-g", strconv.Itoa(gopSize),
-		"-keyint_min", strconv.Itoa(gopSize),
-		"-sc_threshold", "0",
+	)
+	args = appendVideoEncoderArgs(args, w.parent.cfg, attempt.useHWAccel, gopSize, "veryfast")
+	args = append(args,
 		"-c:a", "aac",
 		"-b:a", "96k",
 		"-ac", "1",
@@ -1123,6 +1189,46 @@ func maxInt(left int, right int) int {
 	return right
 }
 
+func buildFFmpegStartAttempts(cfg config.MediaConfig) []ffmpegStartAttempt {
+	attempts := make([]ffmpegStartAttempt, 0, 3)
+	if hardwareAccelEnabled(cfg.HWAccelArgs) {
+		attempts = append(attempts, ffmpegStartAttempt{
+			useHWAccel:  true,
+			inputPreset: cfg.InputPreset,
+		})
+	}
+	attempts = append(attempts, ffmpegStartAttempt{
+		useHWAccel:  false,
+		inputPreset: cfg.InputPreset,
+	})
+	if !strings.EqualFold(strings.TrimSpace(cfg.InputPreset), "stable") {
+		attempts = append(attempts, ffmpegStartAttempt{
+			useHWAccel:  false,
+			inputPreset: "stable",
+		})
+	}
+	return attempts
+}
+
+func buildRTSPInputArgs(profile streams.Profile, inputPreset string) []string {
+	args := []string{
+		"-rtsp_transport", firstNonEmpty(profile.RTSPTransport, "tcp"),
+	}
+	switch strings.ToLower(strings.TrimSpace(inputPreset)) {
+	case "stable":
+		args = append(args,
+			"-fflags", "+discardcorrupt",
+		)
+	default:
+		args = append(args,
+			"-fflags", "+discardcorrupt+nobuffer",
+			"-flags", "low_delay",
+		)
+	}
+	args = append(args, "-i", profile.StreamURL)
+	return args
+}
+
 func buildFilterChain(frameRate int, scaleWidth int, scaleHeight int) []string {
 	filters := []string{"fps=" + strconv.Itoa(frameRate)}
 	switch {
@@ -1166,4 +1272,69 @@ func formatFFmpegSeconds(duration time.Duration) string {
 		return "1"
 	}
 	return formatted
+}
+
+func ffmpegLogLevel(cfg config.MediaConfig) string {
+	level := strings.ToLower(strings.TrimSpace(cfg.FFmpegLogLevel))
+	switch level {
+	case "quiet", "panic", "fatal", "error", "warning", "info", "verbose", "debug", "trace":
+		return level
+	default:
+		return "error"
+	}
+}
+
+func hardwareAccelEnabled(args []string) bool {
+	return len(args) > 0
+}
+
+func useQSVVideoEncoder(cfg config.MediaConfig, useHWAccel bool) bool {
+	return useHWAccel &&
+		hardwareAccelEnabled(cfg.HWAccelArgs) &&
+		strings.EqualFold(strings.TrimSpace(cfg.VideoEncoder), "qsv")
+}
+
+func appendVideoEncoderArgs(args []string, cfg config.MediaConfig, useHWAccel bool, gopSize int, softwarePreset string) []string {
+	if useQSVVideoEncoder(cfg, useHWAccel) {
+		return append(args,
+			"-c:v", "h264_qsv",
+			"-pix_fmt", "nv12",
+			"-profile:v", "baseline",
+			"-g", strconv.Itoa(gopSize),
+			"-keyint_min", strconv.Itoa(gopSize),
+			"-sc_threshold", "0",
+			"-bf", "0",
+		)
+	}
+
+	return append(args,
+		"-c:v", "libx264",
+		"-preset", softwarePreset,
+		"-tune", "zerolatency",
+		"-pix_fmt", "yuv420p",
+		"-profile:v", "baseline",
+		"-g", strconv.Itoa(gopSize),
+		"-keyint_min", strconv.Itoa(gopSize),
+		"-sc_threshold", "0",
+	)
+}
+
+func isHardwareAccelFailure(stderrText string) bool {
+	text := strings.ToLower(strings.TrimSpace(stderrText))
+	if text == "" {
+		return false
+	}
+	return strings.Contains(text, "device creation failed") ||
+		strings.Contains(text, "hardware device setup failed") ||
+		strings.Contains(text, "no device available for decoder") ||
+		strings.Contains(text, "hevc_qsv") ||
+		strings.Contains(text, "h264_qsv")
+}
+
+func redactFFmpegArgs(args []string) []string {
+	redacted := make([]string, 0, len(args))
+	for _, arg := range args {
+		redacted = append(redacted, redactURLUserinfo(arg))
+	}
+	return redacted
 }

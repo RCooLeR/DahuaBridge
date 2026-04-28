@@ -2,16 +2,13 @@ services:
   dahuabridge:
     build:
       context: .
-      dockerfile: Dockerfile
+      dockerfile: Dockerfile.baked
     container_name: dahuabridge
     restart: unless-stopped
     ports:
       - "9205:9205"
     environment:
       TZ: Europe/Kiev
-    volumes:
-      - ./config.yaml:/config/config.yaml:ro
-      - ./data:/data
     # Optional if you want Intel iGPU acceleration through QSV/VAAPI.
     # The entrypoint will detect the /dev/dri device GIDs and add the
     # dahuabridge user to those groups before dropping privileges.
