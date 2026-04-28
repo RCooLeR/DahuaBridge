@@ -84,7 +84,6 @@ type WorkerStatus struct {
 	FrameRate              int       `json:"frame_rate"`
 	Threads                int       `json:"threads"`
 	ScaleWidth             int       `json:"scale_width,omitempty"`
-	ScaleHeight            int       `json:"scale_height,omitempty"`
 	MaxWorkers             int       `json:"max_workers,omitempty"`
 	IdleTimeout            string    `json:"idle_timeout"`
 	FFmpegPath             string    `json:"ffmpeg_path"`
@@ -103,6 +102,7 @@ type worker struct {
 	streamID    string
 	profileName string
 	profile     streams.Profile
+	scaleWidth  int
 	parent      *Manager
 	logger      zerolog.Logger
 
@@ -308,6 +308,10 @@ func (m *Manager) StopIntercomSessions(streamID string) IntercomStatus {
 }
 
 func (m *Manager) Subscribe(ctx context.Context, streamID string, profileName string) (<-chan []byte, func(), error) {
+	return m.SubscribeScaled(ctx, streamID, profileName, 0)
+}
+
+func (m *Manager) SubscribeScaled(ctx context.Context, streamID string, profileName string, scaleWidth int) (<-chan []byte, func(), error) {
 	if !m.Enabled() {
 		return nil, nil, errors.New("media layer is disabled")
 	}
@@ -317,7 +321,7 @@ func (m *Manager) Subscribe(ctx context.Context, streamID string, profileName st
 		return nil, nil, err
 	}
 
-	w, err := m.getOrCreateMJPEGWorker(entry, resolvedProfileName, profile)
+	w, err := m.getOrCreateMJPEGWorker(entry, resolvedProfileName, profile, scaleWidth)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -392,9 +396,8 @@ func (m *Manager) ListWorkers() []WorkerStatus {
 			IdleTimeout:   m.cfg.IdleTimeout.String(),
 			FFmpegPath:    m.cfg.FFmpegPath,
 			FrameRate:     m.cfg.FrameRate,
-			Threads:       m.cfg.Threads,
 			ScaleWidth:    m.cfg.ScaleWidth,
-			ScaleHeight:   m.cfg.ScaleHeight,
+			Threads:       m.cfg.Threads,
 		}}
 	}
 
@@ -438,8 +441,9 @@ func (m *Manager) resolveStream(streamID string, profileName string) (streams.En
 	return entry, profile, profileName, nil
 }
 
-func (m *Manager) getOrCreateMJPEGWorker(entry streams.Entry, profileName string, profile streams.Profile) (*worker, error) {
-	key := entry.ID + ":" + profileName
+func (m *Manager) getOrCreateMJPEGWorker(entry streams.Entry, profileName string, profile streams.Profile, scaleWidth int) (*worker, error) {
+	effectiveScaleWidth := resolvedScaleWidth(scaleWidth, m.cfg.ScaleWidth)
+	key := fmt.Sprintf("%s:%s:w%d", entry.ID, profileName, effectiveScaleWidth)
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -460,11 +464,13 @@ func (m *Manager) getOrCreateMJPEGWorker(entry streams.Entry, profileName string
 		streamID:    entry.ID,
 		profileName: profileName,
 		profile:     profile,
+		scaleWidth:  effectiveScaleWidth,
 		parent:      m,
 		logger: m.logger.With().
 			Str("stream_id", entry.ID).
 			Str("profile", profileName).
 			Str("format", "mjpeg").
+			Int("scale_width", effectiveScaleWidth).
 			Logger(),
 		ctx:         ctx,
 		cancel:      cancel,
@@ -732,7 +738,7 @@ func (w *worker) buildFFmpegArgs(attempt ffmpegStartAttempt) []string {
 	if w.parent.cfg.Threads > 0 {
 		args = append(args, "-threads", strconv.Itoa(w.parent.cfg.Threads))
 	}
-	args = appendVideoFilterArgs(args, w.parent.cfg, attempt.useHWAccel, frameRate)
+	args = appendVideoFilterArgs(args, w.parent.cfg, w.scaleWidth, w.profile, attempt.useHWAccel, frameRate)
 	args = appendMJPEGEncoderArgs(args, w.parent.cfg, attempt.useHWAccel)
 	args = append(args, "-f", "mjpeg", "pipe:1")
 	return args
@@ -890,8 +896,7 @@ func (w *worker) status() WorkerStatus {
 		Recommended: w.profile.Recommended,
 		FrameRate:   maxInt(w.profile.FrameRate, w.parent.cfg.FrameRate),
 		Threads:     w.parent.cfg.Threads,
-		ScaleWidth:  w.parent.cfg.ScaleWidth,
-		ScaleHeight: w.parent.cfg.ScaleHeight,
+		ScaleWidth:  w.scaleWidth,
 		MaxWorkers:  w.parent.cfg.MaxWorkers,
 		IdleTimeout: w.parent.cfg.IdleTimeout.String(),
 		FFmpegPath:  w.parent.cfg.FFmpegPath,
@@ -1013,7 +1018,7 @@ func (w *hlsWorker) buildFFmpegArgs(attempt ffmpegStartAttempt) []string {
 	if w.parent.cfg.Threads > 0 {
 		args = append(args, "-threads", strconv.Itoa(w.parent.cfg.Threads))
 	}
-	args = appendVideoFilterArgs(args, w.parent.cfg, attempt.useHWAccel, frameRate)
+	args = appendVideoFilterArgs(args, w.parent.cfg, w.parent.cfg.ScaleWidth, w.profile, attempt.useHWAccel, frameRate)
 	args = append(args,
 		"-map", "0:v:0",
 		"-map", "0:a:0?",
@@ -1143,7 +1148,6 @@ func (w *hlsWorker) status() WorkerStatus {
 		FrameRate:    maxInt(w.profile.FrameRate, w.parent.cfg.FrameRate),
 		Threads:      w.parent.cfg.Threads,
 		ScaleWidth:   w.parent.cfg.ScaleWidth,
-		ScaleHeight:  w.parent.cfg.ScaleHeight,
 		MaxWorkers:   w.parent.cfg.MaxWorkers,
 		IdleTimeout:  w.parent.cfg.IdleTimeout.String(),
 		FFmpegPath:   w.parent.cfg.FFmpegPath,
@@ -1177,6 +1181,16 @@ func maxInt(left int, right int) int {
 		return left
 	}
 	return right
+}
+
+func resolvedScaleWidth(requested int, configured int) int {
+	if configured <= 0 {
+		return 0
+	}
+	if requested > 0 {
+		return requested
+	}
+	return configured
 }
 
 func buildFFmpegStartAttempts(cfg config.MediaConfig) []ffmpegStartAttempt {
@@ -1219,40 +1233,56 @@ func buildRTSPInputArgs(profile streams.Profile, inputPreset string) []string {
 	return args
 }
 
-func buildFilterChain(frameRate int, scaleWidth int, scaleHeight int) []string {
+func buildFilterChain(frameRate int, scaleWidth int, sourceWidth int, sourceHeight int) []string {
 	filters := []string{"fps=" + strconv.Itoa(frameRate)}
-	switch {
-	case scaleWidth > 0 && scaleHeight > 0:
-		filters = append(filters, fmt.Sprintf("scale=%d:%d:force_original_aspect_ratio=decrease", scaleWidth, scaleHeight))
-	case scaleWidth > 0:
-		filters = append(filters, fmt.Sprintf("scale=%d:-2", scaleWidth))
-	case scaleHeight > 0:
-		filters = append(filters, fmt.Sprintf("scale=-2:%d", scaleHeight))
+	if scaleWidth > 0 {
+		targetWidth, targetHeight, ok := computeScaledDimensions(sourceWidth, sourceHeight, scaleWidth)
+		if ok {
+			filters = append(filters, fmt.Sprintf("scale=%d:%d", targetWidth, targetHeight))
+		} else {
+			filters = append(filters, fmt.Sprintf("scale=%d:-2", scaleWidth))
+		}
 	}
 	return filters
 }
 
-func buildQSVFilterChain(frameRate int, scaleWidth int, scaleHeight int) []string {
+func buildQSVFilterChain(frameRate int, scaleWidth int, sourceWidth int, sourceHeight int) []string {
 	options := []string{fmt.Sprintf("framerate=%d", frameRate)}
-	switch {
-	case scaleWidth > 0 && scaleHeight > 0:
-		options = append(options,
-			fmt.Sprintf("w=%d", scaleWidth),
-			fmt.Sprintf("h=%d", scaleHeight),
-		)
-	case scaleWidth > 0:
-		options = append(options,
-			fmt.Sprintf("w=%d", scaleWidth),
-			"h=-1",
-		)
-	case scaleHeight > 0:
-		options = append(options,
-			"w=-1",
-			fmt.Sprintf("h=%d", scaleHeight),
-		)
+	if scaleWidth > 0 {
+		targetWidth, targetHeight, ok := computeScaledDimensions(sourceWidth, sourceHeight, scaleWidth)
+		if ok {
+			options = append(options,
+				fmt.Sprintf("w=%d", targetWidth),
+				fmt.Sprintf("h=%d", targetHeight),
+			)
+		}
 	}
 	options = append(options, "format=nv12")
 	return []string{"vpp_qsv=" + strings.Join(options, ":")}
+}
+
+func computeScaledDimensions(sourceWidth int, sourceHeight int, targetWidth int) (int, int, bool) {
+	if sourceWidth <= 0 || sourceHeight <= 0 || targetWidth <= 0 {
+		return 0, 0, false
+	}
+
+	targetHeight := (sourceHeight * targetWidth) / sourceWidth
+	if targetHeight <= 0 {
+		return 0, 0, false
+	}
+	if targetHeight%2 != 0 {
+		targetHeight--
+	}
+	if targetHeight <= 0 {
+		return 0, 0, false
+	}
+	if targetWidth%2 != 0 {
+		targetWidth--
+	}
+	if targetWidth <= 0 {
+		return 0, 0, false
+	}
+	return targetWidth, targetHeight, true
 }
 
 func validateHLSFileName(name string) error {
@@ -1337,12 +1367,12 @@ func useQSVVideoEncoder(cfg config.MediaConfig, useHWAccel bool) bool {
 		strings.EqualFold(strings.TrimSpace(cfg.VideoEncoder), "qsv")
 }
 
-func appendVideoFilterArgs(args []string, cfg config.MediaConfig, useHWAccel bool, frameRate int) []string {
+func appendVideoFilterArgs(args []string, cfg config.MediaConfig, scaleWidth int, profile streams.Profile, useHWAccel bool, frameRate int) []string {
 	var filterChain []string
 	if useQSVVideoEncoder(cfg, useHWAccel) {
-		filterChain = buildQSVFilterChain(frameRate, cfg.ScaleWidth, cfg.ScaleHeight)
+		filterChain = buildQSVFilterChain(frameRate, scaleWidth, profile.SourceWidth, profile.SourceHeight)
 	} else {
-		filterChain = buildFilterChain(frameRate, cfg.ScaleWidth, cfg.ScaleHeight)
+		filterChain = buildFilterChain(frameRate, scaleWidth, profile.SourceWidth, profile.SourceHeight)
 	}
 	if len(filterChain) == 0 {
 		return args

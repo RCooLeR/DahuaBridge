@@ -56,6 +56,12 @@ func TestMediaDefaults(t *testing.T) {
 	if cfg.Media.InputPreset != "low_latency" {
 		t.Fatalf("unexpected default media input_preset %q", cfg.Media.InputPreset)
 	}
+	if cfg.Media.StableFrameRate != 5 {
+		t.Fatalf("unexpected default media stable_frame_rate %d", cfg.Media.StableFrameRate)
+	}
+	if cfg.Media.SubstreamFrameRate != 5 {
+		t.Fatalf("unexpected default media substream_frame_rate %d", cfg.Media.SubstreamFrameRate)
+	}
 	if cfg.Media.Threads != 1 {
 		t.Fatalf("unexpected default media threads %d", cfg.Media.Threads)
 	}

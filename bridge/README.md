@@ -204,6 +204,15 @@ Controls the video encoder used by bridge-hosted `MJPEG`, `HLS`, and playback `W
 
 If `qsv` is selected but the worker falls back to a non-hardware retry, the bridge automatically reverts that retry to software codecs.
 
+### `media.scale_width`
+
+This is the only bridge scaling setting now.
+
+- `0`: keep the source resolution
+- non-zero: the bridge reads the source dimensions from the stream catalog, computes an even output height that preserves aspect ratio, and passes both width and height to ffmpeg
+
+This keeps the software and QSV paths aligned and avoids the fragile `auto height` behavior some QSV stacks reject.
+
 ### `media.input_preset`
 
 Controls the ffmpeg RTSP input flags used by bridge-hosted `MJPEG`, `HLS`, and playback `WebRTC` workers:
@@ -218,6 +227,16 @@ For `MJPEG` and `HLS`, the bridge now retries in this order when a worker start 
 3. `stable` mode without hardware acceleration
 
 That gives you an automatic escape path from brittle `QSV` or low-latency RTSP behavior without changing the primary config every time.
+
+### `media.frame_rate`, `media.stable_frame_rate`, and `media.substream_frame_rate`
+
+These control the bridge output frame rate by profile family:
+
+- `frame_rate`: main-stream `default` / `quality`
+- `stable_frame_rate`: `stable`
+- `substream_frame_rate`: `substream`
+
+This lets you keep conservative substream previews while driving higher-rate live views from `quality`, or raise `stable` without changing the main-stream defaults.
 
 ### `state_store`
 

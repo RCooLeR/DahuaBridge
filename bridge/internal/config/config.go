@@ -80,10 +80,11 @@ type MediaConfig struct {
 	StartTimeout        time.Duration           `yaml:"start_timeout"`
 	MaxWorkers          int                     `yaml:"max_workers"`
 	FrameRate           int                     `yaml:"frame_rate"`
+	StableFrameRate     int                     `yaml:"stable_frame_rate"`
+	SubstreamFrameRate  int                     `yaml:"substream_frame_rate"`
 	JPEGQuality         int                     `yaml:"jpeg_quality"`
 	Threads             int                     `yaml:"threads"`
 	ScaleWidth          int                     `yaml:"scale_width"`
-	ScaleHeight         int                     `yaml:"scale_height"`
 	ReadBufferSize      int                     `yaml:"read_buffer_size"`
 	HLSSegmentTime      time.Duration           `yaml:"hls_segment_time"`
 	HLSListSize         int                     `yaml:"hls_list_size"`
@@ -194,21 +195,23 @@ func defaultConfig() Config {
 			PublishTimeout:  10 * time.Second,
 		},
 		Media: MediaConfig{
-			Enabled:        true,
-			FFmpegPath:     "ffmpeg",
-			FFmpegLogLevel: "error",
-			VideoEncoder:   "software",
-			InputPreset:    "low_latency",
-			IdleTimeout:    30 * time.Second,
-			StartTimeout:   15 * time.Second,
-			MaxWorkers:     14,
-			FrameRate:      5,
-			JPEGQuality:    7,
-			Threads:        1,
-			ScaleWidth:     960,
-			ReadBufferSize: 1024 * 1024,
-			HLSSegmentTime: 2 * time.Second,
-			HLSListSize:    6,
+			Enabled:            true,
+			FFmpegPath:         "ffmpeg",
+			FFmpegLogLevel:     "error",
+			VideoEncoder:       "software",
+			InputPreset:        "low_latency",
+			IdleTimeout:        30 * time.Second,
+			StartTimeout:       15 * time.Second,
+			MaxWorkers:         14,
+			FrameRate:          5,
+			StableFrameRate:    5,
+			SubstreamFrameRate: 5,
+			JPEGQuality:        7,
+			Threads:            1,
+			ScaleWidth:         960,
+			ReadBufferSize:     1024 * 1024,
+			HLSSegmentTime:     2 * time.Second,
+			HLSListSize:        6,
 		},
 		HomeAssistant: HomeAssistantConfig{
 			Enabled:              true,
@@ -292,6 +295,12 @@ func (c *Config) normalize() error {
 	if c.Media.FrameRate <= 0 {
 		c.Media.FrameRate = 5
 	}
+	if c.Media.StableFrameRate <= 0 {
+		c.Media.StableFrameRate = 5
+	}
+	if c.Media.SubstreamFrameRate <= 0 {
+		c.Media.SubstreamFrameRate = c.Media.StableFrameRate
+	}
 	if c.Media.JPEGQuality <= 0 {
 		c.Media.JPEGQuality = 7
 	}
@@ -300,9 +309,6 @@ func (c *Config) normalize() error {
 	}
 	if c.Media.ScaleWidth < 0 {
 		c.Media.ScaleWidth = 0
-	}
-	if c.Media.ScaleHeight < 0 {
-		c.Media.ScaleHeight = 0
 	}
 	if c.Media.ReadBufferSize <= 0 {
 		c.Media.ReadBufferSize = 1024 * 1024

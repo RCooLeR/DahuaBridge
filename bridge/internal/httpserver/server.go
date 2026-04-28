@@ -44,6 +44,7 @@ type SnapshotReader interface {
 type MediaReader interface {
 	Enabled() bool
 	Subscribe(context.Context, string, string) (<-chan []byte, func(), error)
+	SubscribeScaled(context.Context, string, string, int) (<-chan []byte, func(), error)
 	HLSPlaylist(context.Context, string, string) ([]byte, error)
 	HLSSegment(context.Context, string, string, string) ([]byte, string, error)
 	WebRTCAnswer(context.Context, string, string, mediaapi.WebRTCSessionDescription) (mediaapi.WebRTCSessionDescription, error)
@@ -713,8 +714,17 @@ func New(
 		if profile == "" {
 			profile = "stable"
 		}
+		scaleWidth := 0
+		if rawWidth := strings.TrimSpace(r.URL.Query().Get("width")); rawWidth != "" {
+			parsedWidth, err := strconv.Atoi(rawWidth)
+			if err != nil || parsedWidth < 0 {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid width"})
+				return
+			}
+			scaleWidth = parsedWidth
+		}
 
-		frames, unsubscribe, err := media.Subscribe(r.Context(), streamID, profile)
+		frames, unsubscribe, err := media.SubscribeScaled(r.Context(), streamID, profile, scaleWidth)
 		if err != nil {
 			if errors.Is(err, mediaapi.ErrWorkerLimitReached) {
 				writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": err.Error()})
@@ -3008,7 +3018,7 @@ func marshalWebRTCICEServers(iceServers []mediaapi.WebRTCICEServer) string {
 }
 
 func buildPreviewProfileLinks(entry streams.Entry, selectedProfile string) string {
-	ordered := []string{"stable", "quality", "substream", "default"}
+	ordered := []string{"quality", "default", "stable", "substream"}
 	links := make([]string, 0, len(entry.Profiles))
 	seen := map[string]struct{}{}
 
@@ -3050,7 +3060,7 @@ func buildPreviewProfileLinks(entry streams.Entry, selectedProfile string) strin
 }
 
 func buildIntercomProfileLinks(entry streams.Entry, selectedProfile string) string {
-	ordered := []string{"stable", "quality", "substream", "default"}
+	ordered := []string{"quality", "default", "stable", "substream"}
 	links := make([]string, 0, len(entry.Profiles))
 	seen := map[string]struct{}{}
 

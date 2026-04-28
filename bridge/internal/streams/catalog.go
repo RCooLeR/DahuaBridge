@@ -104,6 +104,8 @@ type Profile struct {
 	Subtype                  int    `json:"subtype"`
 	RTSPTransport            string `json:"rtsp_transport,omitempty"`
 	FrameRate                int    `json:"frame_rate,omitempty"`
+	SourceWidth              int    `json:"source_width,omitempty"`
+	SourceHeight             int    `json:"source_height,omitempty"`
 	UseWallclockAsTimestamps bool   `json:"use_wallclock_as_timestamps,omitempty"`
 	Recommended              bool   `json:"recommended,omitempty"`
 }
@@ -154,7 +156,7 @@ func BuildCatalog(input CatalogInput) []Entry {
 					SubCodec:           subCodec,
 					SubResolution:      subResolution,
 					RecommendedProfile: recommended,
-					Profiles:           buildProfiles(deviceCfg, channel, input.IncludeCredentials, recommended, input.Config.HomeAssistant.PublicBaseURL, child.ID),
+					Profiles:           buildProfiles(deviceCfg, channel, input.IncludeCredentials, recommended, input.Config.HomeAssistant.PublicBaseURL, child.ID, input.Config.Media, mainResolution, subResolution),
 				}
 				applyHASelection(&entry, result.States[child.ID])
 				entries = append(entries, entry)
@@ -192,7 +194,7 @@ func BuildCatalog(input CatalogInput) []Entry {
 				SubResolution:      subResolution,
 				AudioCodec:         audioCodec,
 				RecommendedProfile: recommended,
-				Profiles:           buildProfiles(deviceCfg, 1, input.IncludeCredentials, recommended, input.Config.HomeAssistant.PublicBaseURL, result.Root.ID),
+				Profiles:           buildProfiles(deviceCfg, 1, input.IncludeCredentials, recommended, input.Config.HomeAssistant.PublicBaseURL, result.Root.ID, input.Config.Media, mainResolution, subResolution),
 			})
 			applyHASelection(&entries[len(entries)-1], state)
 		case dahua.DeviceKindIPC:
@@ -224,7 +226,7 @@ func BuildCatalog(input CatalogInput) []Entry {
 				SubResolution:      subResolution,
 				AudioCodec:         audioCodec,
 				RecommendedProfile: recommended,
-				Profiles:           buildProfiles(deviceCfg, 1, input.IncludeCredentials, recommended, input.Config.HomeAssistant.PublicBaseURL, result.Root.ID),
+				Profiles:           buildProfiles(deviceCfg, 1, input.IncludeCredentials, recommended, input.Config.HomeAssistant.PublicBaseURL, result.Root.ID, input.Config.Media, mainResolution, subResolution),
 			})
 			applyHASelection(&entries[len(entries)-1], state)
 		}
@@ -236,7 +238,24 @@ func BuildCatalog(input CatalogInput) []Entry {
 	return entries
 }
 
-func buildProfiles(deviceCfg config.DeviceConfig, channel int, includeCredentials bool, recommended string, publicBaseURL string, streamID string) map[string]Profile {
+func buildProfiles(deviceCfg config.DeviceConfig, channel int, includeCredentials bool, recommended string, publicBaseURL string, streamID string, mediaCfg config.MediaConfig, mainResolution string, subResolution string) map[string]Profile {
+	mainWidth, mainHeight, mainOK := parseResolution(mainResolution)
+	subWidth, subHeight, subOK := parseResolution(subResolution)
+	stableFrameRate := mediaCfg.StableFrameRate
+	if stableFrameRate <= 0 {
+		stableFrameRate = 5
+	}
+	substreamFrameRate := mediaCfg.SubstreamFrameRate
+	if substreamFrameRate <= 0 {
+		substreamFrameRate = stableFrameRate
+	}
+	if !mainOK {
+		mainWidth, mainHeight = 0, 0
+	}
+	if !subOK {
+		subWidth, subHeight = 0, 0
+	}
+
 	profiles := map[string]Profile{
 		"default": {
 			Name:           "default",
@@ -245,6 +264,8 @@ func buildProfiles(deviceCfg config.DeviceConfig, channel int, includeCredential
 			LocalHLSURL:    buildLocalHLSURL(publicBaseURL, streamID, "default"),
 			LocalWebRTCURL: buildLocalWebRTCURL(publicBaseURL, streamID, "default"),
 			Subtype:        0,
+			SourceWidth:    mainWidth,
+			SourceHeight:   mainHeight,
 			Recommended:    recommended == "default",
 		},
 		"quality": {
@@ -255,6 +276,8 @@ func buildProfiles(deviceCfg config.DeviceConfig, channel int, includeCredential
 			LocalWebRTCURL:           buildLocalWebRTCURL(publicBaseURL, streamID, "quality"),
 			Subtype:                  0,
 			RTSPTransport:            "tcp",
+			SourceWidth:              mainWidth,
+			SourceHeight:             mainHeight,
 			UseWallclockAsTimestamps: true,
 			Recommended:              recommended == "quality",
 		},
@@ -266,7 +289,9 @@ func buildProfiles(deviceCfg config.DeviceConfig, channel int, includeCredential
 			LocalWebRTCURL:           buildLocalWebRTCURL(publicBaseURL, streamID, "stable"),
 			Subtype:                  1,
 			RTSPTransport:            "tcp",
-			FrameRate:                5,
+			FrameRate:                stableFrameRate,
+			SourceWidth:              subWidth,
+			SourceHeight:             subHeight,
 			UseWallclockAsTimestamps: true,
 			Recommended:              recommended == "stable",
 		},
@@ -278,7 +303,9 @@ func buildProfiles(deviceCfg config.DeviceConfig, channel int, includeCredential
 			LocalWebRTCURL: buildLocalWebRTCURL(publicBaseURL, streamID, "substream"),
 			Subtype:        1,
 			RTSPTransport:  "tcp",
-			FrameRate:      5,
+			FrameRate:      substreamFrameRate,
+			SourceWidth:    subWidth,
+			SourceHeight:   subHeight,
 			Recommended:    recommended == "substream",
 		},
 	}

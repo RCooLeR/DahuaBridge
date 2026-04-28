@@ -77,20 +77,20 @@ func TestExtractFramesPublishesJPEG(t *testing.T) {
 }
 
 func TestBuildFilterChain(t *testing.T) {
-	filters := buildFilterChain(5, 960, 0)
+	filters := buildFilterChain(5, 960, 640, 480)
 	if len(filters) != 2 {
 		t.Fatalf("expected 2 filters, got %d", len(filters))
 	}
 	if filters[0] != "fps=5" {
 		t.Fatalf("unexpected fps filter %q", filters[0])
 	}
-	if filters[1] != "scale=960:-2" {
+	if filters[1] != "scale=960:720" {
 		t.Fatalf("unexpected scale filter %q", filters[1])
 	}
 }
 
 func TestBuildQSVFilterChain(t *testing.T) {
-	filters := buildQSVFilterChain(5, 960, 0)
+	filters := buildQSVFilterChain(5, 960, 640, 480)
 	if len(filters) != 1 {
 		t.Fatalf("expected 1 qsv filter, got %d", len(filters))
 	}
@@ -100,11 +100,33 @@ func TestBuildQSVFilterChain(t *testing.T) {
 	if !strings.Contains(filters[0], "framerate=5") {
 		t.Fatalf("unexpected qsv framerate filter %q", filters[0])
 	}
-	if !strings.Contains(filters[0], "w=960") || !strings.Contains(filters[0], "h=-1") {
+	if !strings.Contains(filters[0], "w=960") || !strings.Contains(filters[0], "h=720") {
 		t.Fatalf("unexpected qsv scale filter %q", filters[0])
 	}
 	if !strings.Contains(filters[0], "format=nv12") {
 		t.Fatalf("unexpected qsv format filter %q", filters[0])
+	}
+}
+
+func TestComputeScaledDimensions(t *testing.T) {
+	width, height, ok := computeScaledDimensions(640, 480, 961)
+	if !ok {
+		t.Fatal("expected scaled dimensions")
+	}
+	if width != 960 || height != 720 {
+		t.Fatalf("unexpected scaled dimensions %dx%d", width, height)
+	}
+}
+
+func TestResolvedScaleWidth(t *testing.T) {
+	if got := resolvedScaleWidth(498, 0); got != 0 {
+		t.Fatalf("expected scaling disabled when config width is 0, got %d", got)
+	}
+	if got := resolvedScaleWidth(0, 960); got != 960 {
+		t.Fatalf("expected configured width when request width missing, got %d", got)
+	}
+	if got := resolvedScaleWidth(498, 960); got != 498 {
+		t.Fatalf("expected request width override when scaling enabled, got %d", got)
 	}
 }
 
@@ -239,6 +261,7 @@ func TestGetOrCreateWorkerRejectsWhenLimitReached(t *testing.T) {
 		streams.Entry{ID: "another"},
 		"stable",
 		streams.Profile{Name: "stable", StreamURL: "rtsp://example.local/stream"},
+		0,
 	)
 	if !errors.Is(err, ErrWorkerLimitReached) {
 		t.Fatalf("expected worker limit error, got %v", err)
@@ -266,9 +289,11 @@ func TestBuildHLSArgs(t *testing.T) {
 		streamID:    "test",
 		profileName: "stable",
 		profile: streams.Profile{
-			Name:      "stable",
-			StreamURL: "rtsp://example.local/stream",
-			FrameRate: 5,
+			Name:         "stable",
+			StreamURL:    "rtsp://example.local/stream",
+			FrameRate:    5,
+			SourceWidth:  640,
+			SourceHeight: 480,
 		},
 		parent:       manager,
 		ctx:          ctx,
@@ -291,7 +316,7 @@ func TestBuildHLSArgs(t *testing.T) {
 	if !strings.Contains(joined, "-c:a aac") {
 		t.Fatalf("expected aac audio args, got %q", joined)
 	}
-	if !strings.Contains(joined, "-vf fps=5,scale=960:-2") {
+	if !strings.Contains(joined, "-vf fps=5,scale=960:720") {
 		t.Fatalf("expected software filter chain, got %q", joined)
 	}
 	if strings.Contains(joined, "-an") {
@@ -334,9 +359,11 @@ func TestBuildHLSArgsWithoutHWAccel(t *testing.T) {
 		streamID:    "test",
 		profileName: "stable",
 		profile: streams.Profile{
-			Name:      "stable",
-			StreamURL: "rtsp://example.local/stream",
-			FrameRate: 5,
+			Name:         "stable",
+			StreamURL:    "rtsp://example.local/stream",
+			FrameRate:    5,
+			SourceWidth:  640,
+			SourceHeight: 480,
 		},
 		parent:       manager,
 		ctx:          ctx,
@@ -378,9 +405,11 @@ func TestBuildHLSArgsWithQSVEncoder(t *testing.T) {
 		streamID:    "test",
 		profileName: "stable",
 		profile: streams.Profile{
-			Name:      "stable",
-			StreamURL: "rtsp://example.local/stream",
-			FrameRate: 5,
+			Name:         "stable",
+			StreamURL:    "rtsp://example.local/stream",
+			FrameRate:    5,
+			SourceWidth:  640,
+			SourceHeight: 480,
 		},
 		parent:       manager,
 		ctx:          ctx,
@@ -400,7 +429,7 @@ func TestBuildHLSArgsWithQSVEncoder(t *testing.T) {
 	if !strings.Contains(joined, "-pix_fmt nv12") {
 		t.Fatalf("expected qsv pixel format args, got %q", joined)
 	}
-	if !strings.Contains(joined, "-vf vpp_qsv=framerate=5:w=960:h=-1:format=nv12") {
+	if !strings.Contains(joined, "-vf vpp_qsv=framerate=5:w=960:h=720:format=nv12") {
 		t.Fatalf("expected qsv filter chain, got %q", joined)
 	}
 	if strings.Contains(joined, "-preset veryfast") {
@@ -429,9 +458,11 @@ func TestBuildWebRTCArgs(t *testing.T) {
 		streamID:    "test",
 		profileName: "stable",
 		profile: streams.Profile{
-			Name:      "stable",
-			StreamURL: "rtsp://example.local/stream",
-			FrameRate: 5,
+			Name:         "stable",
+			StreamURL:    "rtsp://example.local/stream",
+			FrameRate:    5,
+			SourceWidth:  640,
+			SourceHeight: 480,
 		},
 		parent: manager,
 		ctx:    ctx,
@@ -452,7 +483,7 @@ func TestBuildWebRTCArgs(t *testing.T) {
 	if !strings.Contains(joined, "-c:v libx264") {
 		t.Fatalf("expected h264 transcode args, got %q", joined)
 	}
-	if !strings.Contains(joined, "-vf fps=5,scale=960:-2") {
+	if !strings.Contains(joined, "-vf fps=5,scale=960:720") {
 		t.Fatalf("expected software filter chain, got %q", joined)
 	}
 	if !strings.Contains(joined, "-map 0:a:0?") || !strings.Contains(joined, "-c:a libopus") {
@@ -486,9 +517,11 @@ func TestBuildWebRTCArgsWithQSVEncoder(t *testing.T) {
 		streamID:    "test",
 		profileName: "stable",
 		profile: streams.Profile{
-			Name:      "stable",
-			StreamURL: "rtsp://example.local/stream",
-			FrameRate: 5,
+			Name:         "stable",
+			StreamURL:    "rtsp://example.local/stream",
+			FrameRate:    5,
+			SourceWidth:  640,
+			SourceHeight: 480,
 		},
 		parent: manager,
 		ctx:    ctx,
@@ -503,7 +536,7 @@ func TestBuildWebRTCArgsWithQSVEncoder(t *testing.T) {
 	if !strings.Contains(joined, "-hwaccel_output_format qsv") {
 		t.Fatalf("expected explicit qsv hwaccel output format, got %q", joined)
 	}
-	if !strings.Contains(joined, "-vf vpp_qsv=framerate=5:w=960:h=-1:format=nv12") {
+	if !strings.Contains(joined, "-vf vpp_qsv=framerate=5:w=960:h=720:format=nv12") {
 		t.Fatalf("expected qsv filter chain, got %q", joined)
 	}
 	if strings.Contains(joined, "-preset ultrafast") {
@@ -535,10 +568,13 @@ func TestBuildMJPEGArgsWithQSVEncoder(t *testing.T) {
 		streamID:    "test",
 		profileName: "stable",
 		profile: streams.Profile{
-			Name:      "stable",
-			StreamURL: "rtsp://example.local/stream",
-			FrameRate: 5,
+			Name:         "stable",
+			StreamURL:    "rtsp://example.local/stream",
+			FrameRate:    5,
+			SourceWidth:  640,
+			SourceHeight: 480,
 		},
+		scaleWidth:  manager.cfg.ScaleWidth,
 		parent:      manager,
 		ctx:         ctx,
 		cancel:      cancel,
@@ -558,7 +594,7 @@ func TestBuildMJPEGArgsWithQSVEncoder(t *testing.T) {
 	if !strings.Contains(joined, "-global_quality 70") {
 		t.Fatalf("expected mapped qsv quality args, got %q", joined)
 	}
-	if !strings.Contains(joined, "-vf vpp_qsv=framerate=5:w=960:h=-1:format=nv12") {
+	if !strings.Contains(joined, "-vf vpp_qsv=framerate=5:w=960:h=720:format=nv12") {
 		t.Fatalf("expected qsv mjpeg filter chain, got %q", joined)
 	}
 }

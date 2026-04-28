@@ -15,6 +15,8 @@ func TestBuildCatalogForNVRChannel(t *testing.T) {
 				PublicBaseURL: "http://bridge.local:8080",
 			},
 			Media: config.MediaConfig{
+				StableFrameRate:     10,
+				SubstreamFrameRate:  12,
 				WebRTCUplinkTargets: []string{"udp://127.0.0.1:5004"},
 			},
 		},
@@ -63,6 +65,15 @@ func TestBuildCatalogForNVRChannel(t *testing.T) {
 	}
 	if !strings.Contains(entry.Profiles["stable"].StreamURL, "subtype=1") {
 		t.Fatalf("expected stable profile to use subtype=1, got %q", entry.Profiles["stable"].StreamURL)
+	}
+	if entry.Profiles["stable"].FrameRate != 10 {
+		t.Fatalf("unexpected stable frame rate %d", entry.Profiles["stable"].FrameRate)
+	}
+	if entry.Profiles["substream"].FrameRate != 12 {
+		t.Fatalf("unexpected substream frame rate %d", entry.Profiles["substream"].FrameRate)
+	}
+	if entry.Profiles["stable"].SourceWidth != 704 || entry.Profiles["stable"].SourceHeight != 576 {
+		t.Fatalf("unexpected stable source dimensions %+v", entry.Profiles["stable"])
 	}
 	if entry.Profiles["stable"].LocalHLSURL != "http://bridge.local:8080/api/v1/media/hls/west20_nvr_channel_01/stable/index.m3u8" {
 		t.Fatalf("unexpected stable hls url %q", entry.Profiles["stable"].LocalHLSURL)
