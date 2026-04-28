@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/url"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -59,18 +60,22 @@ type MQTTConfig struct {
 }
 
 type HomeAssistantConfig struct {
-	Enabled        bool          `yaml:"enabled"`
-	NodeID         string        `yaml:"node_id"`
-	EntityMode     string        `yaml:"entity_mode"`
-	PublicBaseURL  string        `yaml:"public_base_url"`
-	APIBaseURL     string        `yaml:"api_base_url"`
-	AccessToken    string        `yaml:"access_token"`
-	RequestTimeout time.Duration `yaml:"request_timeout"`
+	Enabled              bool          `yaml:"enabled"`
+	NodeID               string        `yaml:"node_id"`
+	EntityMode           string        `yaml:"entity_mode"`
+	CameraSnapshotSource string        `yaml:"camera_snapshot_source"`
+	PublicBaseURL        string        `yaml:"public_base_url"`
+	APIBaseURL           string        `yaml:"api_base_url"`
+	AccessToken          string        `yaml:"access_token"`
+	RequestTimeout       time.Duration `yaml:"request_timeout"`
 }
 
 type MediaConfig struct {
 	Enabled             bool                    `yaml:"enabled"`
 	FFmpegPath          string                  `yaml:"ffmpeg_path"`
+	FFmpegLogLevel      string                  `yaml:"ffmpeg_log_level"`
+	VideoEncoder        string                  `yaml:"video_encoder"`
+	InputPreset         string                  `yaml:"input_preset"`
 	IdleTimeout         time.Duration           `yaml:"idle_timeout"`
 	StartTimeout        time.Duration           `yaml:"start_timeout"`
 	MaxWorkers          int                     `yaml:"max_workers"`
@@ -106,21 +111,24 @@ type DevicesConfig struct {
 }
 
 type DeviceConfig struct {
-	ID              string        `yaml:"id"`
-	Name            string        `yaml:"name"`
-	Manufacturer    string        `yaml:"manufacturer"`
-	Model           string        `yaml:"model"`
-	BaseURL         string        `yaml:"base_url"`
-	Username        string        `yaml:"username"`
-	Password        string        `yaml:"password"`
-	OnvifEnabled    *bool         `yaml:"onvif_enabled"`
-	OnvifUsername   string        `yaml:"onvif_username"`
-	OnvifPassword   string        `yaml:"onvif_password"`
-	OnvifServiceURL string        `yaml:"onvif_service_url"`
-	PollInterval    time.Duration `yaml:"poll_interval"`
-	RequestTimeout  time.Duration `yaml:"request_timeout"`
-	InsecureSkipTLS bool          `yaml:"insecure_skip_tls"`
-	Enabled         *bool         `yaml:"enabled"`
+	ID               string        `yaml:"id"`
+	Name             string        `yaml:"name"`
+	Manufacturer     string        `yaml:"manufacturer"`
+	Model            string        `yaml:"model"`
+	BaseURL          string        `yaml:"base_url"`
+	Username         string        `yaml:"username"`
+	Password         string        `yaml:"password"`
+	OnvifEnabled     *bool         `yaml:"onvif_enabled"`
+	OnvifUsername    string        `yaml:"onvif_username"`
+	OnvifPassword    string        `yaml:"onvif_password"`
+	OnvifServiceURL  string        `yaml:"onvif_service_url"`
+	ChannelAllowlist []int         `yaml:"channel_allowlist"`
+	LockAllowlist    []int         `yaml:"lock_allowlist"`
+	AlarmAllowlist   []int         `yaml:"alarm_allowlist"`
+	PollInterval     time.Duration `yaml:"poll_interval"`
+	RequestTimeout   time.Duration `yaml:"request_timeout"`
+	InsecureSkipTLS  bool          `yaml:"insecure_skip_tls"`
+	Enabled          *bool         `yaml:"enabled"`
 }
 
 func Load(path string) (Config, error) {
@@ -160,7 +168,7 @@ func defaultConfig() Config {
 			Level: "info",
 		},
 		HTTP: HTTPConfig{
-			ListenAddress:              ":8080",
+			ListenAddress:              ":9205",
 			MetricsPath:                "/metrics",
 			HealthPath:                 "/healthz",
 			ReadTimeout:                5 * time.Second,
@@ -188,6 +196,9 @@ func defaultConfig() Config {
 		Media: MediaConfig{
 			Enabled:        true,
 			FFmpegPath:     "ffmpeg",
+			FFmpegLogLevel: "error",
+			VideoEncoder:   "software",
+			InputPreset:    "low_latency",
 			IdleTimeout:    30 * time.Second,
 			StartTimeout:   15 * time.Second,
 			MaxWorkers:     14,
@@ -200,10 +211,11 @@ func defaultConfig() Config {
 			HLSListSize:    6,
 		},
 		HomeAssistant: HomeAssistantConfig{
-			Enabled:        true,
-			NodeID:         "dahuabridge",
-			EntityMode:     "hybrid",
-			RequestTimeout: 15 * time.Second,
+			Enabled:              true,
+			NodeID:               "dahuabridge",
+			EntityMode:           "hybrid",
+			CameraSnapshotSource: "device",
+			RequestTimeout:       15 * time.Second,
 		},
 		StateStore: StateStoreConfig{
 			FlushInterval: 5 * time.Second,
@@ -237,6 +249,10 @@ func (c *Config) normalize() error {
 	if c.HomeAssistant.EntityMode == "" {
 		c.HomeAssistant.EntityMode = "hybrid"
 	}
+	c.HomeAssistant.CameraSnapshotSource = strings.ToLower(strings.TrimSpace(c.HomeAssistant.CameraSnapshotSource))
+	if c.HomeAssistant.CameraSnapshotSource == "" {
+		c.HomeAssistant.CameraSnapshotSource = "device"
+	}
 	if c.HomeAssistant.APIBaseURL != "" {
 		normalizedAPIBaseURL, err := normalizeBaseURL(c.HomeAssistant.APIBaseURL)
 		if err != nil {
@@ -251,6 +267,18 @@ func (c *Config) normalize() error {
 	c.Media.FFmpegPath = strings.TrimSpace(c.Media.FFmpegPath)
 	if c.Media.FFmpegPath == "" {
 		c.Media.FFmpegPath = "ffmpeg"
+	}
+	c.Media.FFmpegLogLevel = strings.ToLower(strings.TrimSpace(c.Media.FFmpegLogLevel))
+	if c.Media.FFmpegLogLevel == "" {
+		c.Media.FFmpegLogLevel = "error"
+	}
+	c.Media.VideoEncoder = strings.ToLower(strings.TrimSpace(c.Media.VideoEncoder))
+	if c.Media.VideoEncoder == "" {
+		c.Media.VideoEncoder = "software"
+	}
+	c.Media.InputPreset = strings.ToLower(strings.TrimSpace(c.Media.InputPreset))
+	if c.Media.InputPreset == "" {
+		c.Media.InputPreset = "low_latency"
 	}
 	if c.Media.IdleTimeout <= 0 {
 		c.Media.IdleTimeout = 30 * time.Second
@@ -354,6 +382,21 @@ func (c Config) validate() error {
 	default:
 		return fmt.Errorf("home_assistant.entity_mode must be one of: hybrid, native")
 	}
+	switch c.HomeAssistant.CameraSnapshotSource {
+	case "device", "logo":
+	default:
+		return fmt.Errorf("home_assistant.camera_snapshot_source must be one of: device, logo")
+	}
+	switch c.Media.VideoEncoder {
+	case "software", "qsv":
+	default:
+		return fmt.Errorf("media.video_encoder must be one of: software, qsv")
+	}
+	switch c.Media.InputPreset {
+	case "low_latency", "stable":
+	default:
+		return fmt.Errorf("media.input_preset must be one of: low_latency, stable")
+	}
 
 	if len(c.Devices.NVR) == 0 && len(c.Devices.VTO) == 0 && len(c.Devices.IPC) == 0 {
 		return errors.New("at least one device must be configured")
@@ -421,6 +464,9 @@ func normalizeDevice(dev *DeviceConfig) error {
 	}
 	dev.OnvifUsername = strings.TrimSpace(dev.OnvifUsername)
 	dev.OnvifPassword = strings.TrimSpace(dev.OnvifPassword)
+	dev.ChannelAllowlist = normalizePositiveIntList(dev.ChannelAllowlist)
+	dev.LockAllowlist = normalizePositiveIntList(dev.LockAllowlist)
+	dev.AlarmAllowlist = normalizePositiveIntList(dev.AlarmAllowlist)
 	if dev.OnvifServiceURL != "" {
 		normalizedServiceURL, err := normalizeBaseURL(dev.OnvifServiceURL)
 		if err != nil {
@@ -438,6 +484,36 @@ func (d DeviceConfig) EnabledValue() bool {
 	}
 
 	return *d.Enabled
+}
+
+func (d DeviceConfig) AllowsChannel(channel int) bool {
+	if channel <= 0 {
+		return false
+	}
+	if len(d.ChannelAllowlist) == 0 {
+		return true
+	}
+	return slices.Contains(d.ChannelAllowlist, channel)
+}
+
+func (d DeviceConfig) AllowsLock(lock int) bool {
+	if lock <= 0 {
+		return false
+	}
+	if len(d.LockAllowlist) == 0 {
+		return true
+	}
+	return slices.Contains(d.LockAllowlist, lock)
+}
+
+func (d DeviceConfig) AllowsAlarm(alarm int) bool {
+	if alarm <= 0 {
+		return false
+	}
+	if len(d.AlarmAllowlist) == 0 {
+		return true
+	}
+	return slices.Contains(d.AlarmAllowlist, alarm)
 }
 
 func boolPtr(value bool) *bool {
@@ -467,6 +543,10 @@ func (d DeviceConfig) ONVIFPasswordValue() string {
 
 func (c HomeAssistantConfig) NativeEntityMode() bool {
 	return strings.EqualFold(strings.TrimSpace(c.EntityMode), "native")
+}
+
+func (c HomeAssistantConfig) LogoCameraSnapshots() bool {
+	return strings.EqualFold(strings.TrimSpace(c.CameraSnapshotSource), "logo")
 }
 
 func normalizeBaseURL(raw string) (string, error) {
@@ -531,4 +611,25 @@ func normalizeUDPTarget(raw string) (string, error) {
 	parsed.RawQuery = ""
 	parsed.Fragment = ""
 	return parsed.String(), nil
+}
+
+func normalizePositiveIntList(values []int) []int {
+	if len(values) == 0 {
+		return nil
+	}
+
+	seen := make(map[int]struct{}, len(values))
+	normalized := make([]int, 0, len(values))
+	for _, value := range values {
+		if value <= 0 {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		normalized = append(normalized, value)
+	}
+	slices.Sort(normalized)
+	return normalized
 }

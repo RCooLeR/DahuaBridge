@@ -1,134 +1,278 @@
+# Top-level logging settings for the bridge process itself.
 log:
+  # Log verbosity. Typical values: debug, info, warn, error.
   level: info
+  # Pretty=true makes logs easier for humans to read in a terminal; false is better for machine parsing.
   pretty: true
 
+# Top-level HTTP server settings for admin pages, APIs, metrics, snapshots, and bridge-hosted media URLs.
 http:
-  listen_address: ":8080"
+  # TCP listen address for the built-in HTTP server. ":9205" means "listen on all interfaces on port 9205".
+  listen_address: ":9205"
+  # URL path for Prometheus-style metrics. Change only if you already use /metrics for something else behind a reverse proxy.
   metrics_path: /metrics
+  # URL path for a simple liveness probe. Returns "ok" when the process is alive.
   health_path: /healthz
+  # Maximum time allowed to read an incoming HTTP request from a client.
   read_timeout: 5s
+  # Maximum time allowed to write an outgoing HTTP response to a client.
   write_timeout: 10s
+  # Maximum idle keep-alive time for HTTP connections.
   idle_timeout: 60s
-  admin_rate_limit_per_minute: 30
+  # Rate limit for admin/API actions per client, per minute. Increase only if you automate admin endpoints heavily.
+  admin_rate_limit_per_minute: 300
+  # Burst size for admin/API actions before rate limiting kicks in.
   admin_rate_limit_burst: 10
+  # Rate limit for snapshot requests per client, per minute. Snapshots can be relatively expensive on Dahua devices.
   snapshot_rate_limit_per_minute: 240
+  # Burst size for snapshot requests before rate limiting kicks in.
   snapshot_rate_limit_burst: 40
-  media_rate_limit_per_minute: 60
+  # Rate limit for bridge media endpoints such as MJPEG/HLS/WebRTC helper requests, per client, per minute.
+  media_rate_limit_per_minute: 600
+  # Burst size for media requests before rate limiting kicks in.
   media_rate_limit_burst: 12
 
+# Top-level MQTT settings used for MQTT discovery, entity state publishing, and event topics.
 mqtt:
+  # Enable or disable all MQTT publishing. Set false if you use only the native Home Assistant custom integration.
   enabled: true
+  # MQTT broker URL. Common schemes are tcp://host:1883, ssl://host:8883, or ws://host:port/path if your broker supports WebSockets.
   broker: tcp://127.0.0.1:1883
+  # MQTT client ID used by the bridge when connecting to the broker. Must be unique per broker connection.
   client_id: dahuabridge
+  # MQTT username. Leave empty if your broker allows anonymous connections or uses another auth model.
   username: ""
+  # MQTT password. Leave empty if your broker allows anonymous connections or uses another auth model.
   password: ""
+  # Root topic prefix for non-discovery bridge topics.
   topic_prefix: dahuabridge
+  # Home Assistant MQTT discovery prefix. "homeassistant" is the normal default.
   discovery_prefix: homeassistant
+  # MQTT QoS level. Valid values are 0, 1, or 2. Most Home Assistant setups use 1.
   qos: 1
+  # Whether published MQTT messages should be retained by the broker.
   retain: true
+  # Whether to request a clean MQTT session on connect. false is safer if you want persistent subscriptions/session state.
   clean_session: false
+  # MQTT keep-alive interval.
   keep_alive: 30s
+  # Maximum time to wait when first connecting to the MQTT broker.
   connect_timeout: 15s
+  # Maximum time to wait for a publish operation to complete.
   publish_timeout: 10s
 
+# Top-level media settings used for bridge-hosted MJPEG, HLS, and WebRTC helper/transcode paths.
 media:
+  # Enable or disable the media subsystem entirely. Set false if you do not want bridge-hosted media at all.
   enabled: true
+  # Path to ffmpeg inside the runtime environment. "ffmpeg" works if it is installed and on PATH.
   ffmpeg_path: ffmpeg
+  # ffmpeg child-process log level. Useful values: error, warning, info, verbose, debug. Raise this when diagnosing failed transcodes.
+  ffmpeg_log_level: error
+  # RTSP input preset for bridge-hosted MJPEG/HLS/WebRTC ffmpeg workers.
+  # "low_latency" keeps the current aggressive flags. "stable" removes them and keeps corruption discard only.
+  input_preset: low_latency
+  # Video encoder for bridge-hosted HLS/WebRTC transcodes. "software" uses libx264. "qsv" uses Intel h264_qsv when hwaccel is active.
+  # MJPEG output remains software-encoded JPEG either way.
+  video_encoder: software
+  # Time after which an unused media worker is shut down.
   idle_timeout: 30s
+  # Maximum time to wait for the first frame or initial playlist/segment generation.
   start_timeout: 15s
+  # Maximum number of active bridge media workers/sessions. Raise carefully because each worker consumes CPU/RAM.
   max_workers: 14
+  # Default output frame rate for bridge-hosted media transcodes.
   frame_rate: 5
+  # MJPEG JPEG quality. Lower numbers usually mean better quality and larger frames; tune for your ffmpeg build if needed.
   jpeg_quality: 7
+  # ffmpeg thread count. 1 is predictable and lighter on some systems; higher values may improve speed but increase CPU contention.
   threads: 1
+  # Output width for bridge-hosted transcodes. 0 disables width scaling. Typical values are 640, 960, 1280.
   scale_width: 960
+  # Output height for bridge-hosted transcodes. 0 means "auto from aspect ratio" when width scaling is set.
   scale_height: 0
+  # Reader buffer size for MJPEG frame parsing. Increase only if you have unusually large bursts or jumbo ffmpeg output chunks.
   read_buffer_size: 1048576
+  # HLS segment duration. Lower values reduce latency but create more segments and more ffmpeg churn.
   hls_segment_time: 2s
+  # Number of HLS segments kept in the playlist.
   hls_list_size: 6
+  # Optional ffmpeg hardware acceleration arguments. Empty list disables hwaccel.
+  # For Linux Intel QSV inside Docker, prefer:
+  # ["-init_hw_device","vaapi=va:/dev/dri/renderD128","-init_hw_device","qsv=hw@va","-filter_hw_device","hw","-hwaccel","qsv"]
   hwaccel_args: []
-  # Optional STUN/TURN config for bridge-hosted WebRTC pages and peer connections.
+  # Optional STUN/TURN list for bridge-hosted WebRTC pages and peer connections.
   # webrtc_ice_servers:
+  #   # First ICE server entry.
   #   - urls:
+  #       # Public STUN example. Values are one or more ICE server URLs.
   #       - stun:stun.l.google.com:19302
+  #   # Second ICE server entry.
   #   - urls:
+  #       # TURN over UDP example.
   #       - turn:turn.example.com:3478?transport=udp
+  #       # TURN over TLS/TCP example.
   #       - turns:turn.example.com:5349?transport=tcp
+  #     # TURN username when required by the server.
   #     username: bridge-turn-user
+  #     # TURN credential/password when required by the server.
   #     credential: bridge-turn-password
-  # Optional RTP export targets for browser microphone uplink from bridge-hosted WebRTC intercom sessions.
-  # Audio is forwarded as incoming Opus RTP exactly as received by the bridge; this is not VTO talkback by itself.
+  # Optional RTP export targets for browser microphone audio from bridge-hosted VTO WebRTC sessions.
   # webrtc_uplink_targets:
+  #   # Example explicit UDP URL form.
   #   - udp://127.0.0.1:5004
+  #   # Example shorthand host:port form.
   #   - 127.0.0.1:5006
 
+# Top-level Home Assistant integration settings used for MQTT discovery behavior and bridge-generated URLs.
 home_assistant:
+  # Enable or disable Home Assistant-specific features such as discovery payloads and native catalog behavior.
   enabled: true
+  # Prefix used in unique IDs and naming for some Home Assistant integration paths.
   node_id: dahuabridge
-  # hybrid = publish Home Assistant MQTT discovery as before
-  # native = keep MQTT topics, but stop publishing Home Assistant MQTT discovery to avoid duplicate HA devices
+  # Entity publishing mode. "hybrid" = keep MQTT discovery. "native" = keep MQTT state/topics but stop publishing HA MQTT discovery.
   entity_mode: hybrid
-  public_base_url: http://127.0.0.1:8080
+  # Camera snapshot source for MQTT-discovered camera entities. "device" fetches real camera snapshots during probes.
+  # "logo" skips device snapshot HTTP requests and publishes a built-in placeholder image instead.
+  camera_snapshot_source: device
+  # Browser- and HA-reachable base URL for this bridge. Must be the URL users and Home Assistant can actually open.
+  public_base_url: http://127.0.0.1:9205
+  # Optional Home Assistant base URL for bridge -> Home Assistant API calls such as ONVIF provisioning.
   # api_base_url: http://homeassistant.local:8123
+  # Optional Home Assistant long-lived access token paired with api_base_url.
   # access_token: your-home-assistant-long-lived-token
+  # Timeout for bridge -> Home Assistant API requests.
   request_timeout: 15s
 
+# Top-level persistent state store settings. Used to restore last known state across restarts.
 state_store:
+  # Enable or disable on-disk state persistence.
   enabled: true
+  # File path where the bridge writes persistent state. Relative paths are relative to the process working directory.
   path: ./var/dahuabridge-state.json
+  # Flush interval for writing in-memory state changes to disk.
   flush_interval: 5s
 
+# Top-level device inventory. Put your actual NVR, IPC, and VTO devices here.
 devices:
+  # NVR device list.
   nvr:
-    - id: example_nvr
+    # First NVR entry.
+    - # Stable device ID used internally, in MQTT, URLs, and Home Assistant unique IDs. Do not change casually after deployment.
+      id: example_nvr
+      # Friendly display name shown to users.
       name: "Example NVR"
+      # Manufacturer string shown in UI/device registry.
       manufacturer: Dahua
+      # Model string shown in UI/device registry.
       model: DHI-NVR5232-EI
+      # Base HTTP/HTTPS URL used to reach the device CGI/API endpoints.
       base_url: http://nvr.example.local
+      # Primary device login username.
       username: admin
+      # Primary device login password.
       password: change-me
+      # Whether to use ONVIF discovery/probing for this device when supported.
       onvif_enabled: true
+      # Optional ONVIF username. Often same as username, but can differ if ONVIF has separate credentials.
       onvif_username: admin
+      # Optional ONVIF password. Often same as password, but can differ if ONVIF has separate credentials.
       onvif_password: change-me-onvif
+      # Optional explicit ONVIF device-service URL. Leave commented unless auto-discovery fails or you need a custom endpoint.
       # onvif_service_url: http://nvr.example.local/onvif/device_service
+      # Optional allowlist of 1-based channel numbers to expose. Useful if the NVR has placeholder/unused channels.
+      # channel_allowlist: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+      # Poll interval for full probe refreshes.
       poll_interval: 30s
+      # Timeout for requests to this device.
       request_timeout: 10s
+      # Skip TLS certificate verification for HTTPS device URLs. Use true only for self-signed/broken device certs you trust.
       insecure_skip_tls: false
+      # Enable or disable this device entry without deleting it from the file.
       enabled: true
+
+  # Standalone IPC camera device list.
   ipc:
-    - id: example_ipc_30
+    # First IPC entry.
+    - # Stable device ID used internally, in MQTT, URLs, and Home Assistant unique IDs.
+      id: example_ipc_30
+      # Friendly display name shown to users.
       name: "Example IPC 30"
+      # Manufacturer string shown in UI/device registry.
       manufacturer: Dahua
+      # Model string shown in UI/device registry.
       model: IPC
+      # Base HTTP URL used to reach the camera.
       base_url: http://ipc30.example.local
+      # Primary device login username.
       username: admin
+      # Primary device login password.
       password: change-me
+      # Whether to use ONVIF discovery/probing for this device when supported.
       onvif_enabled: true
+      # Poll interval for full probe refreshes.
       poll_interval: 30s
+      # Timeout for requests to this device.
       request_timeout: 10s
+      # Skip TLS verification for HTTPS device URLs. Not relevant for plain HTTP.
       insecure_skip_tls: false
+      # Enable or disable this device entry.
       enabled: true
-    - id: example_ipc_20
+
+    # Second IPC entry, using HTTPS and self-signed TLS as an example.
+    - # Stable device ID used internally, in MQTT, URLs, and Home Assistant unique IDs.
+      id: example_ipc_20
+      # Friendly display name shown to users.
       name: "Example IPC 20"
+      # Manufacturer string shown in UI/device registry.
       manufacturer: Dahua
+      # Model string shown in UI/device registry.
       model: IPC
+      # Base HTTPS URL used to reach the camera.
       base_url: https://ipc20.example.local
+      # Primary device login username.
       username: admin
+      # Primary device login password.
       password: change-me
+      # Whether to use ONVIF discovery/probing for this device when supported.
       onvif_enabled: true
+      # Poll interval for full probe refreshes.
       poll_interval: 30s
+      # Timeout for requests to this device.
       request_timeout: 10s
+      # Skip TLS verification because many cameras use self-signed or broken certificates on HTTPS.
       insecure_skip_tls: true
+      # Enable or disable this device entry.
       enabled: true
+
+  # VTO door station device list.
   vto:
-    - id: example_vto
+    # First VTO entry.
+    - # Stable device ID used internally, in MQTT, URLs, and Home Assistant unique IDs.
+      id: example_vto
+      # Friendly display name shown to users.
       name: "Example VTO"
+      # Manufacturer string shown in UI/device registry.
       manufacturer: Dahua
+      # Model string shown in UI/device registry.
       model: DHI-VTO2311R-WP
+      # Base HTTP/HTTPS URL used to reach the VTO.
       base_url: http://vto.example.local
+      # Primary device login username.
       username: admin
+      # Primary device login password.
       password: change-me
+      # Whether to use ONVIF discovery/probing for this device when supported.
       onvif_enabled: true
+      # Optional allowlist of 1-based lock output numbers to expose. Useful if firmware reports extra unused lock slots.
+      # lock_allowlist: [1]
+      # Optional allowlist of 1-based alarm input numbers to expose. Useful if firmware reports extra unused alarm slots.
+      # alarm_allowlist: [1]
+      # Poll interval for full probe refreshes.
       poll_interval: 30s
+      # Timeout for requests to this device.
       request_timeout: 10s
+      # Skip TLS verification for HTTPS device URLs. Use true only if the VTO serves an untrusted/self-signed certificate you accept.
       insecure_skip_tls: false
+      # Enable or disable this device entry.
       enabled: true

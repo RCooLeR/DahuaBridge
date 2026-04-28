@@ -488,6 +488,16 @@ func publishProbeCameraSnapshots(
 		return
 	}
 
+	if discovery.LogoCameraSnapshots() {
+		payload := ha.CameraSnapshotPlaceholder()
+		for _, target := range snapshotTargetsForProbeResult(result) {
+			if err := discovery.PublishCameraSnapshot(context.Background(), target.deviceID, payload); err != nil {
+				log.Debug().Err(err).Str("snapshot_device_id", target.deviceID).Int("snapshot_channel", target.channel).Msg("camera snapshot mqtt publish failed")
+			}
+		}
+		return
+	}
+
 	provider, ok := driver.(dahua.SnapshotProvider)
 	if !ok {
 		return

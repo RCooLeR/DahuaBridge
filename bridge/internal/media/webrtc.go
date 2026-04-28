@@ -285,6 +285,7 @@ func newPeerConnection(iceServers []WebRTCICEServer) (*webrtc.PeerConnection, we
 
 func (s *webrtcSession) startFFmpeg(videoPort int, audioPort int) (*exec.Cmd, error) {
 	args := s.buildFFmpegArgs(videoPort, audioPort)
+	s.logger.Debug().Strs("ffmpeg_args", redactFFmpegArgs(args)).Msg("starting webrtc ffmpeg")
 	cmd := exec.CommandContext(s.ctx, s.parent.cfg.FFmpegPath, args...)
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
@@ -309,6 +310,7 @@ func (s *webrtcSession) captureFFmpegStderr(stderr io.ReadCloser) {
 	if message == "" || s.ctx.Err() != nil {
 		return
 	}
+	s.logger.Debug().Str("ffmpeg_stderr", message).Msg("webrtc ffmpeg stderr")
 	s.setError(errors.New(message))
 }
 
@@ -321,29 +323,17 @@ func (s *webrtcSession) buildFFmpegArgs(videoPort int, audioPort int) []string {
 
 	args := []string{
 		"-hide_banner",
-		"-loglevel", "error",
+		"-loglevel", ffmpegLogLevel(s.parent.cfg),
 	}
 	args = append(args, s.parent.cfg.HWAccelArgs...)
-	args = append(args,
-		"-rtsp_transport", firstNonEmpty(s.profile.RTSPTransport, "tcp"),
-		"-fflags", "nobuffer",
-		"-flags", "low_delay",
-		"-i", s.profile.StreamURL,
-	)
+	args = append(args, buildRTSPInputArgs(s.profile, s.parent.cfg.InputPreset)...)
 	if s.parent.cfg.Threads > 0 {
 		args = append(args, "-threads", strconv.Itoa(s.parent.cfg.Threads))
 	}
 	args = append(args,
 		"-map", "0:v:0",
-		"-c:v", "libx264",
-		"-preset", "ultrafast",
-		"-tune", "zerolatency",
-		"-pix_fmt", "yuv420p",
-		"-profile:v", "baseline",
-		"-g", strconv.Itoa(gopSize),
-		"-keyint_min", strconv.Itoa(gopSize),
-		"-sc_threshold", "0",
 	)
+	args = appendVideoEncoderArgs(args, s.parent.cfg, hardwareAccelEnabled(s.parent.cfg.HWAccelArgs), gopSize, "ultrafast")
 	filterChain := buildFilterChain(frameRate, s.parent.cfg.ScaleWidth, s.parent.cfg.ScaleHeight)
 	if len(filterChain) > 0 {
 		args = append(args, "-vf", strings.Join(filterChain, ","))

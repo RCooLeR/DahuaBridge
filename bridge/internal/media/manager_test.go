@@ -258,7 +258,7 @@ func TestBuildHLSArgs(t *testing.T) {
 		startErr:     make(chan error, 1),
 	}
 
-	args := w.buildFFmpegArgs()
+	args := w.buildFFmpegArgs(ffmpegStartAttempt{useHWAccel: true, inputPreset: manager.cfg.InputPreset})
 	joined := strings.Join(args, " ")
 	if !strings.Contains(joined, "-f hls") {
 		t.Fatalf("expected hls output args, got %q", joined)
@@ -286,6 +286,97 @@ func TestValidateHLSFileNameRejectsTraversal(t *testing.T) {
 	}
 	if err := validateHLSFileName("segment_000.ts"); err != nil {
 		t.Fatalf("expected valid segment name, got %v", err)
+	}
+}
+
+func TestBuildHLSArgsWithoutHWAccel(t *testing.T) {
+	manager := New(config.MediaConfig{
+		Enabled:        true,
+		StartTimeout:   time.Second,
+		IdleTimeout:    time.Second,
+		MaxWorkers:     2,
+		VideoEncoder:   "qsv",
+		FrameRate:      5,
+		Threads:        1,
+		ScaleWidth:     960,
+		HLSSegmentTime: 2 * time.Second,
+		HLSListSize:    6,
+		HWAccelArgs:    []string{"-hwaccel", "qsv"},
+	}, testResolver{}, zerolog.Nop(), nil)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	w := &hlsWorker{
+		key:         "test:stable",
+		streamID:    "test",
+		profileName: "stable",
+		profile: streams.Profile{
+			Name:      "stable",
+			StreamURL: "rtsp://example.local/stream",
+			FrameRate: 5,
+		},
+		parent:       manager,
+		ctx:          ctx,
+		cancel:       cancel,
+		lastAccessAt: time.Now(),
+		startErr:     make(chan error, 1),
+	}
+
+	args := w.buildFFmpegArgs(ffmpegStartAttempt{useHWAccel: false, inputPreset: manager.cfg.InputPreset})
+	joined := strings.Join(args, " ")
+	if strings.Contains(joined, "-hwaccel") {
+		t.Fatalf("expected hwaccel args to be omitted, got %q", joined)
+	}
+	if !strings.Contains(joined, "-c:v libx264") {
+		t.Fatalf("expected software fallback encoder args, got %q", joined)
+	}
+}
+
+func TestBuildHLSArgsWithQSVEncoder(t *testing.T) {
+	manager := New(config.MediaConfig{
+		Enabled:        true,
+		StartTimeout:   time.Second,
+		IdleTimeout:    time.Second,
+		MaxWorkers:     2,
+		VideoEncoder:   "qsv",
+		FrameRate:      5,
+		Threads:        1,
+		ScaleWidth:     960,
+		HLSSegmentTime: 2 * time.Second,
+		HLSListSize:    6,
+		HWAccelArgs:    []string{"-hwaccel", "qsv"},
+	}, testResolver{}, zerolog.Nop(), nil)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	w := &hlsWorker{
+		key:         "test:stable",
+		streamID:    "test",
+		profileName: "stable",
+		profile: streams.Profile{
+			Name:      "stable",
+			StreamURL: "rtsp://example.local/stream",
+			FrameRate: 5,
+		},
+		parent:       manager,
+		ctx:          ctx,
+		cancel:       cancel,
+		lastAccessAt: time.Now(),
+		startErr:     make(chan error, 1),
+	}
+
+	args := w.buildFFmpegArgs(ffmpegStartAttempt{useHWAccel: true, inputPreset: manager.cfg.InputPreset})
+	joined := strings.Join(args, " ")
+	if !strings.Contains(joined, "-c:v h264_qsv") {
+		t.Fatalf("expected qsv encoder args, got %q", joined)
+	}
+	if !strings.Contains(joined, "-pix_fmt nv12") {
+		t.Fatalf("expected qsv pixel format args, got %q", joined)
+	}
+	if strings.Contains(joined, "-preset veryfast") {
+		t.Fatalf("did not expect libx264 preset args in qsv mode, got %q", joined)
 	}
 }
 
@@ -338,6 +429,110 @@ func TestBuildWebRTCArgs(t *testing.T) {
 	}
 	if strings.Contains(joined, "-an") {
 		t.Fatalf("did not expect audio to be disabled in webrtc args, got %q", joined)
+	}
+}
+
+func TestBuildWebRTCArgsWithQSVEncoder(t *testing.T) {
+	manager := New(config.MediaConfig{
+		Enabled:        true,
+		StartTimeout:   time.Second,
+		IdleTimeout:    time.Second,
+		MaxWorkers:     2,
+		VideoEncoder:   "qsv",
+		FrameRate:      5,
+		Threads:        1,
+		ScaleWidth:     960,
+		HLSSegmentTime: 2 * time.Second,
+		HLSListSize:    6,
+		HWAccelArgs:    []string{"-hwaccel", "qsv"},
+	}, testResolver{}, zerolog.Nop(), nil)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	session := &webrtcSession{
+		key:         "test:stable:webrtc",
+		streamID:    "test",
+		profileName: "stable",
+		profile: streams.Profile{
+			Name:      "stable",
+			StreamURL: "rtsp://example.local/stream",
+			FrameRate: 5,
+		},
+		parent: manager,
+		ctx:    ctx,
+		cancel: cancel,
+	}
+
+	args := session.buildFFmpegArgs(51000, 51002)
+	joined := strings.Join(args, " ")
+	if !strings.Contains(joined, "-c:v h264_qsv") {
+		t.Fatalf("expected qsv encoder args, got %q", joined)
+	}
+	if strings.Contains(joined, "-preset ultrafast") {
+		t.Fatalf("did not expect libx264 preset args in qsv mode, got %q", joined)
+	}
+}
+
+func TestBuildFFmpegStartAttempts(t *testing.T) {
+	attempts := buildFFmpegStartAttempts(config.MediaConfig{
+		InputPreset: "low_latency",
+		HWAccelArgs: []string{"-hwaccel", "qsv"},
+	})
+	if len(attempts) != 3 {
+		t.Fatalf("expected 3 attempts, got %+v", attempts)
+	}
+	if !attempts[0].useHWAccel || attempts[0].inputPreset != "low_latency" {
+		t.Fatalf("unexpected first attempt %+v", attempts[0])
+	}
+	if attempts[1].useHWAccel || attempts[1].inputPreset != "low_latency" {
+		t.Fatalf("unexpected second attempt %+v", attempts[1])
+	}
+	if attempts[2].useHWAccel || attempts[2].inputPreset != "stable" {
+		t.Fatalf("unexpected third attempt %+v", attempts[2])
+	}
+}
+
+func TestBuildFFmpegStartAttemptsStableOnly(t *testing.T) {
+	attempts := buildFFmpegStartAttempts(config.MediaConfig{
+		InputPreset: "stable",
+	})
+	if len(attempts) != 1 {
+		t.Fatalf("expected 1 attempt, got %+v", attempts)
+	}
+	if attempts[0].useHWAccel || attempts[0].inputPreset != "stable" {
+		t.Fatalf("unexpected stable-only attempt %+v", attempts[0])
+	}
+}
+
+func TestBuildRTSPInputArgsLowLatency(t *testing.T) {
+	args := buildRTSPInputArgs(streams.Profile{StreamURL: "rtsp://example.local/stream"}, "low_latency")
+	joined := strings.Join(args, " ")
+	if !strings.Contains(joined, "-fflags +discardcorrupt+nobuffer") {
+		t.Fatalf("expected low-latency fflags, got %q", joined)
+	}
+	if !strings.Contains(joined, "-flags low_delay") {
+		t.Fatalf("expected low-delay flags, got %q", joined)
+	}
+}
+
+func TestBuildRTSPInputArgsStable(t *testing.T) {
+	args := buildRTSPInputArgs(streams.Profile{StreamURL: "rtsp://example.local/stream"}, "stable")
+	joined := strings.Join(args, " ")
+	if !strings.Contains(joined, "-fflags +discardcorrupt") {
+		t.Fatalf("expected stable discardcorrupt flag, got %q", joined)
+	}
+	if strings.Contains(joined, "nobuffer") || strings.Contains(joined, "low_delay") {
+		t.Fatalf("did not expect low-latency flags in stable mode, got %q", joined)
+	}
+}
+
+func TestIsHardwareAccelFailure(t *testing.T) {
+	if !isHardwareAccelFailure("No device available for decoder: device type qsv needed for codec hevc_qsv.") {
+		t.Fatal("expected qsv decoder error to trigger fallback")
+	}
+	if isHardwareAccelFailure("unexpected status 401 Unauthorized") {
+		t.Fatal("did not expect unrelated error to trigger fallback")
 	}
 }
 
