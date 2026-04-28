@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -538,6 +539,18 @@ func TestDriverProbeCachesStaticMetadata(t *testing.T) {
 				fmt.Fprint(w, "table.Alarm[0].Name=Alarm1\ntable.Alarm[0].SenseMethod=Button\ntable.Alarm[0].Enable=true\n")
 			case "Encode":
 				fmt.Fprint(w, "table.Encode[0].MainFormat[0].Video.resolution=1280x720\ntable.Encode[0].MainFormat[0].Video.Compression=H.264\ntable.Encode[0].ExtraFormat[0].Video.resolution=640x480\ntable.Encode[0].ExtraFormat[0].Video.Compression=H.264\ntable.Encode[0].MainFormat[0].Audio.Compression=PCM\n")
+			case "AudioInputVolume":
+				fmt.Fprint(w, "table.AudioInputVolume[0]=90\ntable.AudioInputVolume[1]=60\n")
+			case "AudioOutputVolume":
+				fmt.Fprint(w, "table.AudioOutputVolume[0]=80\ntable.AudioOutputVolume[1]=60\n")
+			case "Sound":
+				fmt.Fprint(w, "table.Sound.SilentMode=false\ntable.Sound.AlarmSoundEnable=true\n")
+			case "VideoTalkPhoneGeneral":
+				fmt.Fprint(w, "table.VideoTalkPhoneGeneral.AutoRecordEnable=true\ntable.VideoTalkPhoneGeneral.AutoRecordTime=11\n")
+			case "VideoTalkPhoneBasic":
+				fmt.Fprint(w, "table.VideoTalkPhoneBasic.VTOCallSoundEnable=true\n")
+			case "RecordStoragePoint":
+				fmt.Fprint(w, "table.RecordStoragePoint[0].EventSnapShot.Local=0\n")
 			default:
 				t.Fatalf("unexpected configManager name: %s", r.URL.RawQuery)
 			}
@@ -556,6 +569,7 @@ func TestDriverProbeCachesStaticMetadata(t *testing.T) {
 		PollInterval:   30 * time.Second,
 	}
 	driver := New(cfg, zerolog.Nop(), cgi.New(cfg, metrics.New(buildinfo.BuildInfo{})))
+	driver.rpc = nil
 
 	result1, err := driver.Probe(context.Background())
 	if err != nil {
@@ -572,6 +586,44 @@ func TestDriverProbeCachesStaticMetadata(t *testing.T) {
 	if got := len(result2.Children); got != 2 {
 		t.Fatalf("expected cached probe to preserve children, got %d", got)
 	}
+	rootState := result1.States["front_vto"]
+	if rootState.Info["control_audio_output_volume_supported"] != true {
+		t.Fatalf("expected output volume support to be true, got %+v", rootState.Info["control_audio_output_volume_supported"])
+	}
+	if rootState.Info["control_audio_input_volume_supported"] != true {
+		t.Fatalf("expected input volume support to be true, got %+v", rootState.Info["control_audio_input_volume_supported"])
+	}
+	if rootState.Info["control_audio_mute_supported"] != true {
+		t.Fatalf("expected mute support to be true, got %+v", rootState.Info["control_audio_mute_supported"])
+	}
+	if rootState.Info["control_recording_supported"] != true {
+		t.Fatalf("expected recording support to be true, got %+v", rootState.Info["control_recording_supported"])
+	}
+	if rootState.Info["control_audio_output_volume"] != 80 {
+		t.Fatalf("expected output volume 80, got %+v", rootState.Info["control_audio_output_volume"])
+	}
+	if rootState.Info["control_audio_input_volume"] != 90 {
+		t.Fatalf("expected input volume 90, got %+v", rootState.Info["control_audio_input_volume"])
+	}
+	if rootState.Info["control_audio_muted"] != false {
+		t.Fatalf("expected muted=false, got %+v", rootState.Info["control_audio_muted"])
+	}
+	if rootState.Info["control_recording_auto_enabled"] != true {
+		t.Fatalf("expected auto recording enabled, got %+v", rootState.Info["control_recording_auto_enabled"])
+	}
+	if rootState.Info["record_storage_event_snapshot_local"] != false {
+		t.Fatalf("expected local event snapshot flag to be false, got %+v", rootState.Info["record_storage_event_snapshot_local"])
+	}
+	notes, ok := rootState.Info["validation_notes"].([]string)
+	if !ok {
+		t.Fatalf("expected validation notes slice, got %+v", rootState.Info["validation_notes"])
+	}
+	if len(notes) == 0 {
+		t.Fatal("expected validation notes to be populated")
+	}
+	if rootState.Info["validation_notes_text"] == "" {
+		t.Fatal("expected validation_notes_text to be populated")
+	}
 
 	for _, key := range []string{
 		"magicBox:getSystemInfo",
@@ -581,6 +633,12 @@ func TestDriverProbeCachesStaticMetadata(t *testing.T) {
 		"config:CommGlobal",
 		"config:Alarm",
 		"config:Encode",
+		"config:AudioInputVolume",
+		"config:AudioOutputVolume",
+		"config:Sound",
+		"config:VideoTalkPhoneGeneral",
+		"config:VideoTalkPhoneBasic",
+		"config:RecordStoragePoint",
 	} {
 		mu.Lock()
 		got := counts[key]
@@ -629,6 +687,18 @@ func TestDriverProbeUsesStaleMetadataOnRefreshFailure(t *testing.T) {
 				fmt.Fprint(w, "table.Alarm[0].Name=Alarm1\ntable.Alarm[0].SenseMethod=Button\ntable.Alarm[0].Enable=true\n")
 			case "Encode":
 				fmt.Fprint(w, "table.Encode[0].MainFormat[0].Video.resolution=1280x720\ntable.Encode[0].MainFormat[0].Video.Compression=H.264\ntable.Encode[0].ExtraFormat[0].Video.resolution=640x480\ntable.Encode[0].ExtraFormat[0].Video.Compression=H.264\ntable.Encode[0].MainFormat[0].Audio.Compression=PCM\n")
+			case "AudioInputVolume":
+				fmt.Fprint(w, "table.AudioInputVolume[0]=90\ntable.AudioInputVolume[1]=60\n")
+			case "AudioOutputVolume":
+				fmt.Fprint(w, "table.AudioOutputVolume[0]=80\ntable.AudioOutputVolume[1]=60\n")
+			case "Sound":
+				fmt.Fprint(w, "table.Sound.SilentMode=false\n")
+			case "VideoTalkPhoneGeneral":
+				fmt.Fprint(w, "table.VideoTalkPhoneGeneral.AutoRecordEnable=true\ntable.VideoTalkPhoneGeneral.AutoRecordTime=11\n")
+			case "VideoTalkPhoneBasic":
+				fmt.Fprint(w, "table.VideoTalkPhoneBasic.VTOCallSoundEnable=true\n")
+			case "RecordStoragePoint":
+				fmt.Fprint(w, "table.RecordStoragePoint[0].EventSnapShot.Local=0\n")
 			default:
 				t.Fatalf("unexpected configManager name: %s", r.URL.RawQuery)
 			}
@@ -647,6 +717,7 @@ func TestDriverProbeUsesStaleMetadataOnRefreshFailure(t *testing.T) {
 		PollInterval:   30 * time.Second,
 	}
 	driver := New(cfg, zerolog.Nop(), cgi.New(cfg, metrics.New(buildinfo.BuildInfo{})))
+	driver.rpc = nil
 
 	first, err := driver.Probe(context.Background())
 	if err != nil {
@@ -680,6 +751,148 @@ func TestDriverProbeUsesStaleMetadataOnRefreshFailure(t *testing.T) {
 	mu.Unlock()
 	if got != 2 {
 		t.Fatalf("expected AccessControl refresh attempt count 2, got %d", got)
+	}
+}
+
+func TestDriverControlCapabilitiesUsesProbeMetadata(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/cgi-bin/magicBox.cgi":
+			switch r.URL.Query().Get("action") {
+			case "getSystemInfo":
+				fmt.Fprint(w, "deviceType=VTO\nprocessor=ARM\nserialNumber=SN123\nupdateSerial=VTO2311\n")
+			case "getMachineName":
+				fmt.Fprint(w, "name=Front Gate\n")
+			case "getSoftwareVersion":
+				fmt.Fprint(w, "version=1.2.3, build:2026-04-27\n")
+			default:
+				t.Fatalf("unexpected magicBox action: %s", r.URL.RawQuery)
+			}
+		case "/cgi-bin/configManager.cgi":
+			switch r.URL.Query().Get("name") {
+			case "AccessControl":
+				fmt.Fprint(w, "table.AccessControl[0].Name=Door1\ntable.AccessControl[0].State=Normal\ntable.AccessControl[1].Name=Door2\ntable.AccessControl[1].State=Normal\n")
+			case "CommGlobal":
+				fmt.Fprint(w, "table.CommGlobal.CurrentProfile=Villa\ntable.CommGlobal.AlarmEnable=true\n")
+			case "Alarm":
+				fmt.Fprint(w, "table.Alarm[0].Name=Alarm1\ntable.Alarm[0].SenseMethod=Button\ntable.Alarm[0].Enable=true\n")
+			case "Encode":
+				fmt.Fprint(w, "table.Encode[0].MainFormat[0].Audio.Compression=PCM\ntable.Encode[0].MainFormat[0].AudioEnable=true\n")
+			case "AudioInputVolume":
+				fmt.Fprint(w, "table.AudioInputVolume[0]=90\ntable.AudioInputVolume[1]=60\n")
+			case "AudioOutputVolume":
+				fmt.Fprint(w, "table.AudioOutputVolume[0]=80\ntable.AudioOutputVolume[1]=60\n")
+			case "Sound":
+				fmt.Fprint(w, "table.Sound.SilentMode=false\n")
+			case "VideoTalkPhoneGeneral":
+				fmt.Fprint(w, "table.VideoTalkPhoneGeneral.AutoRecordEnable=true\ntable.VideoTalkPhoneGeneral.AutoRecordTime=11\n")
+			case "VideoTalkPhoneBasic":
+				fmt.Fprint(w, "table.VideoTalkPhoneBasic.VTOCallSoundEnable=true\n")
+			case "RecordStoragePoint":
+				fmt.Fprint(w, "table.RecordStoragePoint[0].EventSnapShot.Local=true\n")
+			default:
+				t.Fatalf("unexpected configManager name: %s", r.URL.RawQuery)
+			}
+		default:
+			t.Fatalf("unexpected request path %q", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	cfg := config.DeviceConfig{
+		ID:             "front_vto",
+		BaseURL:        server.URL,
+		Username:       "admin",
+		Password:       "secret",
+		RequestTimeout: 2 * time.Second,
+		PollInterval:   30 * time.Second,
+	}
+	driver := New(cfg, zerolog.Nop(), cgi.New(cfg, metrics.New(buildinfo.BuildInfo{})))
+	driver.rpc = nil
+
+	capabilities, err := driver.ControlCapabilities(context.Background())
+	if err != nil {
+		t.Fatalf("ControlCapabilities returned error: %v", err)
+	}
+	if capabilities.DeviceID != "front_vto" {
+		t.Fatalf("unexpected device id %q", capabilities.DeviceID)
+	}
+	if !capabilities.Call.Answer || !capabilities.Call.Hangup {
+		t.Fatalf("expected call controls to be supported %+v", capabilities.Call)
+	}
+	if capabilities.Locks.Count != 2 || len(capabilities.Locks.Indexes) != 2 || capabilities.Locks.Indexes[1] != 1 {
+		t.Fatalf("unexpected lock capabilities %+v", capabilities.Locks)
+	}
+	if capabilities.Audio.Codec != "PCM" {
+		t.Fatalf("unexpected audio capabilities %+v", capabilities.Audio)
+	}
+	if !capabilities.Audio.OutputVolume || !capabilities.Audio.InputVolume || !capabilities.Audio.Mute {
+		t.Fatalf("expected audio controls to be supported %+v", capabilities.Audio)
+	}
+	if capabilities.Audio.OutputVolumeLevel != 80 || capabilities.Audio.InputVolumeLevel != 90 || capabilities.Audio.Muted {
+		t.Fatalf("unexpected audio levels %+v", capabilities.Audio)
+	}
+	if !capabilities.Audio.StreamAudioEnabled {
+		t.Fatalf("expected stream audio enabled %+v", capabilities.Audio)
+	}
+	if !capabilities.Recording.Supported {
+		t.Fatalf("expected recording control support %+v", capabilities.Recording)
+	}
+	if !capabilities.Recording.EventSnapshotLocal {
+		t.Fatalf("expected event snapshot local flag %+v", capabilities.Recording)
+	}
+	if !capabilities.Recording.AutoRecordEnabled || capabilities.Recording.AutoRecordTimeSeconds != 11 {
+		t.Fatalf("unexpected recording capabilities %+v", capabilities.Recording)
+	}
+	if capabilities.DirectTalkbackSupported || capabilities.FullCallAcceptanceSupported {
+		t.Fatalf("expected device-native talkback/full acceptance to remain unsupported %+v", capabilities)
+	}
+	if len(capabilities.ValidationNotes) == 0 {
+		t.Fatal("expected validation notes")
+	}
+}
+
+func TestDriverSetAudioAndRecordingControls(t *testing.T) {
+	requests := make([]string, 0, 4)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/cgi-bin/configManager.cgi" {
+			t.Fatalf("unexpected request path %q", r.URL.Path)
+		}
+		requests = append(requests, r.URL.RawQuery)
+		fmt.Fprint(w, "OK")
+	}))
+	defer server.Close()
+
+	cfg := config.DeviceConfig{
+		ID:             "front_vto",
+		BaseURL:        server.URL,
+		Username:       "admin",
+		Password:       "secret",
+		RequestTimeout: 2 * time.Second,
+	}
+	driver := New(cfg, zerolog.Nop(), cgi.New(cfg, metrics.New(buildinfo.BuildInfo{})))
+
+	if err := driver.SetAudioOutputVolume(context.Background(), 1, 70); err != nil {
+		t.Fatalf("SetAudioOutputVolume returned error: %v", err)
+	}
+	if err := driver.SetAudioInputVolume(context.Background(), 0, 65); err != nil {
+		t.Fatalf("SetAudioInputVolume returned error: %v", err)
+	}
+	if err := driver.SetAudioMute(context.Background(), true); err != nil {
+		t.Fatalf("SetAudioMute returned error: %v", err)
+	}
+	if err := driver.SetRecordingEnabled(context.Background(), true); err != nil {
+		t.Fatalf("SetRecordingEnabled returned error: %v", err)
+	}
+
+	expected := []string{
+		"AudioOutputVolume%5B1%5D=70&action=setConfig",
+		"AudioInputVolume%5B0%5D=65&action=setConfig",
+		"Sound.SilentMode=true&action=setConfig",
+		"VideoTalkPhoneGeneral.AutoRecordEnable=true&action=setConfig",
+	}
+	if !reflect.DeepEqual(requests, expected) {
+		t.Fatalf("unexpected requests %+v", requests)
 	}
 }
 

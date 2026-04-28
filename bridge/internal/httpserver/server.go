@@ -32,6 +32,10 @@ type ProbeReader interface {
 
 type SnapshotReader interface {
 	NVRSnapshot(context.Context, string, int) ([]byte, string, error)
+	NVRRecordings(context.Context, string, dahua.NVRRecordingQuery) (dahua.NVRRecordingSearchResult, error)
+	CreateNVRPlaybackSession(context.Context, string, dahua.NVRPlaybackSessionRequest) (dahua.NVRPlaybackSession, error)
+	GetNVRPlaybackSession(string) (dahua.NVRPlaybackSession, error)
+	SeekNVRPlaybackSession(context.Context, string, time.Time) (dahua.NVRPlaybackSession, error)
 	VTOSnapshot(context.Context, string) ([]byte, string, error)
 	IPCSnapshot(context.Context, string) ([]byte, string, error)
 	RenderHomeAssistantCameraPackage(ha.CameraPackageOptions) (string, error)
@@ -59,6 +63,15 @@ type ActionReader interface {
 	UnlockVTOLock(context.Context, string, int) error
 	AnswerVTOCall(context.Context, string) error
 	HangupVTOCall(context.Context, string) error
+	VTOControlCapabilities(context.Context, string) (dahua.VTOControlCapabilities, error)
+	SetVTOAudioOutputVolume(context.Context, string, int, int) error
+	SetVTOAudioInputVolume(context.Context, string, int, int) error
+	SetVTOMute(context.Context, string, bool) error
+	SetVTORecordingEnabled(context.Context, string, bool) error
+	NVRChannelControlCapabilities(context.Context, string, int) (dahua.NVRChannelControlCapabilities, error)
+	ControlNVRPTZ(context.Context, string, dahua.NVRPTZRequest) error
+	ControlNVRAux(context.Context, string, dahua.NVRAuxRequest) error
+	ControlNVRRecording(context.Context, string, dahua.NVRRecordingRequest) error
 	ProbeDevice(context.Context, string) (*dahua.ProbeResult, error)
 	ProbeAllDevices(context.Context) []dahua.ProbeActionResult
 	RotateDeviceCredentials(context.Context, string, dahua.DeviceConfigUpdate) (*dahua.ProbeResult, error)
@@ -204,7 +217,7 @@ func New(
 	})
 	router.With(rateLimitMiddleware(adminLimiter)).Post("/api/v1/devices/{deviceID}/probe", func(w http.ResponseWriter, r *http.Request) {
 		if actions == nil {
-			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "action layer is not configured"})
+			writeServiceUnavailableError(w, "action layer is not configured")
 			return
 		}
 
@@ -213,12 +226,7 @@ func New(
 
 		result, err := actions.ProbeDevice(actionCtx, chi.URLParam(r, "deviceID"))
 		if err != nil {
-			switch {
-			case errors.Is(err, dahua.ErrDeviceNotFound):
-				writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
-			default:
-				writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
-			}
+			writeClassifiedActionError(w, err, http.StatusBadGateway)
 			return
 		}
 
@@ -229,13 +237,13 @@ func New(
 	})
 	router.With(rateLimitMiddleware(adminLimiter)).Post("/api/v1/devices/{deviceID}/credentials", func(w http.ResponseWriter, r *http.Request) {
 		if actions == nil {
-			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "action layer is not configured"})
+			writeServiceUnavailableError(w, "action layer is not configured")
 			return
 		}
 
 		var update dahua.DeviceConfigUpdate
 		if err := json.NewDecoder(r.Body).Decode(&update); err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json body"})
+			writeErrorPayload(w, http.StatusBadRequest, "invalid_request", "invalid json body")
 			return
 		}
 
@@ -244,12 +252,7 @@ func New(
 
 		result, err := actions.RotateDeviceCredentials(actionCtx, chi.URLParam(r, "deviceID"), update)
 		if err != nil {
-			switch {
-			case errors.Is(err, dahua.ErrDeviceNotFound):
-				writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
-			default:
-				writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
-			}
+			writeClassifiedActionError(w, err, http.StatusBadGateway)
 			return
 		}
 
@@ -335,7 +338,7 @@ func New(
 	})
 	router.With(rateLimitMiddleware(adminLimiter)).Post("/api/v1/nvr/{deviceID}/inventory/refresh", func(w http.ResponseWriter, r *http.Request) {
 		if actions == nil {
-			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "action layer is not configured"})
+			writeServiceUnavailableError(w, "action layer is not configured")
 			return
 		}
 
@@ -344,12 +347,7 @@ func New(
 
 		result, err := actions.RefreshNVRInventory(actionCtx, chi.URLParam(r, "deviceID"))
 		if err != nil {
-			switch {
-			case errors.Is(err, dahua.ErrDeviceNotFound):
-				writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
-			default:
-				writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
-			}
+			writeClassifiedActionError(w, err, http.StatusBadGateway)
 			return
 		}
 
@@ -357,6 +355,193 @@ func New(
 			"status": "ok",
 			"result": result,
 		})
+	})
+	router.With(rateLimitMiddleware(adminLimiter)).Get("/api/v1/nvr/{deviceID}/recordings", func(w http.ResponseWriter, r *http.Request) {
+		query, err := parseNVRRecordingQuery(r)
+		if err != nil {
+			writeInvalidRequestError(w, err)
+			return
+		}
+
+		searchCtx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+		defer cancel()
+
+		result, err := snapshots.NVRRecordings(searchCtx, chi.URLParam(r, "deviceID"), query)
+		if err != nil {
+			writeClassifiedActionError(w, err, http.StatusBadGateway)
+			return
+		}
+
+		writeJSON(w, http.StatusOK, result)
+	})
+	router.With(rateLimitMiddleware(adminLimiter)).Get("/api/v1/nvr/{deviceID}/channels/{channel}/controls", func(w http.ResponseWriter, r *http.Request) {
+		if actions == nil {
+			writeServiceUnavailableError(w, "action layer is not configured")
+			return
+		}
+
+		channel, err := strconv.Atoi(chi.URLParam(r, "channel"))
+		if err != nil || channel <= 0 {
+			writeErrorPayload(w, http.StatusBadRequest, "invalid_request", "invalid channel")
+			return
+		}
+
+		controlCtx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+		defer cancel()
+
+		capabilities, err := actions.NVRChannelControlCapabilities(controlCtx, chi.URLParam(r, "deviceID"), channel)
+		if err != nil {
+			writeClassifiedActionError(w, err, http.StatusBadGateway)
+			return
+		}
+
+		writeJSON(w, http.StatusOK, capabilities)
+	})
+	router.With(rateLimitMiddleware(adminLimiter)).Post("/api/v1/nvr/{deviceID}/channels/{channel}/ptz", func(w http.ResponseWriter, r *http.Request) {
+		if actions == nil {
+			writeServiceUnavailableError(w, "action layer is not configured")
+			return
+		}
+
+		request, err := parseNVRPTZRequest(r)
+		if err != nil {
+			writeInvalidRequestError(w, err)
+			return
+		}
+
+		channel, err := strconv.Atoi(chi.URLParam(r, "channel"))
+		if err != nil || channel <= 0 {
+			writeErrorPayload(w, http.StatusBadRequest, "invalid_request", "invalid channel")
+			return
+		}
+		request.Channel = channel
+
+		controlCtx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+		defer cancel()
+
+		if err := actions.ControlNVRPTZ(controlCtx, chi.URLParam(r, "deviceID"), request); err != nil {
+			writeClassifiedActionError(w, err, http.StatusBadGateway)
+			return
+		}
+
+		writeJSON(w, http.StatusOK, map[string]any{
+			"status":      "ok",
+			"device_id":   chi.URLParam(r, "deviceID"),
+			"channel":     channel,
+			"action":      request.Action,
+			"command":     request.Command,
+			"speed":       request.Speed,
+			"duration_ms": request.Duration.Milliseconds(),
+		})
+	})
+	router.With(rateLimitMiddleware(adminLimiter)).Post("/api/v1/nvr/{deviceID}/channels/{channel}/aux", func(w http.ResponseWriter, r *http.Request) {
+		if actions == nil {
+			writeServiceUnavailableError(w, "action layer is not configured")
+			return
+		}
+
+		request, err := parseNVRAuxRequest(r)
+		if err != nil {
+			writeInvalidRequestError(w, err)
+			return
+		}
+
+		channel, err := strconv.Atoi(chi.URLParam(r, "channel"))
+		if err != nil || channel <= 0 {
+			writeErrorPayload(w, http.StatusBadRequest, "invalid_request", "invalid channel")
+			return
+		}
+		request.Channel = channel
+
+		controlCtx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+		defer cancel()
+
+		if err := actions.ControlNVRAux(controlCtx, chi.URLParam(r, "deviceID"), request); err != nil {
+			writeClassifiedActionError(w, err, http.StatusBadGateway)
+			return
+		}
+
+		writeJSON(w, http.StatusOK, map[string]any{
+			"status":      "ok",
+			"device_id":   chi.URLParam(r, "deviceID"),
+			"channel":     channel,
+			"action":      request.Action,
+			"output":      request.Output,
+			"duration_ms": request.Duration.Milliseconds(),
+		})
+	})
+	router.With(rateLimitMiddleware(adminLimiter)).Post("/api/v1/nvr/{deviceID}/channels/{channel}/recording", func(w http.ResponseWriter, r *http.Request) {
+		if actions == nil {
+			writeServiceUnavailableError(w, "action layer is not configured")
+			return
+		}
+
+		request, err := parseNVRRecordingRequest(r)
+		if err != nil {
+			writeInvalidRequestError(w, err)
+			return
+		}
+
+		channel, err := strconv.Atoi(chi.URLParam(r, "channel"))
+		if err != nil || channel <= 0 {
+			writeErrorPayload(w, http.StatusBadRequest, "invalid_request", "invalid channel")
+			return
+		}
+		request.Channel = channel
+
+		controlCtx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+		defer cancel()
+
+		if err := actions.ControlNVRRecording(controlCtx, chi.URLParam(r, "deviceID"), request); err != nil {
+			writeClassifiedActionError(w, err, http.StatusBadGateway)
+			return
+		}
+
+		writeJSON(w, http.StatusOK, map[string]any{
+			"status":    "ok",
+			"device_id": chi.URLParam(r, "deviceID"),
+			"channel":   channel,
+			"action":    request.Action,
+		})
+	})
+	router.With(rateLimitMiddleware(mediaLimiter)).Post("/api/v1/nvr/{deviceID}/playback/sessions", func(w http.ResponseWriter, r *http.Request) {
+		request, err := parseNVRPlaybackSessionRequest(r)
+		if err != nil {
+			writeInvalidRequestError(w, err)
+			return
+		}
+
+		session, err := snapshots.CreateNVRPlaybackSession(r.Context(), chi.URLParam(r, "deviceID"), request)
+		if err != nil {
+			writeClassifiedActionError(w, err, http.StatusBadRequest)
+			return
+		}
+
+		writeJSON(w, http.StatusOK, session)
+	})
+	router.With(rateLimitMiddleware(mediaLimiter)).Get("/api/v1/nvr/playback/sessions/{sessionID}", func(w http.ResponseWriter, r *http.Request) {
+		session, err := snapshots.GetNVRPlaybackSession(chi.URLParam(r, "sessionID"))
+		if err != nil {
+			writeClassifiedActionError(w, err, http.StatusBadGateway)
+			return
+		}
+
+		writeJSON(w, http.StatusOK, session)
+	})
+	router.With(rateLimitMiddleware(mediaLimiter)).Post("/api/v1/nvr/playback/sessions/{sessionID}/seek", func(w http.ResponseWriter, r *http.Request) {
+		seekTime, err := parseNVRPlaybackSeekTime(r)
+		if err != nil {
+			writeInvalidRequestError(w, err)
+			return
+		}
+
+		session, err := snapshots.SeekNVRPlaybackSession(r.Context(), chi.URLParam(r, "sessionID"), seekTime)
+		if err != nil {
+			writeClassifiedActionError(w, err, http.StatusBadRequest)
+			return
+		}
+
+		writeJSON(w, http.StatusOK, session)
 	})
 	router.Get("/api/v1/events", func(w http.ResponseWriter, r *http.Request) {
 		if events == nil {
@@ -395,14 +580,14 @@ func New(
 	})
 	router.With(rateLimitMiddleware(adminLimiter)).Post("/api/v1/vto/{deviceID}/locks/{lockIndex}/unlock", func(w http.ResponseWriter, r *http.Request) {
 		if actions == nil {
-			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "action layer is not configured"})
+			writeServiceUnavailableError(w, "action layer is not configured")
 			return
 		}
 
 		deviceID := chi.URLParam(r, "deviceID")
 		lockIndex, err := strconv.Atoi(chi.URLParam(r, "lockIndex"))
 		if err != nil || lockIndex < 0 {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid lock index"})
+			writeErrorPayload(w, http.StatusBadRequest, "invalid_request", "invalid lock index")
 			return
 		}
 
@@ -410,12 +595,7 @@ func New(
 		defer cancel()
 
 		if err := actions.UnlockVTOLock(controlCtx, deviceID, lockIndex); err != nil {
-			switch {
-			case errors.Is(err, dahua.ErrDeviceNotFound):
-				writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
-			default:
-				writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
-			}
+			writeClassifiedActionError(w, err, http.StatusBadGateway)
 			return
 		}
 
@@ -427,7 +607,7 @@ func New(
 	})
 	router.With(rateLimitMiddleware(adminLimiter)).Post("/api/v1/vto/{deviceID}/call/answer", func(w http.ResponseWriter, r *http.Request) {
 		if actions == nil {
-			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "action layer is not configured"})
+			writeServiceUnavailableError(w, "action layer is not configured")
 			return
 		}
 
@@ -436,12 +616,7 @@ func New(
 		defer cancel()
 
 		if err := actions.AnswerVTOCall(controlCtx, deviceID); err != nil {
-			switch {
-			case errors.Is(err, dahua.ErrDeviceNotFound):
-				writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
-			default:
-				writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
-			}
+			writeClassifiedActionError(w, err, http.StatusBadGateway)
 			return
 		}
 
@@ -453,7 +628,7 @@ func New(
 	})
 	router.With(rateLimitMiddleware(adminLimiter)).Post("/api/v1/vto/{deviceID}/call/hangup", func(w http.ResponseWriter, r *http.Request) {
 		if actions == nil {
-			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "action layer is not configured"})
+			writeServiceUnavailableError(w, "action layer is not configured")
 			return
 		}
 
@@ -462,12 +637,7 @@ func New(
 		defer cancel()
 
 		if err := actions.HangupVTOCall(controlCtx, deviceID); err != nil {
-			switch {
-			case errors.Is(err, dahua.ErrDeviceNotFound):
-				writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
-			default:
-				writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
-			}
+			writeClassifiedActionError(w, err, http.StatusBadGateway)
 			return
 		}
 
@@ -475,6 +645,136 @@ func New(
 			"status":    "ok",
 			"device_id": deviceID,
 			"action":    "hangup_call",
+		})
+	})
+	router.With(rateLimitMiddleware(adminLimiter)).Get("/api/v1/vto/{deviceID}/controls", func(w http.ResponseWriter, r *http.Request) {
+		if actions == nil {
+			writeServiceUnavailableError(w, "action layer is not configured")
+			return
+		}
+
+		controlCtx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+		defer cancel()
+
+		capabilities, err := actions.VTOControlCapabilities(controlCtx, chi.URLParam(r, "deviceID"))
+		if err != nil {
+			writeClassifiedActionError(w, err, http.StatusBadGateway)
+			return
+		}
+
+		writeJSON(w, http.StatusOK, capabilities)
+	})
+	router.With(rateLimitMiddleware(adminLimiter)).Post("/api/v1/vto/{deviceID}/audio/output-volume", func(w http.ResponseWriter, r *http.Request) {
+		if actions == nil {
+			writeServiceUnavailableError(w, "action layer is not configured")
+			return
+		}
+
+		level, slot, err := parseVTOVolumeRequest(r)
+		if err != nil {
+			writeInvalidRequestError(w, err)
+			return
+		}
+
+		deviceID := chi.URLParam(r, "deviceID")
+		controlCtx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+		defer cancel()
+
+		if err := actions.SetVTOAudioOutputVolume(controlCtx, deviceID, slot, level); err != nil {
+			writeClassifiedActionError(w, err, http.StatusBadGateway)
+			return
+		}
+
+		writeJSON(w, http.StatusOK, map[string]any{
+			"status":    "ok",
+			"device_id": deviceID,
+			"slot":      slot,
+			"level":     level,
+			"target":    "output_volume",
+		})
+	})
+	router.With(rateLimitMiddleware(adminLimiter)).Post("/api/v1/vto/{deviceID}/audio/input-volume", func(w http.ResponseWriter, r *http.Request) {
+		if actions == nil {
+			writeServiceUnavailableError(w, "action layer is not configured")
+			return
+		}
+
+		level, slot, err := parseVTOVolumeRequest(r)
+		if err != nil {
+			writeInvalidRequestError(w, err)
+			return
+		}
+
+		deviceID := chi.URLParam(r, "deviceID")
+		controlCtx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+		defer cancel()
+
+		if err := actions.SetVTOAudioInputVolume(controlCtx, deviceID, slot, level); err != nil {
+			writeClassifiedActionError(w, err, http.StatusBadGateway)
+			return
+		}
+
+		writeJSON(w, http.StatusOK, map[string]any{
+			"status":    "ok",
+			"device_id": deviceID,
+			"slot":      slot,
+			"level":     level,
+			"target":    "input_volume",
+		})
+	})
+	router.With(rateLimitMiddleware(adminLimiter)).Post("/api/v1/vto/{deviceID}/audio/mute", func(w http.ResponseWriter, r *http.Request) {
+		if actions == nil {
+			writeServiceUnavailableError(w, "action layer is not configured")
+			return
+		}
+
+		muted, err := parseVTOMuteRequest(r)
+		if err != nil {
+			writeInvalidRequestError(w, err)
+			return
+		}
+
+		deviceID := chi.URLParam(r, "deviceID")
+		controlCtx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+		defer cancel()
+
+		if err := actions.SetVTOMute(controlCtx, deviceID, muted); err != nil {
+			writeClassifiedActionError(w, err, http.StatusBadGateway)
+			return
+		}
+
+		writeJSON(w, http.StatusOK, map[string]any{
+			"status":    "ok",
+			"device_id": deviceID,
+			"muted":     muted,
+			"target":    "mute",
+		})
+	})
+	router.With(rateLimitMiddleware(adminLimiter)).Post("/api/v1/vto/{deviceID}/recording", func(w http.ResponseWriter, r *http.Request) {
+		if actions == nil {
+			writeServiceUnavailableError(w, "action layer is not configured")
+			return
+		}
+
+		enabled, err := parseVTORecordingRequest(r)
+		if err != nil {
+			writeInvalidRequestError(w, err)
+			return
+		}
+
+		deviceID := chi.URLParam(r, "deviceID")
+		controlCtx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+		defer cancel()
+
+		if err := actions.SetVTORecordingEnabled(controlCtx, deviceID, enabled); err != nil {
+			writeClassifiedActionError(w, err, http.StatusBadGateway)
+			return
+		}
+
+		writeJSON(w, http.StatusOK, map[string]any{
+			"status":              "ok",
+			"device_id":           deviceID,
+			"auto_record_enabled": enabled,
 		})
 	})
 	router.With(rateLimitMiddleware(mediaLimiter)).Get("/api/v1/vto/{deviceID}/intercom", func(w http.ResponseWriter, r *http.Request) {
@@ -943,6 +1243,48 @@ func writeJSON(w http.ResponseWriter, status int, payload any) {
 	_ = json.NewEncoder(w).Encode(payload)
 }
 
+type apiErrorPayload struct {
+	Error     string `json:"error"`
+	ErrorCode string `json:"error_code"`
+}
+
+func writeErrorPayload(w http.ResponseWriter, status int, code string, message string) {
+	writeJSON(w, status, apiErrorPayload{
+		Error:     strings.TrimSpace(message),
+		ErrorCode: code,
+	})
+}
+
+func writeInvalidRequestError(w http.ResponseWriter, err error) {
+	writeErrorPayload(w, http.StatusBadRequest, "invalid_request", err.Error())
+}
+
+func writeServiceUnavailableError(w http.ResponseWriter, message string) {
+	writeErrorPayload(w, http.StatusServiceUnavailable, "service_unavailable", message)
+}
+
+func writeClassifiedActionError(w http.ResponseWriter, err error, defaultStatus int) {
+	status := defaultStatus
+	code := "device_failure"
+
+	switch {
+	case errors.Is(err, dahua.ErrDeviceNotFound):
+		status = http.StatusNotFound
+		code = "device_not_found"
+	case errors.Is(err, dahua.ErrUnsupportedOperation):
+		status = http.StatusBadRequest
+		code = "unsupported_operation"
+	case errors.Is(err, dahua.ErrPlaybackSessionNotFound):
+		status = http.StatusNotFound
+		code = "playback_session_not_found"
+	case errors.Is(err, context.DeadlineExceeded), errors.Is(err, context.Canceled):
+		status = http.StatusGatewayTimeout
+		code = "transport_failure"
+	}
+
+	writeErrorPayload(w, status, code, err.Error())
+}
+
 type httpStatus struct {
 	Ready         bool   `json:"ready"`
 	DeviceCount   int    `json:"device_count"`
@@ -1040,6 +1382,336 @@ func parseOptionalPositiveInt(raw string) (int, error) {
 	return value, nil
 }
 
+func parseNVRRecordingQuery(r *http.Request) (dahua.NVRRecordingQuery, error) {
+	channel, err := strconv.Atoi(strings.TrimSpace(r.URL.Query().Get("channel")))
+	if err != nil || channel <= 0 {
+		return dahua.NVRRecordingQuery{}, fmt.Errorf("invalid channel")
+	}
+
+	startTime, err := parseFlexibleTimestamp(strings.TrimSpace(r.URL.Query().Get("start")), "start")
+	if err != nil {
+		return dahua.NVRRecordingQuery{}, err
+	}
+	endTime, err := parseFlexibleTimestamp(strings.TrimSpace(r.URL.Query().Get("end")), "end")
+	if err != nil {
+		return dahua.NVRRecordingQuery{}, err
+	}
+	if endTime.Before(startTime) {
+		return dahua.NVRRecordingQuery{}, fmt.Errorf("end must not be before start")
+	}
+
+	limit, err := parseOptionalPositiveInt(r.URL.Query().Get("limit"))
+	if err != nil {
+		return dahua.NVRRecordingQuery{}, err
+	}
+	if limit == 0 {
+		limit = 25
+	}
+	if limit > 200 {
+		limit = 200
+	}
+
+	return dahua.NVRRecordingQuery{
+		Channel:   channel,
+		StartTime: startTime,
+		EndTime:   endTime,
+		Limit:     limit,
+	}, nil
+}
+
+func parseNVRPlaybackSessionRequest(r *http.Request) (dahua.NVRPlaybackSessionRequest, error) {
+	if r.Body == nil {
+		return dahua.NVRPlaybackSessionRequest{}, fmt.Errorf("json body is required")
+	}
+
+	var request struct {
+		Channel   int    `json:"channel"`
+		StartTime string `json:"start_time"`
+		EndTime   string `json:"end_time"`
+		SeekTime  string `json:"seek_time"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		if errors.Is(err, io.EOF) {
+			return dahua.NVRPlaybackSessionRequest{}, fmt.Errorf("json body is required")
+		}
+		return dahua.NVRPlaybackSessionRequest{}, fmt.Errorf("invalid json body")
+	}
+
+	startTime, err := parseFlexibleTimestamp(strings.TrimSpace(request.StartTime), "start_time")
+	if err != nil {
+		return dahua.NVRPlaybackSessionRequest{}, err
+	}
+	endTime, err := parseFlexibleTimestamp(strings.TrimSpace(request.EndTime), "end_time")
+	if err != nil {
+		return dahua.NVRPlaybackSessionRequest{}, err
+	}
+
+	var seekTime time.Time
+	if strings.TrimSpace(request.SeekTime) != "" {
+		seekTime, err = parseFlexibleTimestamp(strings.TrimSpace(request.SeekTime), "seek_time")
+		if err != nil {
+			return dahua.NVRPlaybackSessionRequest{}, err
+		}
+	}
+
+	return dahua.NVRPlaybackSessionRequest{
+		Channel:   request.Channel,
+		StartTime: startTime,
+		EndTime:   endTime,
+		SeekTime:  seekTime,
+	}, nil
+}
+
+func parseNVRPlaybackSeekTime(r *http.Request) (time.Time, error) {
+	if r.Body == nil {
+		return time.Time{}, fmt.Errorf("json body is required")
+	}
+
+	var request struct {
+		SeekTime string `json:"seek_time"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		if errors.Is(err, io.EOF) {
+			return time.Time{}, fmt.Errorf("json body is required")
+		}
+		return time.Time{}, fmt.Errorf("invalid json body")
+	}
+
+	return parseFlexibleTimestamp(strings.TrimSpace(request.SeekTime), "seek_time")
+}
+
+func parseNVRPTZRequest(r *http.Request) (dahua.NVRPTZRequest, error) {
+	if r.Body == nil {
+		return dahua.NVRPTZRequest{}, fmt.Errorf("json body is required")
+	}
+
+	var request struct {
+		Action     string `json:"action"`
+		Command    string `json:"command"`
+		Speed      int    `json:"speed"`
+		DurationMS int    `json:"duration_ms"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		if errors.Is(err, io.EOF) {
+			return dahua.NVRPTZRequest{}, fmt.Errorf("json body is required")
+		}
+		return dahua.NVRPTZRequest{}, fmt.Errorf("invalid json body")
+	}
+
+	action := dahua.NVRPTZAction(strings.ToLower(strings.TrimSpace(request.Action)))
+	switch action {
+	case dahua.NVRPTZActionStart, dahua.NVRPTZActionStop, dahua.NVRPTZActionPulse:
+	default:
+		return dahua.NVRPTZRequest{}, fmt.Errorf("invalid action")
+	}
+
+	command := dahua.NVRPTZCommand(strings.ToLower(strings.TrimSpace(request.Command)))
+	switch command {
+	case dahua.NVRPTZCommandUp,
+		dahua.NVRPTZCommandDown,
+		dahua.NVRPTZCommandLeft,
+		dahua.NVRPTZCommandRight,
+		dahua.NVRPTZCommandLeftUp,
+		dahua.NVRPTZCommandRightUp,
+		dahua.NVRPTZCommandLeftDown,
+		dahua.NVRPTZCommandRightDown,
+		dahua.NVRPTZCommandZoomIn,
+		dahua.NVRPTZCommandZoomOut,
+		dahua.NVRPTZCommandFocusNear,
+		dahua.NVRPTZCommandFocusFar:
+	default:
+		return dahua.NVRPTZRequest{}, fmt.Errorf("invalid command")
+	}
+
+	if request.Speed < 0 {
+		return dahua.NVRPTZRequest{}, fmt.Errorf("invalid speed")
+	}
+	if request.DurationMS < 0 {
+		return dahua.NVRPTZRequest{}, fmt.Errorf("invalid duration_ms")
+	}
+
+	duration := time.Duration(request.DurationMS) * time.Millisecond
+	if action == dahua.NVRPTZActionPulse && duration <= 0 {
+		duration = 300 * time.Millisecond
+	}
+
+	return dahua.NVRPTZRequest{
+		Action:   action,
+		Command:  command,
+		Speed:    request.Speed,
+		Duration: duration,
+	}, nil
+}
+
+func parseNVRAuxRequest(r *http.Request) (dahua.NVRAuxRequest, error) {
+	if r.Body == nil {
+		return dahua.NVRAuxRequest{}, fmt.Errorf("json body is required")
+	}
+
+	var request struct {
+		Action     string `json:"action"`
+		Output     string `json:"output"`
+		DurationMS int    `json:"duration_ms"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		if errors.Is(err, io.EOF) {
+			return dahua.NVRAuxRequest{}, fmt.Errorf("json body is required")
+		}
+		return dahua.NVRAuxRequest{}, fmt.Errorf("invalid json body")
+	}
+
+	action := dahua.NVRAuxAction(strings.ToLower(strings.TrimSpace(request.Action)))
+	switch action {
+	case dahua.NVRAuxActionStart, dahua.NVRAuxActionStop, dahua.NVRAuxActionPulse:
+	default:
+		return dahua.NVRAuxRequest{}, fmt.Errorf("invalid action")
+	}
+
+	output := strings.ToLower(strings.TrimSpace(request.Output))
+	switch output {
+	case "aux", "siren":
+		output = "aux"
+	case "light", "warning_light":
+		output = "light"
+	case "wiper":
+	default:
+		return dahua.NVRAuxRequest{}, fmt.Errorf("invalid output")
+	}
+
+	if request.DurationMS < 0 {
+		return dahua.NVRAuxRequest{}, fmt.Errorf("invalid duration_ms")
+	}
+
+	duration := time.Duration(request.DurationMS) * time.Millisecond
+	if action == dahua.NVRAuxActionPulse && duration <= 0 {
+		duration = 300 * time.Millisecond
+	}
+
+	return dahua.NVRAuxRequest{
+		Action:   action,
+		Output:   output,
+		Duration: duration,
+	}, nil
+}
+
+func parseNVRRecordingRequest(r *http.Request) (dahua.NVRRecordingRequest, error) {
+	if r.Body == nil {
+		return dahua.NVRRecordingRequest{}, fmt.Errorf("json body is required")
+	}
+
+	var request struct {
+		Action string `json:"action"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		if errors.Is(err, io.EOF) {
+			return dahua.NVRRecordingRequest{}, fmt.Errorf("json body is required")
+		}
+		return dahua.NVRRecordingRequest{}, fmt.Errorf("invalid json body")
+	}
+
+	action := dahua.NVRRecordingAction(strings.ToLower(strings.TrimSpace(request.Action)))
+	switch action {
+	case dahua.NVRRecordingActionStart, dahua.NVRRecordingActionStop:
+	default:
+		return dahua.NVRRecordingRequest{}, fmt.Errorf("invalid action")
+	}
+
+	return dahua.NVRRecordingRequest{Action: action}, nil
+}
+
+func parseVTOVolumeRequest(r *http.Request) (int, int, error) {
+	if r.Body == nil {
+		return 0, 0, fmt.Errorf("json body is required")
+	}
+
+	var request struct {
+		Level int `json:"level"`
+		Slot  int `json:"slot"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		if errors.Is(err, io.EOF) {
+			return 0, 0, fmt.Errorf("json body is required")
+		}
+		return 0, 0, fmt.Errorf("invalid json body")
+	}
+	if request.Level < 0 || request.Level > 100 {
+		return 0, 0, fmt.Errorf("invalid level")
+	}
+	if request.Slot < 0 {
+		return 0, 0, fmt.Errorf("invalid slot")
+	}
+	return request.Level, request.Slot, nil
+}
+
+func parseVTOMuteRequest(r *http.Request) (bool, error) {
+	if r.Body == nil {
+		return false, fmt.Errorf("json body is required")
+	}
+
+	var request struct {
+		Muted *bool `json:"muted"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		if errors.Is(err, io.EOF) {
+			return false, fmt.Errorf("json body is required")
+		}
+		return false, fmt.Errorf("invalid json body")
+	}
+	if request.Muted == nil {
+		return false, fmt.Errorf("muted is required")
+	}
+	return *request.Muted, nil
+}
+
+func parseVTORecordingRequest(r *http.Request) (bool, error) {
+	if r.Body == nil {
+		return false, fmt.Errorf("json body is required")
+	}
+
+	var request struct {
+		AutoRecordEnabled *bool `json:"auto_record_enabled"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		if errors.Is(err, io.EOF) {
+			return false, fmt.Errorf("json body is required")
+		}
+		return false, fmt.Errorf("invalid json body")
+	}
+	if request.AutoRecordEnabled == nil {
+		return false, fmt.Errorf("auto_record_enabled is required")
+	}
+	return *request.AutoRecordEnabled, nil
+}
+
+func parseFlexibleTimestamp(raw string, field string) (time.Time, error) {
+	if raw == "" {
+		return time.Time{}, fmt.Errorf("%s is required", field)
+	}
+
+	layouts := []string{
+		time.RFC3339,
+		"2006-01-02 15:04:05",
+		"2006-01-02T15:04:05",
+	}
+	for _, layout := range layouts {
+		var (
+			parsed time.Time
+			err    error
+		)
+		switch layout {
+		case "2006-01-02 15:04:05", "2006-01-02T15:04:05":
+			parsed, err = time.ParseInLocation(layout, raw, time.Local)
+		default:
+			parsed, err = time.Parse(layout, raw)
+		}
+		if err == nil {
+			return parsed, nil
+		}
+	}
+
+	return time.Time{}, fmt.Errorf("invalid %s time %q", field, raw)
+}
+
 func defaultPositiveInt(value int, fallback int) int {
 	if value > 0 {
 		return value
@@ -1096,6 +1768,7 @@ func renderAdminPage(
 	metricsPath string,
 ) string {
 	endpointSections := buildAdminEndpointSections(healthPath, metricsPath)
+	controlStats := summarizeAdminControlStats(streamEntries)
 	deviceCards := buildAdminDeviceCards(probeResults, streamEntries)
 	streamCards := buildAdminStreamCards(streamEntries)
 	settingsJSON := htmlEscape(marshalIndentedJSON(settings))
@@ -1212,7 +1885,7 @@ func renderAdminPage(
     .summary-grid {
       display: grid;
       gap: 14px;
-      grid-template-columns: repeat(4, minmax(0, 1fr));
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
     }
     .summary-card, .panel {
       background: var(--panel);
@@ -1463,6 +2136,11 @@ func renderAdminPage(
         <div class="summary-value">%d</div>
         <div class="summary-subtle">Media enabled: %t</div>
       </article>
+      <article class="summary-card">
+        <div class="summary-label">Control Surface</div>
+        <div class="summary-value">%d</div>
+        <div class="summary-subtle">%s</div>
+      </article>
     </section>
 
     <section class="layout">
@@ -1569,6 +2247,8 @@ func renderAdminPage(
 		streamCount,
 		workerCount,
 		mediaEnabled,
+		controlStats.ActionableEntries,
+		htmlEscape(controlStats.Summary()),
 		boolHTMLAttr(actionsAvailable),
 		boolHTMLAttr(actionsAvailable),
 		boolHTMLAttr(actionsAvailable),
@@ -1623,9 +2303,25 @@ func buildAdminEndpointSections(healthPath string, metricsPath string) string {
 				{Method: "POST", Path: "/api/v1/devices/{deviceID}/probe", Description: "Probe one specific device", Linkable: false},
 				{Method: "POST", Path: "/api/v1/devices/{deviceID}/credentials", Description: "Rotate bridge-side device credentials", Linkable: false},
 				{Method: "POST", Path: "/api/v1/nvr/{deviceID}/inventory/refresh", Description: "Refresh NVR channel/disk inventory", Linkable: false},
+				{Method: "GET", Path: "/api/v1/nvr/{deviceID}/recordings?channel=1&start=2026-04-28T00:00:00Z&end=2026-04-28T01:00:00Z&limit=25", Description: "Search NVR archive recordings by channel and time range", Linkable: false},
+				{Method: "GET", Path: "/api/v1/nvr/{deviceID}/channels/{channel}/controls", Description: "Read NVR per-channel PTZ capability data", Linkable: false},
+				{Method: "POST", Path: "/api/v1/nvr/{deviceID}/channels/{channel}/ptz", Description: "Send PTZ start/stop/pulse command to an NVR channel", Linkable: false},
+				{Method: "POST", Path: "/api/v1/nvr/{deviceID}/channels/{channel}/aux", Description: "Send aux/light/wiper start/stop/pulse command to an NVR channel", Linkable: false},
+				{Method: "POST", Path: "/api/v1/nvr/{deviceID}/channels/{channel}/recording", Description: "Set manual recording mode for an NVR channel", Linkable: false},
+				{Method: "POST", Path: "/api/v1/nvr/{deviceID}/playback/sessions", Description: "Create an NVR archive playback session backed by bridge media endpoints", Linkable: false},
+				{Method: "GET", Path: "/api/v1/nvr/playback/sessions/{sessionID}", Description: "Inspect an active NVR archive playback session", Linkable: false},
+				{Method: "POST", Path: "/api/v1/nvr/playback/sessions/{sessionID}/seek", Description: "Create a new playback session starting from a different archive timestamp", Linkable: false},
+				{Method: "GET", Path: "/api/v1/vto/{deviceID}/controls", Description: "Inspect detected VTO call, lock, audio, recording, and talkback capabilities", Linkable: false},
 				{Method: "POST", Path: "/api/v1/vto/{deviceID}/call/answer", Description: "Request VTO call answer", Linkable: false},
 				{Method: "POST", Path: "/api/v1/vto/{deviceID}/call/hangup", Description: "Request VTO hangup", Linkable: false},
+				{Method: "POST", Path: "/api/v1/vto/{deviceID}/locks/{lockIndex}/unlock", Description: "Trigger VTO door unlock for one configured lock", Linkable: false},
+				{Method: "POST", Path: "/api/v1/vto/{deviceID}/audio/output-volume", Description: "Set VTO output volume for a specific slot", Linkable: false},
+				{Method: "POST", Path: "/api/v1/vto/{deviceID}/audio/input-volume", Description: "Set VTO input volume for a specific slot", Linkable: false},
+				{Method: "POST", Path: "/api/v1/vto/{deviceID}/audio/mute", Description: "Set VTO silent mode", Linkable: false},
+				{Method: "POST", Path: "/api/v1/vto/{deviceID}/recording", Description: "Set VTO automatic call recording", Linkable: false},
 				{Method: "POST", Path: "/api/v1/vto/{deviceID}/intercom/reset", Description: "Reset active bridge WebRTC intercom session", Linkable: false},
+				{Method: "POST", Path: "/api/v1/vto/{deviceID}/intercom/uplink/enable", Description: "Enable external RTP uplink forwarding for the VTO intercom session", Linkable: false},
+				{Method: "POST", Path: "/api/v1/vto/{deviceID}/intercom/uplink/disable", Description: "Disable external RTP uplink forwarding for the VTO intercom session", Linkable: false},
 			},
 		},
 	}
@@ -1650,6 +2346,67 @@ func buildAdminEndpointSections(healthPath string, metricsPath string) string {
 	return strings.Join(parts, "")
 }
 
+type adminControlStats struct {
+	ActionableEntries   int
+	NVRPTZEntries       int
+	NVRAuxEntries       int
+	NVRRecordingEntries int
+	VTOVolumeEntries    int
+	VTOMuteEntries      int
+	VTORecordingEntries int
+}
+
+func (s adminControlStats) Summary() string {
+	return fmt.Sprintf(
+		"%d PTZ | %d aux | %d NVR rec | %d VTO vol | %d VTO mute | %d VTO rec",
+		s.NVRPTZEntries,
+		s.NVRAuxEntries,
+		s.NVRRecordingEntries,
+		s.VTOVolumeEntries,
+		s.VTOMuteEntries,
+		s.VTORecordingEntries,
+	)
+}
+
+func summarizeAdminControlStats(streamEntries []streams.Entry) adminControlStats {
+	var stats adminControlStats
+	for _, entry := range streamEntries {
+		actionable := false
+		if entry.Controls != nil {
+			if entry.Controls.PTZ != nil && entry.Controls.PTZ.Supported {
+				stats.NVRPTZEntries++
+				actionable = true
+			}
+			if entry.Controls.Aux != nil && entry.Controls.Aux.Supported {
+				stats.NVRAuxEntries++
+				actionable = true
+			}
+			if entry.Controls.Recording != nil && entry.Controls.Recording.Supported {
+				stats.NVRRecordingEntries++
+				actionable = true
+			}
+		}
+		if entry.Intercom != nil {
+			if entry.Intercom.SupportsVTOOutputVolumeControl || entry.Intercom.SupportsVTOInputVolumeControl {
+				stats.VTOVolumeEntries++
+				actionable = true
+			}
+			if entry.Intercom.SupportsVTOMuteControl {
+				stats.VTOMuteEntries++
+				actionable = true
+			}
+			if entry.Intercom.SupportsVTORecordingControl {
+				stats.VTORecordingEntries++
+				actionable = true
+			}
+		}
+		if actionable {
+			stats.ActionableEntries++
+		}
+	}
+	return stats
+}
+
 func buildAdminDeviceCards(probeResults []*dahua.ProbeResult, streamEntries []streams.Entry) string {
 	if len(probeResults) == 0 {
 		return `<p class="muted-note">No devices are currently available in the probe store.</p>`
@@ -1669,34 +2426,56 @@ func buildAdminDeviceCards(probeResults []*dahua.ProbeResult, streamEntries []st
 			continue
 		}
 		root := result.Root
+		rootStreams := streamsByRoot[root.ID]
 		chips := []string{
-			`<span class="chip"><a href="/api/v1/devices/` + url.PathEscape(root.ID) + `"><code>/api/v1/devices/` + htmlEscape(root.ID) + `</code></a></span>`,
-			`<span class="chip subtle"><a href="/api/v1/streams?device_id=` + url.QueryEscape(root.ID) + `"><code>/api/v1/streams?device_id=` + htmlEscape(root.ID) + `</code></a></span>`,
+			adminLinkChip("device detail", "/api/v1/devices/"+url.PathEscape(root.ID), false),
+			adminLinkChip("device streams", "/api/v1/streams?device_id="+url.QueryEscape(root.ID), true),
 		}
 		switch root.Kind {
 		case dahua.DeviceKindVTO:
-			chips = append(chips, `<span class="chip"><a href="/api/v1/vto/`+url.PathEscape(root.ID)+`/snapshot"><code>snapshot</code></a></span>`)
+			chips = append(chips, adminLinkChip("snapshot", "/api/v1/vto/"+url.PathEscape(root.ID)+"/snapshot", false))
+			chips = append(chips, buildAdminRootControlChips(root.ID, rootStreams)...)
 		case dahua.DeviceKindIPC:
-			chips = append(chips, `<span class="chip"><a href="/api/v1/ipc/`+url.PathEscape(root.ID)+`/snapshot"><code>snapshot</code></a></span>`)
+			chips = append(chips, adminLinkChip("snapshot", "/api/v1/ipc/"+url.PathEscape(root.ID)+"/snapshot", false))
+		case dahua.DeviceKindNVR:
+			if len(rootStreams) > 0 && rootStreams[0].Channel > 0 {
+				recordingsURL := fmt.Sprintf(
+					"/api/v1/nvr/%s/recordings?channel=%d&start=2026-04-28T00:00:00Z&end=2026-04-28T01:00:00Z&limit=25",
+					url.PathEscape(root.ID),
+					rootStreams[0].Channel,
+				)
+				chips = append(chips, adminLinkChip("recordings", recordingsURL, true))
+			}
 		}
 
-		for _, entry := range streamsByRoot[root.ID] {
+		for _, entry := range rootStreams {
 			if entry.LocalPreviewURL != "" {
-				chips = append(chips, `<span class="chip subtle"><a href="`+htmlEscape(entry.LocalPreviewURL)+`"><code>preview</code></a></span>`)
+				chips = append(chips, adminLinkChip("preview", entry.LocalPreviewURL, true))
 			}
 			if entry.LocalIntercomURL != "" {
-				chips = append(chips, `<span class="chip"><a href="`+htmlEscape(entry.LocalIntercomURL)+`"><code>intercom</code></a></span>`)
+				chips = append(chips, adminLinkChip("intercom", entry.LocalIntercomURL, false))
 			}
 			break
 		}
 
+		metaParts := []string{
+			string(root.Kind),
+			"id=" + root.ID,
+			"model=" + firstNonEmpty(root.Model, "unknown"),
+			fmt.Sprintf("children=%d", len(result.Children)),
+			fmt.Sprintf("streams=%d", len(rootStreams)),
+		}
+		if controlSummary := buildAdminRootControlSummary(rootStreams); controlSummary != "" {
+			metaParts = append(metaParts, controlSummary)
+		}
+		if notes := buildAdminValidationNoteMarkup(collectAdminValidationNotes(rootStreams)); notes != "" {
+			chips = append(chips, notes)
+		}
+
 		cards = append(cards, fmt.Sprintf(
-			`<article class="device-card"><h3 class="card-title">%s</h3><div class="card-meta">%s • id=%s • model=%s • children=%d</div><div class="chip-row">%s</div></article>`,
+			`<article class="device-card"><h3 class="card-title">%s</h3><div class="card-meta">%s</div><div class="chip-row">%s</div></article>`,
 			htmlEscape(firstNonEmpty(root.Name, root.ID)),
-			htmlEscape(string(root.Kind)),
-			htmlEscape(root.ID),
-			htmlEscape(firstNonEmpty(root.Model, "unknown")),
-			len(result.Children),
+			adminMetaLine(metaParts...),
 			strings.Join(chips, ""),
 		))
 	}
@@ -1711,41 +2490,273 @@ func buildAdminStreamCards(streamEntries []streams.Entry) string {
 	cards := make([]string, 0, len(streamEntries))
 	for _, entry := range streamEntries {
 		chips := []string{
-			`<span class="chip"><a href="/api/v1/streams/` + url.PathEscape(entry.ID) + `"><code>stream detail</code></a></span>`,
+			adminLinkChip("stream detail", "/api/v1/streams/"+url.PathEscape(entry.ID), false),
 		}
 		if entry.SnapshotURL != "" {
-			chips = append(chips, `<span class="chip subtle"><a href="`+htmlEscape(entry.SnapshotURL)+`"><code>snapshot</code></a></span>`)
+			chips = append(chips, adminLinkChip("snapshot", entry.SnapshotURL, true))
 		}
 		if entry.LocalPreviewURL != "" {
-			chips = append(chips, `<span class="chip"><a href="`+htmlEscape(entry.LocalPreviewURL)+`"><code>preview</code></a></span>`)
+			chips = append(chips, adminLinkChip("preview", entry.LocalPreviewURL, false))
 		}
 		if entry.LocalIntercomURL != "" {
-			chips = append(chips, `<span class="chip"><a href="`+htmlEscape(entry.LocalIntercomURL)+`"><code>intercom</code></a></span>`)
+			chips = append(chips, adminLinkChip("intercom", entry.LocalIntercomURL, false))
 		}
 		if profile, ok := entry.Profiles[entry.RecommendedProfile]; ok {
 			if profile.LocalWebRTCURL != "" {
-				chips = append(chips, `<span class="chip subtle"><a href="`+htmlEscape(profile.LocalWebRTCURL)+`"><code>webrtc</code></a></span>`)
+				chips = append(chips, adminLinkChip("webrtc", profile.LocalWebRTCURL, true))
 			}
 			if profile.LocalHLSURL != "" {
-				chips = append(chips, `<span class="chip subtle"><a href="`+htmlEscape(profile.LocalHLSURL)+`"><code>hls</code></a></span>`)
+				chips = append(chips, adminLinkChip("hls", profile.LocalHLSURL, true))
 			}
 			if profile.LocalMJPEGURL != "" {
-				chips = append(chips, `<span class="chip subtle"><a href="`+htmlEscape(profile.LocalMJPEGURL)+`"><code>mjpeg</code></a></span>`)
+				chips = append(chips, adminLinkChip("mjpeg", profile.LocalMJPEGURL, true))
 			}
+		}
+		chips = append(chips, buildAdminStreamControlChips(entry)...)
+		if notes := buildAdminValidationNoteMarkup(adminValidationNotesForEntry(entry)); notes != "" {
+			chips = append(chips, notes)
+		}
+
+		videoSummary := strings.TrimSpace(firstNonEmpty(entry.MainCodec, "unknown") + " " + firstNonEmpty(entry.MainResolution, ""))
+		metaParts := []string{
+			string(entry.DeviceKind),
+			"recommended=" + firstNonEmpty(entry.RecommendedProfile, "unknown"),
+			"video=" + videoSummary,
+			"audio=" + firstNonEmpty(entry.AudioCodec, "none"),
+		}
+		if entry.Channel > 0 {
+			metaParts = append(metaParts, fmt.Sprintf("channel=%d", entry.Channel))
+		}
+		if controlSummary := buildAdminStreamControlSummary(entry); controlSummary != "" {
+			metaParts = append(metaParts, controlSummary)
 		}
 
 		cards = append(cards, fmt.Sprintf(
-			`<article class="stream-card"><h3 class="card-title">%s</h3><div class="card-meta">%s • recommended=%s • video=%s %s • audio=%s</div><div class="chip-row">%s</div></article>`,
+			`<article class="stream-card"><h3 class="card-title">%s</h3><div class="card-meta">%s</div><div class="chip-row">%s</div></article>`,
 			htmlEscape(firstNonEmpty(entry.Name, entry.ID)),
-			htmlEscape(string(entry.DeviceKind)),
-			htmlEscape(firstNonEmpty(entry.RecommendedProfile, "unknown")),
-			htmlEscape(firstNonEmpty(entry.MainCodec, "unknown")),
-			htmlEscape(firstNonEmpty(entry.MainResolution, "")),
-			htmlEscape(firstNonEmpty(entry.AudioCodec, "none")),
+			adminMetaLine(metaParts...),
 			strings.Join(chips, ""),
 		))
 	}
 	return `<div class="card-grid">` + strings.Join(cards, "") + `</div>`
+}
+
+func buildAdminRootControlSummary(entries []streams.Entry) string {
+	var parts []string
+	for _, entry := range entries {
+		if entry.Intercom == nil {
+			continue
+		}
+		if entry.Intercom.SupportsVTOCallAnswer || entry.Intercom.SupportsHangup {
+			parts = append(parts, "call control")
+		}
+		if len(entry.Intercom.LockURLs) > 0 {
+			parts = append(parts, fmt.Sprintf("locks=%d", len(entry.Intercom.LockURLs)))
+		}
+		if entry.Intercom.SupportsVTOOutputVolumeControl || entry.Intercom.SupportsVTOInputVolumeControl || entry.Intercom.SupportsVTOMuteControl {
+			parts = append(parts, "audio control")
+		}
+		if entry.Intercom.SupportsVTORecordingControl {
+			parts = append(parts, "auto record")
+		}
+		break
+	}
+	return strings.Join(parts, ", ")
+}
+
+func buildAdminRootControlChips(rootID string, entries []streams.Entry) []string {
+	for _, entry := range entries {
+		if entry.Intercom == nil {
+			continue
+		}
+		var chips []string
+		chips = append(chips, adminLinkChip("vto controls", "/api/v1/vto/"+url.PathEscape(rootID)+"/controls", false))
+		if entry.Intercom.AnswerURL != "" {
+			chips = append(chips, adminLinkChip("answer", entry.Intercom.AnswerURL, true))
+		}
+		if entry.Intercom.HangupURL != "" {
+			chips = append(chips, adminLinkChip("hangup", entry.Intercom.HangupURL, true))
+		}
+		for index, lockURL := range entry.Intercom.LockURLs {
+			chips = append(chips, adminLinkChip(fmt.Sprintf("unlock %d", index+1), lockURL, false))
+		}
+		if entry.Intercom.OutputVolumeURL != "" {
+			chips = append(chips, adminLinkChip("output volume", entry.Intercom.OutputVolumeURL, true))
+		}
+		if entry.Intercom.InputVolumeURL != "" {
+			chips = append(chips, adminLinkChip("input volume", entry.Intercom.InputVolumeURL, true))
+		}
+		if entry.Intercom.MuteURL != "" {
+			chips = append(chips, adminLinkChip("mute", entry.Intercom.MuteURL, true))
+		}
+		if entry.Intercom.RecordingURL != "" {
+			chips = append(chips, adminLinkChip("auto record", entry.Intercom.RecordingURL, true))
+		}
+		if entry.Intercom.BridgeSessionResetURL != "" {
+			chips = append(chips, adminLinkChip("reset intercom", entry.Intercom.BridgeSessionResetURL, true))
+		}
+		return chips
+	}
+	return nil
+}
+
+func buildAdminStreamControlSummary(entry streams.Entry) string {
+	var parts []string
+	if entry.Controls != nil {
+		if entry.Controls.PTZ != nil && entry.Controls.PTZ.Supported {
+			parts = append(parts, "ptz")
+		}
+		if entry.Controls.Aux != nil && entry.Controls.Aux.Supported {
+			auxSummary := "aux"
+			if len(entry.Controls.Aux.Features) > 0 {
+				auxSummary = "aux=" + strings.Join(entry.Controls.Aux.Features, ",")
+			} else if len(entry.Controls.Aux.Outputs) > 0 {
+				auxSummary = "aux=" + strings.Join(entry.Controls.Aux.Outputs, ",")
+			}
+			parts = append(parts, auxSummary)
+		}
+		if entry.Controls.Audio != nil {
+			audioParts := make([]string, 0, 3)
+			if entry.Controls.Audio.Mute {
+				audioParts = append(audioParts, "mute")
+			}
+			if entry.Controls.Audio.Volume {
+				audioParts = append(audioParts, "volume")
+			}
+			if entry.Controls.Audio.PlaybackSupported {
+				audioParts = append(audioParts, "playback")
+			}
+			if len(audioParts) > 0 {
+				parts = append(parts, "audio="+strings.Join(audioParts, ","))
+			}
+		}
+		if entry.Controls.Recording != nil && entry.Controls.Recording.Supported {
+			recordingSummary := "recording=" + firstNonEmpty(entry.Controls.Recording.Mode, "supported")
+			if entry.Controls.Recording.Active {
+				recordingSummary += " active"
+			}
+			parts = append(parts, recordingSummary)
+		}
+	}
+	if entry.Intercom != nil {
+		if entry.Intercom.SupportsVTOOutputVolumeControl || entry.Intercom.SupportsVTOInputVolumeControl || entry.Intercom.SupportsVTOMuteControl {
+			parts = append(parts, "vto audio")
+		}
+		if entry.Intercom.SupportsVTORecordingControl {
+			parts = append(parts, "vto recording")
+		}
+		if entry.Intercom.CallState != "" {
+			parts = append(parts, "call="+entry.Intercom.CallState)
+		}
+	}
+	return strings.Join(parts, ", ")
+}
+
+func buildAdminStreamControlChips(entry streams.Entry) []string {
+	var chips []string
+	if entry.Controls != nil {
+		if entry.Channel > 0 {
+			chips = append(chips, adminLinkChip("channel controls", fmt.Sprintf("/api/v1/nvr/%s/channels/%d/controls", url.PathEscape(entry.RootDeviceID), entry.Channel), true))
+			chips = append(chips, adminLinkChip("recordings", fmt.Sprintf("/api/v1/nvr/%s/recordings?channel=%d&start=2026-04-28T00:00:00Z&end=2026-04-28T01:00:00Z&limit=25", url.PathEscape(entry.RootDeviceID), entry.Channel), true))
+		}
+		if entry.Controls.PTZ != nil && entry.Controls.PTZ.URL != "" {
+			chips = append(chips, adminLinkChip("ptz", entry.Controls.PTZ.URL, false))
+		}
+		if entry.Controls.Aux != nil && entry.Controls.Aux.URL != "" {
+			chips = append(chips, adminLinkChip("aux", entry.Controls.Aux.URL, false))
+		}
+		if entry.Controls.Recording != nil && entry.Controls.Recording.URL != "" {
+			chips = append(chips, adminLinkChip("recording", entry.Controls.Recording.URL, false))
+		}
+	}
+	if entry.Intercom != nil {
+		if entry.Intercom.AnswerURL != "" {
+			chips = append(chips, adminLinkChip("answer", entry.Intercom.AnswerURL, true))
+		}
+		if entry.Intercom.HangupURL != "" {
+			chips = append(chips, adminLinkChip("hangup", entry.Intercom.HangupURL, true))
+		}
+		if entry.Intercom.OutputVolumeURL != "" {
+			chips = append(chips, adminLinkChip("output volume", entry.Intercom.OutputVolumeURL, true))
+		}
+		if entry.Intercom.InputVolumeURL != "" {
+			chips = append(chips, adminLinkChip("input volume", entry.Intercom.InputVolumeURL, true))
+		}
+		if entry.Intercom.MuteURL != "" {
+			chips = append(chips, adminLinkChip("mute", entry.Intercom.MuteURL, true))
+		}
+		if entry.Intercom.RecordingURL != "" {
+			chips = append(chips, adminLinkChip("auto record", entry.Intercom.RecordingURL, true))
+		}
+	}
+	return chips
+}
+
+func collectAdminValidationNotes(entries []streams.Entry) []string {
+	seen := make(map[string]struct{})
+	notes := make([]string, 0)
+	for _, entry := range entries {
+		for _, note := range adminValidationNotesForEntry(entry) {
+			if note == "" {
+				continue
+			}
+			if _, ok := seen[note]; ok {
+				continue
+			}
+			seen[note] = struct{}{}
+			notes = append(notes, note)
+		}
+	}
+	return notes
+}
+
+func adminValidationNotesForEntry(entry streams.Entry) []string {
+	notes := make([]string, 0)
+	if entry.Controls != nil {
+		notes = append(notes, entry.Controls.ValidationNotes...)
+	}
+	if entry.Intercom != nil {
+		notes = append(notes, entry.Intercom.ValidationNotes...)
+	}
+	return notes
+}
+
+func buildAdminValidationNoteMarkup(notes []string) string {
+	if len(notes) == 0 {
+		return ""
+	}
+	summary := strings.Join(notes, " | ")
+	if len(summary) > 180 {
+		summary = summary[:177] + "..."
+	}
+	return adminTextChip("validated: "+summary, true)
+}
+
+func adminLinkChip(label string, href string, subtle bool) string {
+	className := "chip"
+	if subtle {
+		className += " subtle"
+	}
+	return `<span class="` + className + `"><a href="` + htmlEscape(href) + `"><code>` + htmlEscape(label) + `</code></a></span>`
+}
+
+func adminTextChip(label string, subtle bool) string {
+	className := "chip"
+	if subtle {
+		className += " subtle"
+	}
+	return `<span class="` + className + `"><code>` + htmlEscape(label) + `</code></span>`
+}
+
+func adminMetaLine(parts ...string) string {
+	filtered := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if strings.TrimSpace(part) == "" {
+			continue
+		}
+		filtered = append(filtered, htmlEscape(strings.TrimSpace(part)))
+	}
+	return strings.Join(filtered, " &bull; ")
 }
 
 func marshalIndentedJSON(payload any) string {

@@ -20,14 +20,21 @@ import (
 )
 
 type stubDriver struct {
-	id           string
-	kind         dahua.DeviceKind
-	probeFn      func(context.Context) (*dahua.ProbeResult, error)
-	unlockFn     func(context.Context, int) error
-	answerFn     func(context.Context) error
-	hangupFn     func(context.Context) error
-	invalidateFn func()
-	updateCfgFn  func(config.DeviceConfig) error
+	id            string
+	kind          dahua.DeviceKind
+	probeFn       func(context.Context) (*dahua.ProbeResult, error)
+	unlockFn      func(context.Context, int) error
+	answerFn      func(context.Context) error
+	hangupFn      func(context.Context) error
+	vtoControlsFn func(context.Context) (dahua.VTOControlCapabilities, error)
+	vtoOutputFn   func(context.Context, int, int) error
+	vtoInputFn    func(context.Context, int, int) error
+	vtoMuteFn     func(context.Context, bool) error
+	vtoRecordFn   func(context.Context, bool) error
+	auxFn         func(context.Context, dahua.NVRAuxRequest) error
+	recordingFn   func(context.Context, dahua.NVRRecordingRequest) error
+	invalidateFn  func()
+	updateCfgFn   func(config.DeviceConfig) error
 }
 
 func (s stubDriver) ID() string { return s.id }
@@ -64,6 +71,55 @@ func (s stubDriver) AnswerCall(ctx context.Context) error {
 	return s.answerFn(ctx)
 }
 
+func (s stubDriver) ControlCapabilities(ctx context.Context) (dahua.VTOControlCapabilities, error) {
+	if s.vtoControlsFn == nil {
+		return dahua.VTOControlCapabilities{}, nil
+	}
+	return s.vtoControlsFn(ctx)
+}
+
+func (s stubDriver) SetAudioOutputVolume(ctx context.Context, slot int, level int) error {
+	if s.vtoOutputFn == nil {
+		return nil
+	}
+	return s.vtoOutputFn(ctx, slot, level)
+}
+
+func (s stubDriver) SetAudioInputVolume(ctx context.Context, slot int, level int) error {
+	if s.vtoInputFn == nil {
+		return nil
+	}
+	return s.vtoInputFn(ctx, slot, level)
+}
+
+func (s stubDriver) SetAudioMute(ctx context.Context, muted bool) error {
+	if s.vtoMuteFn == nil {
+		return nil
+	}
+	return s.vtoMuteFn(ctx, muted)
+}
+
+func (s stubDriver) SetRecordingEnabled(ctx context.Context, enabled bool) error {
+	if s.vtoRecordFn == nil {
+		return nil
+	}
+	return s.vtoRecordFn(ctx, enabled)
+}
+
+func (s stubDriver) Aux(ctx context.Context, request dahua.NVRAuxRequest) error {
+	if s.auxFn == nil {
+		return nil
+	}
+	return s.auxFn(ctx, request)
+}
+
+func (s stubDriver) Recording(ctx context.Context, request dahua.NVRRecordingRequest) error {
+	if s.recordingFn == nil {
+		return nil
+	}
+	return s.recordingFn(ctx, request)
+}
+
 func (s stubDriver) InvalidateInventoryCache() {
 	if s.invalidateFn != nil {
 		s.invalidateFn()
@@ -80,6 +136,11 @@ func (s stubDriver) UpdateConfig(cfg config.DeviceConfig) error {
 var _ dahua.Driver = stubDriver{}
 var _ dahua.VTOLockController = stubDriver{}
 var _ dahua.VTOCallController = stubDriver{}
+var _ dahua.VTOControlReader = stubDriver{}
+var _ dahua.VTOAudioController = stubDriver{}
+var _ dahua.VTORecordingController = stubDriver{}
+var _ dahua.NVRAuxController = stubDriver{}
+var _ dahua.NVRRecordingController = stubDriver{}
 var _ dahua.NVRInventoryRefresher = stubDriver{}
 var _ dahua.ConfigurableDriver = stubDriver{}
 
@@ -679,6 +740,107 @@ func TestAdminActionsAnswerVTOCall(t *testing.T) {
 	}
 	if !called {
 		t.Fatal("expected answer controller to be called")
+	}
+}
+
+func TestAdminActionsVTOControlCapabilities(t *testing.T) {
+	expected := dahua.VTOControlCapabilities{
+		DeviceID: "front_vto",
+		Call: dahua.VTOCallCapabilities{
+			Answer: true,
+			Hangup: true,
+			State:  "Idle",
+		},
+	}
+
+	actions := newAdminActions(
+		zerolog.Nop(),
+		metrics.New(buildinfo.BuildInfo{}),
+		ha.NewDiscoveryPublisher(config.Config{}, &mockMQTTClient{}, zerolog.Nop()),
+		store.NewProbeStore(),
+		&stubDeviceConfigStore{},
+		stubHAProvisioner{},
+		[]dahua.Driver{
+			stubDriver{
+				id:   "front_vto",
+				kind: dahua.DeviceKindVTO,
+				vtoControlsFn: func(context.Context) (dahua.VTOControlCapabilities, error) {
+					return expected, nil
+				},
+			},
+		},
+	)
+
+	result, err := actions.VTOControlCapabilities(context.Background(), "front_vto")
+	if err != nil {
+		t.Fatalf("VTOControlCapabilities returned error: %v", err)
+	}
+	if !reflect.DeepEqual(result, expected) {
+		t.Fatalf("unexpected capabilities %+v", result)
+	}
+}
+
+func TestAdminActionsSetVTOAudioOutputVolume(t *testing.T) {
+	called := false
+	actions := newAdminActions(
+		zerolog.Nop(),
+		metrics.New(buildinfo.BuildInfo{}),
+		ha.NewDiscoveryPublisher(config.Config{}, &mockMQTTClient{}, zerolog.Nop()),
+		store.NewProbeStore(),
+		&stubDeviceConfigStore{},
+		stubHAProvisioner{},
+		[]dahua.Driver{
+			stubDriver{
+				id:   "front_vto",
+				kind: dahua.DeviceKindVTO,
+				vtoOutputFn: func(_ context.Context, slot int, level int) error {
+					called = true
+					if slot != 1 || level != 80 {
+						t.Fatalf("unexpected slot/level %d/%d", slot, level)
+					}
+					return nil
+				},
+			},
+		},
+	)
+
+	if err := actions.SetVTOAudioOutputVolume(context.Background(), "front_vto", 1, 80); err != nil {
+		t.Fatalf("SetVTOAudioOutputVolume returned error: %v", err)
+	}
+	if !called {
+		t.Fatal("expected output volume controller to be called")
+	}
+}
+
+func TestAdminActionsSetVTORecordingEnabled(t *testing.T) {
+	called := false
+	actions := newAdminActions(
+		zerolog.Nop(),
+		metrics.New(buildinfo.BuildInfo{}),
+		ha.NewDiscoveryPublisher(config.Config{}, &mockMQTTClient{}, zerolog.Nop()),
+		store.NewProbeStore(),
+		&stubDeviceConfigStore{},
+		stubHAProvisioner{},
+		[]dahua.Driver{
+			stubDriver{
+				id:   "front_vto",
+				kind: dahua.DeviceKindVTO,
+				vtoRecordFn: func(_ context.Context, enabled bool) error {
+					called = true
+					if !enabled {
+						t.Fatal("expected enabled=true")
+					}
+					return nil
+				},
+			},
+		},
+	)
+
+	if err := actions.SetVTORecordingEnabled(context.Background(), "front_vto", true); err != nil {
+		t.Fatalf("SetVTORecordingEnabled returned error: %v", err)
+	}
+	if !called {
+		t.Fatal("expected recording controller to be called")
 	}
 }
 

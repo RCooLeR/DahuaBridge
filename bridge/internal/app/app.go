@@ -222,7 +222,7 @@ func buildDrivers(
 		}
 		driver := nvr.New(deviceCfg, logger, cgi.New(deviceCfg, metricsRegistry))
 		drivers = append(drivers, driver)
-		services.RegisterNVR(deviceCfg.ID, driver, deviceCfg)
+		services.RegisterNVR(deviceCfg.ID, driver, driver, deviceCfg)
 	}
 
 	for _, deviceCfg := range cfg.Devices.VTO {

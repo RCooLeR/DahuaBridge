@@ -23,6 +23,8 @@ type runtimeServices struct {
 	probes        *store.ProbeStore
 	media         intercomStatusReader
 	nvrSnapshots  map[string]dahua.SnapshotProvider
+	nvrRecordings map[string]dahua.NVRRecordingSearcher
+	playback      map[string]playbackSession
 	nvrConfigs    map[string]config.DeviceConfig
 	vtoSnapshots  map[string]dahua.SnapshotProvider
 	vtoConfigs    map[string]config.DeviceConfig
@@ -48,6 +50,8 @@ func newRuntimeServices(cfg config.Config, probes *store.ProbeStore) *runtimeSer
 		cfg:           cfg,
 		probes:        probes,
 		nvrSnapshots:  make(map[string]dahua.SnapshotProvider),
+		nvrRecordings: make(map[string]dahua.NVRRecordingSearcher),
+		playback:      make(map[string]playbackSession),
 		nvrConfigs:    make(map[string]config.DeviceConfig),
 		vtoSnapshots:  make(map[string]dahua.SnapshotProvider),
 		vtoConfigs:    make(map[string]config.DeviceConfig),
@@ -63,10 +67,13 @@ func (r *runtimeServices) AttachMedia(reader intercomStatusReader) {
 	r.media = reader
 }
 
-func (r *runtimeServices) RegisterNVR(deviceID string, provider dahua.SnapshotProvider, cfg config.DeviceConfig) {
+func (r *runtimeServices) RegisterNVR(deviceID string, provider dahua.SnapshotProvider, recordings dahua.NVRRecordingSearcher, cfg config.DeviceConfig) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.nvrSnapshots[deviceID] = provider
+	if recordings != nil {
+		r.nvrRecordings[deviceID] = recordings
+	}
 	r.nvrConfigs[deviceID] = cfg
 }
 
@@ -138,6 +145,24 @@ func (r *runtimeServices) NVRSnapshot(ctx context.Context, deviceID string, chan
 	}
 	r.storeSnapshot(cacheKey, body, contentType)
 	return body, contentType, nil
+}
+
+func (r *runtimeServices) NVRRecordings(ctx context.Context, deviceID string, query dahua.NVRRecordingQuery) (dahua.NVRRecordingSearchResult, error) {
+	r.mu.RLock()
+	searcher, ok := r.nvrRecordings[deviceID]
+	r.mu.RUnlock()
+	if !ok {
+		return dahua.NVRRecordingSearchResult{}, fmt.Errorf("%w: %s", dahua.ErrDeviceNotFound, deviceID)
+	}
+
+	result, err := searcher.FindRecordings(ctx, query)
+	if err != nil {
+		return dahua.NVRRecordingSearchResult{}, err
+	}
+	if result.DeviceID == "" {
+		result.DeviceID = deviceID
+	}
+	return result, nil
 }
 
 func (r *runtimeServices) VTOSnapshot(ctx context.Context, deviceID string) ([]byte, string, error) {
@@ -346,6 +371,10 @@ func (r *runtimeServices) ListStreams(includeCredentials bool) []streams.Entry {
 }
 
 func (r *runtimeServices) GetStream(streamID string, profileName string, includeCredentials bool) (streams.Entry, streams.Profile, bool) {
+	if entry, profile, ok := r.getPlaybackStream(streamID, profileName, includeCredentials); ok {
+		return entry, profile, true
+	}
+
 	entries := r.ListStreams(includeCredentials)
 	for _, entry := range entries {
 		if entry.ID != streamID {

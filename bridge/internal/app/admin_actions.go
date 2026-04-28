@@ -18,17 +18,24 @@ import (
 )
 
 type adminActions struct {
-	logger          zerolog.Logger
-	metrics         *metrics.Registry
-	discovery       *ha.DiscoveryPublisher
-	probes          *store.ProbeStore
-	configs         deviceConfigStore
-	haClient        homeAssistantProvisioner
-	drivers         map[string]dahua.Driver
-	lockControllers map[string]dahua.VTOLockController
-	callControllers map[string]dahua.VTOCallController
-	nvrRefresh      map[string]dahua.NVRInventoryRefresher
-	configure       map[string]dahua.ConfigurableDriver
+	logger            zerolog.Logger
+	metrics           *metrics.Registry
+	discovery         *ha.DiscoveryPublisher
+	probes            *store.ProbeStore
+	configs           deviceConfigStore
+	haClient          homeAssistantProvisioner
+	drivers           map[string]dahua.Driver
+	lockControllers   map[string]dahua.VTOLockController
+	callControllers   map[string]dahua.VTOCallController
+	vtoControls       map[string]dahua.VTOControlReader
+	vtoAudio          map[string]dahua.VTOAudioController
+	vtoRecording      map[string]dahua.VTORecordingController
+	channelControls   map[string]dahua.NVRChannelControlReader
+	ptzControllers    map[string]dahua.NVRPTZController
+	auxControllers    map[string]dahua.NVRAuxController
+	recordControllers map[string]dahua.NVRRecordingController
+	nvrRefresh        map[string]dahua.NVRInventoryRefresher
+	configure         map[string]dahua.ConfigurableDriver
 }
 
 type deviceConfigStore interface {
@@ -52,17 +59,24 @@ func newAdminActions(
 	drivers []dahua.Driver,
 ) *adminActions {
 	actions := &adminActions{
-		logger:          logger.With().Str("component", "admin_actions").Logger(),
-		metrics:         metricsRegistry,
-		discovery:       discovery,
-		probes:          probes,
-		configs:         configs,
-		haClient:        haClient,
-		drivers:         make(map[string]dahua.Driver, len(drivers)),
-		lockControllers: make(map[string]dahua.VTOLockController),
-		callControllers: make(map[string]dahua.VTOCallController),
-		nvrRefresh:      make(map[string]dahua.NVRInventoryRefresher),
-		configure:       make(map[string]dahua.ConfigurableDriver),
+		logger:            logger.With().Str("component", "admin_actions").Logger(),
+		metrics:           metricsRegistry,
+		discovery:         discovery,
+		probes:            probes,
+		configs:           configs,
+		haClient:          haClient,
+		drivers:           make(map[string]dahua.Driver, len(drivers)),
+		lockControllers:   make(map[string]dahua.VTOLockController),
+		callControllers:   make(map[string]dahua.VTOCallController),
+		vtoControls:       make(map[string]dahua.VTOControlReader),
+		vtoAudio:          make(map[string]dahua.VTOAudioController),
+		vtoRecording:      make(map[string]dahua.VTORecordingController),
+		channelControls:   make(map[string]dahua.NVRChannelControlReader),
+		ptzControllers:    make(map[string]dahua.NVRPTZController),
+		auxControllers:    make(map[string]dahua.NVRAuxController),
+		recordControllers: make(map[string]dahua.NVRRecordingController),
+		nvrRefresh:        make(map[string]dahua.NVRInventoryRefresher),
+		configure:         make(map[string]dahua.ConfigurableDriver),
 	}
 
 	for _, driver := range drivers {
@@ -72,6 +86,27 @@ func newAdminActions(
 		}
 		if controller, ok := driver.(dahua.VTOCallController); ok && driver.Kind() == dahua.DeviceKindVTO {
 			actions.callControllers[driver.ID()] = controller
+		}
+		if controller, ok := driver.(dahua.VTOControlReader); ok && driver.Kind() == dahua.DeviceKindVTO {
+			actions.vtoControls[driver.ID()] = controller
+		}
+		if controller, ok := driver.(dahua.VTOAudioController); ok && driver.Kind() == dahua.DeviceKindVTO {
+			actions.vtoAudio[driver.ID()] = controller
+		}
+		if controller, ok := driver.(dahua.VTORecordingController); ok && driver.Kind() == dahua.DeviceKindVTO {
+			actions.vtoRecording[driver.ID()] = controller
+		}
+		if controller, ok := driver.(dahua.NVRChannelControlReader); ok && driver.Kind() == dahua.DeviceKindNVR {
+			actions.channelControls[driver.ID()] = controller
+		}
+		if controller, ok := driver.(dahua.NVRPTZController); ok && driver.Kind() == dahua.DeviceKindNVR {
+			actions.ptzControllers[driver.ID()] = controller
+		}
+		if controller, ok := driver.(dahua.NVRAuxController); ok && driver.Kind() == dahua.DeviceKindNVR {
+			actions.auxControllers[driver.ID()] = controller
+		}
+		if controller, ok := driver.(dahua.NVRRecordingController); ok && driver.Kind() == dahua.DeviceKindNVR {
+			actions.recordControllers[driver.ID()] = controller
 		}
 		if refresher, ok := driver.(dahua.NVRInventoryRefresher); ok && driver.Kind() == dahua.DeviceKindNVR {
 			actions.nvrRefresh[driver.ID()] = refresher
@@ -152,6 +187,46 @@ func (a *adminActions) AnswerVTOCall(ctx context.Context, deviceID string) error
 	return controller.AnswerCall(ctx)
 }
 
+func (a *adminActions) VTOControlCapabilities(ctx context.Context, deviceID string) (dahua.VTOControlCapabilities, error) {
+	controller, ok := a.vtoControls[deviceID]
+	if !ok {
+		return dahua.VTOControlCapabilities{}, fmt.Errorf("%w: %s", dahua.ErrDeviceNotFound, deviceID)
+	}
+	return controller.ControlCapabilities(ctx)
+}
+
+func (a *adminActions) SetVTOAudioOutputVolume(ctx context.Context, deviceID string, slot int, level int) error {
+	controller, ok := a.vtoAudio[deviceID]
+	if !ok {
+		return fmt.Errorf("%w: %s", dahua.ErrDeviceNotFound, deviceID)
+	}
+	return controller.SetAudioOutputVolume(ctx, slot, level)
+}
+
+func (a *adminActions) SetVTOAudioInputVolume(ctx context.Context, deviceID string, slot int, level int) error {
+	controller, ok := a.vtoAudio[deviceID]
+	if !ok {
+		return fmt.Errorf("%w: %s", dahua.ErrDeviceNotFound, deviceID)
+	}
+	return controller.SetAudioInputVolume(ctx, slot, level)
+}
+
+func (a *adminActions) SetVTOMute(ctx context.Context, deviceID string, muted bool) error {
+	controller, ok := a.vtoAudio[deviceID]
+	if !ok {
+		return fmt.Errorf("%w: %s", dahua.ErrDeviceNotFound, deviceID)
+	}
+	return controller.SetAudioMute(ctx, muted)
+}
+
+func (a *adminActions) SetVTORecordingEnabled(ctx context.Context, deviceID string, enabled bool) error {
+	controller, ok := a.vtoRecording[deviceID]
+	if !ok {
+		return fmt.Errorf("%w: %s", dahua.ErrDeviceNotFound, deviceID)
+	}
+	return controller.SetRecordingEnabled(ctx, enabled)
+}
+
 func (a *adminActions) RefreshNVRInventory(ctx context.Context, deviceID string) (*dahua.ProbeResult, error) {
 	refresher, ok := a.nvrRefresh[deviceID]
 	if !ok {
@@ -160,6 +235,38 @@ func (a *adminActions) RefreshNVRInventory(ctx context.Context, deviceID string)
 
 	refresher.InvalidateInventoryCache()
 	return a.ProbeDevice(ctx, deviceID)
+}
+
+func (a *adminActions) NVRChannelControlCapabilities(ctx context.Context, deviceID string, channel int) (dahua.NVRChannelControlCapabilities, error) {
+	controller, ok := a.channelControls[deviceID]
+	if !ok {
+		return dahua.NVRChannelControlCapabilities{}, fmt.Errorf("%w: %s", dahua.ErrDeviceNotFound, deviceID)
+	}
+	return controller.ChannelControlCapabilities(ctx, channel)
+}
+
+func (a *adminActions) ControlNVRPTZ(ctx context.Context, deviceID string, request dahua.NVRPTZRequest) error {
+	controller, ok := a.ptzControllers[deviceID]
+	if !ok {
+		return fmt.Errorf("%w: %s", dahua.ErrDeviceNotFound, deviceID)
+	}
+	return controller.PTZ(ctx, request)
+}
+
+func (a *adminActions) ControlNVRAux(ctx context.Context, deviceID string, request dahua.NVRAuxRequest) error {
+	controller, ok := a.auxControllers[deviceID]
+	if !ok {
+		return fmt.Errorf("%w: %s", dahua.ErrDeviceNotFound, deviceID)
+	}
+	return controller.Aux(ctx, request)
+}
+
+func (a *adminActions) ControlNVRRecording(ctx context.Context, deviceID string, request dahua.NVRRecordingRequest) error {
+	controller, ok := a.recordControllers[deviceID]
+	if !ok {
+		return fmt.Errorf("%w: %s", dahua.ErrDeviceNotFound, deviceID)
+	}
+	return controller.Recording(ctx, request)
 }
 
 func (a *adminActions) ProbeAllDevices(ctx context.Context) []dahua.ProbeActionResult {

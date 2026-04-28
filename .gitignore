@@ -16,3 +16,4 @@ bridge/*.test
 bridge/coverage.out
 bridge/*.exe
 integration/**/__pycache__/
+tmp/

@@ -19,6 +19,29 @@ class ButtonSpec:
     icon: str
 
 
+@dataclass(frozen=True)
+class NumberSpec:
+    key: str
+    name: str
+    url: str
+    icon: str
+    value_key: str
+    slot: int
+    min_value: float
+    max_value: float
+    step: float
+
+
+@dataclass(frozen=True)
+class SwitchSpec:
+    key: str
+    name: str
+    url: str
+    icon: str
+    value_key: str
+    payload_key: str
+
+
 DIAGNOSTIC_FIELDS = {
     "audio_codec",
     "bridge_forward_errors",
@@ -177,6 +200,28 @@ def stream_for_record(record: dict[str, Any] | None) -> dict[str, Any]:
         return {}
     stream = record.get("stream", {})
     return stream if isinstance(stream, dict) else {}
+
+
+def intercom_for_record(record: dict[str, Any] | None) -> dict[str, Any]:
+    intercom = stream_for_record(record).get("intercom", {})
+    return intercom if isinstance(intercom, dict) else {}
+
+
+def features_for_record(record: dict[str, Any] | None) -> list[dict[str, Any]]:
+    features = stream_for_record(record).get("features", [])
+    if not isinstance(features, list):
+        return []
+    return [feature for feature in features if isinstance(feature, dict)]
+
+
+def feature_by_key(record: dict[str, Any] | None, key: str) -> dict[str, Any] | None:
+    target = str(key).strip()
+    if not target:
+        return None
+    for feature in features_for_record(record):
+        if str(feature.get("key", "")).strip() == target:
+            return feature
+    return None
 
 
 def merged_fields_for_record(record: dict[str, Any] | None) -> dict[str, Any]:
@@ -413,9 +458,8 @@ def button_specs_for_record(record: dict[str, Any]) -> list[ButtonSpec]:
                 )
             )
 
-    stream = stream_for_record(record)
-    intercom = stream.get("intercom", {})
-    if not isinstance(intercom, dict):
+    intercom = intercom_for_record(record)
+    if not intercom:
         return specs
 
     answer_url = str(intercom.get("answer_url", "")).strip()
@@ -478,6 +522,84 @@ def button_specs_for_record(record: dict[str, Any]) -> list[ButtonSpec]:
     return specs
 
 
+def number_specs_for_record(record: dict[str, Any]) -> list[NumberSpec]:
+    intercom = intercom_for_record(record)
+    if not intercom:
+        return []
+
+    specs: list[NumberSpec] = []
+
+    output_url = str(intercom.get("output_volume_url", "")).strip()
+    if output_url and bool(intercom.get("supports_vto_output_volume_control")):
+        specs.append(
+            NumberSpec(
+                key="output_volume",
+                name="Output Volume",
+                url=output_url,
+                icon="mdi:volume-high",
+                value_key="output_volume_level",
+                slot=0,
+                min_value=0,
+                max_value=100,
+                step=1,
+            )
+        )
+
+    input_url = str(intercom.get("input_volume_url", "")).strip()
+    if input_url and bool(intercom.get("supports_vto_input_volume_control")):
+        specs.append(
+            NumberSpec(
+                key="input_volume",
+                name="Input Volume",
+                url=input_url,
+                icon="mdi:microphone",
+                value_key="input_volume_level",
+                slot=0,
+                min_value=0,
+                max_value=100,
+                step=1,
+            )
+        )
+
+    return specs
+
+
+def switch_specs_for_record(record: dict[str, Any]) -> list[SwitchSpec]:
+    intercom = intercom_for_record(record)
+    if not intercom:
+        return []
+
+    specs: list[SwitchSpec] = []
+
+    mute_url = str(intercom.get("mute_url", "")).strip()
+    if mute_url and bool(intercom.get("supports_vto_mute_control")):
+        specs.append(
+            SwitchSpec(
+                key="muted",
+                name="Muted",
+                url=mute_url,
+                icon="mdi:volume-mute",
+                value_key="muted",
+                payload_key="muted",
+            )
+        )
+
+    recording_url = str(intercom.get("recording_url", "")).strip()
+    if recording_url and bool(intercom.get("supports_vto_recording_control")):
+        specs.append(
+            SwitchSpec(
+                key="auto_record_enabled",
+                name="Auto Record",
+                url=recording_url,
+                icon="mdi:record-rec",
+                value_key="auto_record_enabled",
+                payload_key="auto_record_enabled",
+            )
+        )
+
+    return specs
+
+
 def update_timestamp(data: dict[str, Any] | None) -> datetime | None:
     if not data:
         return None
@@ -535,3 +657,36 @@ def coerce_catalog_value(value: Any) -> Any:
             return text
 
     return text
+
+
+def int_intercom_value_for_record(
+    record: dict[str, Any] | None, field: str
+) -> int | None:
+    value = intercom_for_record(record).get(field)
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    if isinstance(value, str) and value.strip().isdigit():
+        try:
+            return int(value.strip())
+        except ValueError:
+            return None
+    return None
+
+
+def bool_intercom_value_for_record(
+    record: dict[str, Any] | None, field: str
+) -> bool | None:
+    value = intercom_for_record(record).get(field)
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered == "true":
+            return True
+        if lowered == "false":
+            return False
+    return None

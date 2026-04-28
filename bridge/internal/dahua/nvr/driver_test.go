@@ -94,6 +94,61 @@ func TestParseDiskInventory(t *testing.T) {
 	}
 }
 
+func TestParseRecordingSearchResult(t *testing.T) {
+	values := map[string]string{
+		"found":                "2",
+		"items[0].Channel":     "0",
+		"items[0].StartTime":   "2026-04-28 01:58:16",
+		"items[0].EndTime":     "2026-04-28 02:00:02",
+		"items[0].FilePath":    "/mnt/dvr/2026-04-28/0/dav/01/1/0/2129/01.58.16-02.00.02[R][0@0][0].dav",
+		"items[0].Type":        "dav",
+		"items[0].VideoStream": "Main",
+		"items[0].Disk":        "8",
+		"items[0].Partition":   "0",
+		"items[0].Cluster":     "2129",
+		"items[0].Length":      "37617664",
+		"items[0].CutLength":   "37617664",
+		"items[0].Flags[0]":    "Timing",
+		"items[0].Flags[1]":    "UnMarked",
+		"items[1].Channel":     "0",
+		"items[1].StartTime":   "2026-04-28 02:00:02",
+		"items[1].EndTime":     "2026-04-28 02:30:00",
+		"items[1].FilePath":    "/mnt/dvr/2026-04-28/0/dav/02/1/0/2296/02.00.02-02.30.00[R][0@0][0].dav",
+		"items[1].Type":        "dav",
+		"items[1].VideoStream": "Main",
+		"items[1].Disk":        "8",
+		"items[1].Partition":   "0",
+		"items[1].Cluster":     "2296",
+		"items[1].Length":      "611844096",
+		"items[1].CutLength":   "611844096",
+		"items[1].Flags[0]":    "Timing",
+	}
+
+	got := parseRecordingSearchResult(values)
+
+	if got.ReturnedCount != 2 {
+		t.Fatalf("unexpected returned count %d", got.ReturnedCount)
+	}
+	if len(got.Items) != 2 {
+		t.Fatalf("expected 2 recording items, got %d", len(got.Items))
+	}
+	if got.Items[0].Channel != 1 {
+		t.Fatalf("expected channel 1, got %d", got.Items[0].Channel)
+	}
+	if got.Items[0].Disk != 8 || got.Items[0].Cluster != 2129 {
+		t.Fatalf("unexpected first item disk/cluster: %+v", got.Items[0])
+	}
+	if got.Items[0].LengthBytes != 37617664 || got.Items[0].CutLengthBytes != 37617664 {
+		t.Fatalf("unexpected first item lengths: %+v", got.Items[0])
+	}
+	if len(got.Items[0].Flags) != 2 {
+		t.Fatalf("expected 2 flags, got %+v", got.Items[0].Flags)
+	}
+	if got.Items[1].StartTime != "2026-04-28 02:00:02" || got.Items[1].EndTime != "2026-04-28 02:30:00" {
+		t.Fatalf("unexpected second item times: %+v", got.Items[1])
+	}
+}
+
 func TestSummarizeDisks(t *testing.T) {
 	summary := summarizeDisks([]diskInventory{
 		{

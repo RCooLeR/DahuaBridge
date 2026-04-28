@@ -41,6 +41,35 @@ func TestBuildCatalogForNVRChannel(t *testing.T) {
 						},
 					},
 				},
+				States: map[string]dahua.DeviceState{
+					"west20_nvr_channel_01": {
+						Available: true,
+						Info: map[string]any{
+							"control_ptz_supported":              true,
+							"control_ptz_pan":                    true,
+							"control_ptz_tilt":                   true,
+							"control_ptz_zoom":                   true,
+							"control_ptz_focus":                  true,
+							"control_ptz_commands":               []string{"left", "right", "up", "zoom_in"},
+							"control_aux_supported":              true,
+							"control_aux_outputs":                []string{"aux", "light", "wiper"},
+							"control_aux_features":               []string{"siren", "warning_light", "wiper"},
+							"control_audio_supported":            false,
+							"control_audio_mute_supported":       false,
+							"control_audio_volume_supported":     false,
+							"control_audio_playback_supported":   true,
+							"control_audio_playback_siren":       true,
+							"control_audio_playback_quick_reply": false,
+							"control_audio_playback_formats":     []string{"aac", "wav"},
+							"control_audio_playback_file_count":  1,
+							"control_recording_supported":        true,
+							"control_recording_active":           true,
+							"control_recording_mode":             "manual",
+							"recommended_ha_integration":         "bridge_media",
+							"validation_notes":                   []string{"ptz_capability_query_failed_aux_fallback_used"},
+						},
+					},
+				},
 			},
 		},
 		NVRConfigs: map[string]config.DeviceConfig{
@@ -86,6 +115,58 @@ func TestBuildCatalogForNVRChannel(t *testing.T) {
 	}
 	if entry.Profiles["stable"].LocalWebRTCURL != "http://bridge.local:8080/api/v1/media/webrtc/west20_nvr_channel_01/stable" {
 		t.Fatalf("unexpected webrtc url %q", entry.Profiles["stable"].LocalWebRTCURL)
+	}
+	if entry.Controls == nil || entry.Controls.PTZ == nil || entry.Controls.Aux == nil || entry.Controls.Audio == nil || entry.Controls.Recording == nil {
+		t.Fatalf("expected control summary, got %+v", entry.Controls)
+	}
+	if entry.Controls.PTZ.URL != "http://bridge.local:8080/api/v1/nvr/west20_nvr/channels/1/ptz" {
+		t.Fatalf("unexpected ptz url %q", entry.Controls.PTZ.URL)
+	}
+	if !entry.Controls.PTZ.Zoom || len(entry.Controls.PTZ.Commands) != 4 {
+		t.Fatalf("unexpected ptz summary %+v", entry.Controls.PTZ)
+	}
+	if entry.Controls.Aux.URL != "http://bridge.local:8080/api/v1/nvr/west20_nvr/channels/1/aux" {
+		t.Fatalf("unexpected aux url %q", entry.Controls.Aux.URL)
+	}
+	if len(entry.Controls.Aux.Outputs) != 3 || entry.Controls.Aux.Outputs[0] != "aux" {
+		t.Fatalf("unexpected aux outputs %+v", entry.Controls.Aux.Outputs)
+	}
+	if len(entry.Controls.Aux.Features) != 3 || entry.Controls.Aux.Features[0] != "siren" {
+		t.Fatalf("unexpected aux features %+v", entry.Controls.Aux.Features)
+	}
+	if entry.Controls.Audio.Supported || entry.Controls.Audio.Mute || entry.Controls.Audio.Volume {
+		t.Fatalf("unexpected audio summary %+v", entry.Controls.Audio)
+	}
+	if !entry.Controls.Audio.PlaybackSupported || !entry.Controls.Audio.PlaybackSiren || entry.Controls.Audio.PlaybackFileCount != 1 {
+		t.Fatalf("unexpected playback audio summary %+v", entry.Controls.Audio)
+	}
+	if entry.Controls.Recording.URL != "http://bridge.local:8080/api/v1/nvr/west20_nvr/channels/1/recording" {
+		t.Fatalf("unexpected recording url %q", entry.Controls.Recording.URL)
+	}
+	if !entry.Controls.Recording.Active || entry.Controls.Recording.Mode != "manual" {
+		t.Fatalf("unexpected recording summary %+v", entry.Controls.Recording)
+	}
+	if len(entry.Controls.ValidationNotes) != 1 || entry.Controls.ValidationNotes[0] != "ptz_capability_query_failed_aux_fallback_used" {
+		t.Fatalf("unexpected control validation notes %+v", entry.Controls.ValidationNotes)
+	}
+	if len(entry.Features) != 7 {
+		t.Fatalf("expected 7 normalized features, got %+v", entry.Features)
+	}
+	archiveSearch := findFeatureByKey(entry.Features, "archive_search")
+	if archiveSearch == nil || archiveSearch.Kind != "query" || archiveSearch.URL != "http://bridge.local:8080/api/v1/nvr/west20_nvr/recordings" {
+		t.Fatalf("unexpected archive search feature %+v", archiveSearch)
+	}
+	ptz := findFeatureByKey(entry.Features, "ptz")
+	if ptz == nil || ptz.Kind != "command_set" || len(ptz.Commands) != 4 || len(ptz.Actions) != 3 {
+		t.Fatalf("unexpected ptz feature %+v", ptz)
+	}
+	siren := findFeatureByKey(entry.Features, "siren")
+	if siren == nil || siren.ParameterKey != "output" || siren.ParameterValue != "siren" || siren.URL != "http://bridge.local:8080/api/v1/nvr/west20_nvr/channels/1/aux" {
+		t.Fatalf("unexpected siren feature %+v", siren)
+	}
+	recording := findFeatureByKey(entry.Features, "recording")
+	if recording == nil || recording.Kind != "multi_action" || recording.Active == nil || !*recording.Active || recording.CurrentText != "manual" {
+		t.Fatalf("unexpected recording feature %+v", recording)
 	}
 }
 
@@ -243,13 +324,26 @@ func TestBuildCatalogForVTOIncludesLockCount(t *testing.T) {
 					"front_vto": {
 						Available: true,
 						Info: map[string]any{
-							"audio_codec":                "PCM",
-							"call_state":                 "ringing",
-							"last_ring_at":               "2026-04-27T18:45:00Z",
-							"last_call_started_at":       "2026-04-27T18:45:03Z",
-							"last_call_ended_at":         "2026-04-27T18:45:21Z",
-							"last_call_duration_seconds": 18,
-							"last_call_source":           "villa_panel",
+							"audio_codec":                           "PCM",
+							"call_state":                            "ringing",
+							"last_ring_at":                          "2026-04-27T18:45:00Z",
+							"last_call_started_at":                  "2026-04-27T18:45:03Z",
+							"last_call_ended_at":                    "2026-04-27T18:45:21Z",
+							"last_call_duration_seconds":            18,
+							"last_call_source":                      "villa_panel",
+							"control_audio_output_volume_supported": true,
+							"control_audio_input_volume_supported":  true,
+							"control_audio_mute_supported":          true,
+							"control_recording_supported":           true,
+							"control_audio_output_volume":           80,
+							"control_audio_output_volume_levels":    []int{80, 60},
+							"control_audio_input_volume":            90,
+							"control_audio_input_volume_levels":     []int{90, 60},
+							"control_audio_muted":                   false,
+							"control_recording_auto_enabled":        true,
+							"control_recording_auto_time_seconds":   11,
+							"control_stream_audio_enabled":          true,
+							"validation_notes":                      []string{"vto_audio_control_surface_config_backed"},
 						},
 					},
 				},
@@ -333,7 +427,50 @@ func TestBuildCatalogForVTOIncludesLockCount(t *testing.T) {
 	if !catalog[0].Intercom.SupportsVTOCallAnswer {
 		t.Fatalf("expected VTO call answer support, got %+v", catalog[0].Intercom)
 	}
+	if !catalog[0].Intercom.SupportsVTOOutputVolumeControl || !catalog[0].Intercom.SupportsVTOInputVolumeControl || !catalog[0].Intercom.SupportsVTOMuteControl || !catalog[0].Intercom.SupportsVTORecordingControl {
+		t.Fatalf("expected supported VTO control extensions, got %+v", catalog[0].Intercom)
+	}
+	if catalog[0].Intercom.OutputVolumeURL != "http://bridge.local:8080/api/v1/vto/front_vto/audio/output-volume" ||
+		catalog[0].Intercom.InputVolumeURL != "http://bridge.local:8080/api/v1/vto/front_vto/audio/input-volume" ||
+		catalog[0].Intercom.MuteURL != "http://bridge.local:8080/api/v1/vto/front_vto/audio/mute" ||
+		catalog[0].Intercom.RecordingURL != "http://bridge.local:8080/api/v1/vto/front_vto/recording" {
+		t.Fatalf("unexpected VTO control urls %+v", catalog[0].Intercom)
+	}
+	if catalog[0].Intercom.OutputVolumeLevel != 80 || catalog[0].Intercom.InputVolumeLevel != 90 || catalog[0].Intercom.Muted || !catalog[0].Intercom.AutoRecordEnabled || catalog[0].Intercom.AutoRecordTimeSeconds != 11 || !catalog[0].Intercom.StreamAudioEnabled {
+		t.Fatalf("unexpected VTO control state %+v", catalog[0].Intercom)
+	}
+	if len(catalog[0].Intercom.ValidationNotes) != 1 || catalog[0].Intercom.ValidationNotes[0] != "vto_audio_control_surface_config_backed" {
+		t.Fatalf("unexpected vto validation notes %+v", catalog[0].Intercom.ValidationNotes)
+	}
 	if catalog[0].Intercom.SupportsVTOTalkback || catalog[0].Intercom.SupportsFullCallAcceptance {
 		t.Fatalf("expected talkback and full acceptance to remain unsupported, got %+v", catalog[0].Intercom)
 	}
+	if len(catalog[0].Features) != 8 {
+		t.Fatalf("expected 8 vto features, got %+v", catalog[0].Features)
+	}
+	unlock := findFeatureByKey(catalog[0].Features, "unlock")
+	if unlock == nil || unlock.Kind != "targeted_action" || len(unlock.Targets) != 2 {
+		t.Fatalf("unexpected unlock feature %+v", unlock)
+	}
+	outputVolume := findFeatureByKey(catalog[0].Features, "output_volume")
+	if outputVolume == nil || outputVolume.Kind != "level" || outputVolume.CurrentValue == nil || *outputVolume.CurrentValue != 80 {
+		t.Fatalf("unexpected output volume feature %+v", outputVolume)
+	}
+	mute := findFeatureByKey(catalog[0].Features, "mute")
+	if mute == nil || mute.Active == nil || *mute.Active {
+		t.Fatalf("unexpected mute feature %+v", mute)
+	}
+	autoRecord := findFeatureByKey(catalog[0].Features, "auto_record")
+	if autoRecord == nil || autoRecord.Active == nil || !*autoRecord.Active {
+		t.Fatalf("unexpected auto record feature %+v", autoRecord)
+	}
+}
+
+func findFeatureByKey(features []FeatureSummary, key string) *FeatureSummary {
+	for index := range features {
+		if features[index].Key == key {
+			return &features[index]
+		}
+	}
+	return nil
 }
