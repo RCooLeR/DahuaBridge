@@ -81,16 +81,18 @@ media:
   start_timeout: 15s
   # Maximum number of active bridge media workers/sessions. Raise carefully because each worker consumes CPU/RAM.
   max_workers: 14
-  # Default output frame rate for bridge-hosted media transcodes.
+  # Default output frame rate for bridge-hosted main-stream media transcodes such as quality/default.
   frame_rate: 5
+  # Output frame rate for the bridge "stable" profile.
+  stable_frame_rate: 5
+  # Output frame rate for the bridge "substream" profile.
+  substream_frame_rate: 5
   # MJPEG JPEG quality. Lower numbers usually mean better quality and larger frames; tune for your ffmpeg build if needed.
   jpeg_quality: 7
   # ffmpeg thread count. 1 is predictable and lighter on some systems; higher values may improve speed but increase CPU contention.
   threads: 1
-  # Output width for bridge-hosted transcodes. 0 disables width scaling. Typical values are 640, 960, 1280.
+  # Output width for bridge-hosted transcodes. 0 disables scaling. When non-zero, the bridge computes an even output height from the source resolution and preserves aspect ratio.
   scale_width: 960
-  # Output height for bridge-hosted transcodes. 0 means "auto from aspect ratio" when width scaling is set.
-  scale_height: 0
   # Reader buffer size for MJPEG frame parsing. Increase only if you have unusually large bursts or jumbo ffmpeg output chunks.
   read_buffer_size: 1048576
   # HLS segment duration. Lower values reduce latency but create more segments and more ffmpeg churn.

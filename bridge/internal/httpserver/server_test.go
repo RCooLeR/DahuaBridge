@@ -90,6 +90,7 @@ func (s stubSnapshotReader) AdminSettings() map[string]any {
 type stubMediaReader struct {
 	enabled                  bool
 	subscribe                func(context.Context, string, string) (<-chan []byte, func(), error)
+	subscribeScaled          func(context.Context, string, string, int) (<-chan []byte, func(), error)
 	hlsPlaylist              func(context.Context, string, string) ([]byte, error)
 	hlsSegment               func(context.Context, string, string, string) ([]byte, string, error)
 	webrtcOffer              func(context.Context, string, string, mediaapi.WebRTCSessionDescription) (mediaapi.WebRTCSessionDescription, error)
@@ -123,6 +124,21 @@ func (s stubMediaReader) Enabled() bool {
 }
 
 func (s stubMediaReader) Subscribe(ctx context.Context, streamID string, profile string) (<-chan []byte, func(), error) {
+	if s.subscribe != nil {
+		return s.subscribe(ctx, streamID, profile)
+	}
+	if s.subscribeScaled != nil {
+		return s.subscribeScaled(ctx, streamID, profile, 0)
+	}
+	ch := make(chan []byte)
+	close(ch)
+	return ch, func() {}, nil
+}
+
+func (s stubMediaReader) SubscribeScaled(ctx context.Context, streamID string, profile string, scaleWidth int) (<-chan []byte, func(), error) {
+	if s.subscribeScaled != nil {
+		return s.subscribeScaled(ctx, streamID, profile, scaleWidth)
+	}
 	if s.subscribe != nil {
 		return s.subscribe(ctx, streamID, profile)
 	}
@@ -1029,6 +1045,40 @@ func TestMediaMjpegEndpointRateLimited(t *testing.T) {
 	}
 	if rec2.Code != http.StatusTooManyRequests {
 		t.Fatalf("expected second request 429, got %d: %s", rec2.Code, rec2.Body.String())
+	}
+}
+
+func TestMediaMjpegEndpointPassesRequestedWidth(t *testing.T) {
+	server := newTestServerWithConfig(config.HTTPConfig{
+		ListenAddress: ":0",
+		MetricsPath:   "/metrics",
+		HealthPath:    "/healthz",
+	}, stubSnapshotReader{}, stubMediaReader{
+		enabled: true,
+		subscribeScaled: func(_ context.Context, streamID string, profile string, scaleWidth int) (<-chan []byte, func(), error) {
+			if streamID != "front_vto" {
+				t.Fatalf("unexpected stream id: %q", streamID)
+			}
+			if profile != "stable" {
+				t.Fatalf("unexpected profile: %q", profile)
+			}
+			if scaleWidth != 498 {
+				t.Fatalf("unexpected scale width: %d", scaleWidth)
+			}
+			ch := make(chan []byte, 1)
+			ch <- []byte{0xFF, 0xD8, 0xFF, 0xD9}
+			close(ch)
+			return ch, func() {}, nil
+		},
+	}, stubActionReader{}, stubEventReader{})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/media/mjpeg/front_vto?profile=stable&width=498&height=0", nil)
+	rec := httptest.NewRecorder()
+
+	server.httpServer.Handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d: %s", rec.Code, rec.Body.String())
 	}
 }
 

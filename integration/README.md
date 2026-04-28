@@ -36,4 +36,5 @@ Current characteristics:
 
 - unified device grouping for bridge-native camera, sensor, binary sensor, and button entities
 - runtime-configurable poll interval through the Home Assistant options dialog
+- defaults now favor `quality` profile and bridge-hosted `HLS` for more responsive live playback
 - diagnostics download support for support/debugging, with bridge URLs and stream/action URLs redacted

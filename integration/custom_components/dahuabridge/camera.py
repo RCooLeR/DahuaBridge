@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from homeassistant.components.camera import Camera, CameraEntityFeature
 from homeassistant.config_entries import ConfigEntry
@@ -132,7 +133,9 @@ class DahuaBridgeCamera(DahuaBridgeEntity, Camera):
         if not mjpeg_url:
             return await self._placeholder_logo_bytes()
 
-        resolved = self.coordinator.api.bridge_resource_url(mjpeg_url)
+        resolved = self.coordinator.api.bridge_resource_url(
+            _with_requested_width(mjpeg_url, width)
+        )
         _LOGGER.debug(
             "Fetching camera MJPEG frame for %s from %s",
             self.entity_id or self._device_id,
@@ -184,3 +187,21 @@ def read_logo_bytes() -> bytes:
             err,
         )
         return b""
+
+
+def _with_requested_width(target: str, width: int | None) -> str:
+    if width is None or width <= 0:
+        return target
+
+    parsed = urlsplit(target)
+    query = dict(parse_qsl(parsed.query, keep_blank_values=True))
+    query["width"] = str(width)
+    return urlunsplit(
+        (
+            parsed.scheme,
+            parsed.netloc,
+            parsed.path,
+            urlencode(query),
+            parsed.fragment,
+        )
+    )

@@ -389,7 +389,7 @@ func (s *webrtcSession) buildFFmpegArgs(videoPort int, audioPort int, attempt ff
 		"-map", "0:v:0",
 	)
 	args = appendVideoEncoderArgs(args, s.parent.cfg, attempt.useHWAccel, gopSize, "ultrafast")
-	args = appendVideoFilterArgs(args, s.parent.cfg, attempt.useHWAccel, frameRate)
+	args = appendVideoFilterArgs(args, s.parent.cfg, s.parent.cfg.ScaleWidth, s.profile, attempt.useHWAccel, frameRate)
 	args = append(args,
 		"-f", "rtp",
 		fmt.Sprintf("rtp://127.0.0.1:%d?pkt_size=1200", videoPort),
@@ -610,7 +610,6 @@ func (s *webrtcSession) status() WorkerStatus {
 		FrameRate:    maxInt(s.profile.FrameRate, s.parent.cfg.FrameRate),
 		Threads:      s.parent.cfg.Threads,
 		ScaleWidth:   s.parent.cfg.ScaleWidth,
-		ScaleHeight:  s.parent.cfg.ScaleHeight,
 		MaxWorkers:   s.parent.cfg.MaxWorkers,
 		IdleTimeout:  s.parent.cfg.IdleTimeout.String(),
 		FFmpegPath:   s.parent.cfg.FFmpegPath,

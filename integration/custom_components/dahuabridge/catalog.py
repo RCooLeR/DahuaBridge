@@ -282,7 +282,7 @@ def profile_order_for_record(
         return ["quality", "default", recommended, "stable", "substream"]
     if preference == "substream":
         return ["substream", "stable", recommended, "default", "quality"]
-    return [recommended, "stable", "default", "quality", "substream"]
+    return [recommended, "quality", "default", "stable", "substream"]
 
 
 def source_order_for_preference(preferred_source: str = "auto") -> tuple[str, ...]:
@@ -291,7 +291,7 @@ def source_order_for_preference(preferred_source: str = "auto") -> tuple[str, ..
         return ("local_hls_url", "stream_url", "local_mjpeg_url")
     if preference == "mjpeg":
         return ("local_mjpeg_url", "local_hls_url", "stream_url")
-    return ("stream_url", "local_hls_url", "local_mjpeg_url")
+    return ("local_hls_url", "stream_url", "local_mjpeg_url")
 
 
 def bool_field_names(record: dict[str, Any]) -> list[str]:
