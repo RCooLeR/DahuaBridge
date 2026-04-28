@@ -573,7 +573,8 @@ func New(
 		writeJSON(w, http.StatusOK, media.SetIntercomUplinkEnabled(entry.ID, false))
 	})
 	router.Get("/api/v1/home-assistant/native/catalog", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusOK, ha.BuildNativeCatalog(probes.List(), snapshots.ListStreams(false)))
+		includeCredentials := r.URL.Query().Get("include_credentials") == "true"
+		writeJSON(w, http.StatusOK, ha.BuildNativeCatalog(probes.List(), snapshots.ListStreams(includeCredentials)))
 	})
 	router.Get("/api/v1/home-assistant/migration/plan", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, ha.BuildHAMigrationPlan(probes.List(), snapshots.ListStreams(false)))

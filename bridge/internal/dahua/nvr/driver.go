@@ -15,6 +15,7 @@ import (
 	"RCooLeR/DahuaBridge/internal/config"
 	"RCooLeR/DahuaBridge/internal/dahua"
 	"RCooLeR/DahuaBridge/internal/dahua/cgi"
+	dahuartsp "RCooLeR/DahuaBridge/internal/dahua/rtsp"
 	"RCooLeR/DahuaBridge/internal/onvif"
 	"github.com/rs/zerolog"
 )
@@ -23,6 +24,7 @@ type Driver struct {
 	cfgMu  sync.RWMutex
 	cfg    config.DeviceConfig
 	client *cgi.Client
+	rtsp   *dahuartsp.Checker
 	onvif  *onvif.Client
 	logger zerolog.Logger
 
@@ -64,20 +66,22 @@ type diskSummary struct {
 }
 
 var (
-	channelNamePattern       = regexp.MustCompile(`^table\.ChannelTitle\[(\d+)\]\.Name$`)
-	encodeResolutionPattern  = regexp.MustCompile(`^table\.Encode\[(\d+)\]\.(MainFormat|ExtraFormat)\[0\]\.Video\.resolution$`)
-	encodeCompressionPattern = regexp.MustCompile(`^table\.Encode\[(\d+)\]\.(MainFormat|ExtraFormat)\[0\]\.Video\.Compression$`)
-	storageNamePattern       = regexp.MustCompile(`^list\.info\[(\d+)\]\.Name$`)
-	storageStatePattern      = regexp.MustCompile(`^list\.info\[(\d+)\]\.State$`)
-	storageDetailTotal       = regexp.MustCompile(`^list\.info\[(\d+)\]\.Detail\[(\d+)\]\.TotalBytes$`)
-	storageDetailUsed        = regexp.MustCompile(`^list\.info\[(\d+)\]\.Detail\[(\d+)\]\.UsedBytes$`)
-	storageDetailError       = regexp.MustCompile(`^list\.info\[(\d+)\]\.Detail\[(\d+)\]\.IsError$`)
+	channelNamePattern            = regexp.MustCompile(`^table\.ChannelTitle\[(\d+)\]\.Name$`)
+	encodeResolutionPattern       = regexp.MustCompile(`^table\.Encode\[(\d+)\]\.(MainFormat|ExtraFormat)\[0\]\.Video\.resolution$`)
+	encodeCompressionPattern      = regexp.MustCompile(`^table\.Encode\[(\d+)\]\.(MainFormat|ExtraFormat)\[0\]\.Video\.Compression$`)
+	storageNamePattern            = regexp.MustCompile(`^list\.info\[(\d+)\]\.Name$`)
+	storageStatePattern           = regexp.MustCompile(`^list\.info\[(\d+)\]\.State$`)
+	storageDetailTotal            = regexp.MustCompile(`^list\.info\[(\d+)\]\.Detail\[(\d+)\]\.TotalBytes$`)
+	storageDetailUsed             = regexp.MustCompile(`^list\.info\[(\d+)\]\.Detail\[(\d+)\]\.UsedBytes$`)
+	storageDetailError            = regexp.MustCompile(`^list\.info\[(\d+)\]\.Detail\[(\d+)\]\.IsError$`)
+	placeholderChannelNamePattern = regexp.MustCompile(`(?i)^\s*(channel|канал)\s*0*(\d+)\s*$`)
 )
 
 func New(cfg config.DeviceConfig, logger zerolog.Logger, client *cgi.Client) *Driver {
 	return &Driver{
 		cfg:    cfg,
 		client: client,
+		rtsp:   dahuartsp.NewChecker(cfg),
 		onvif:  onvif.New(cfg),
 		logger: logger.With().Str("device_id", cfg.ID).Str("device_type", string(dahua.DeviceKindNVR)).Logger(),
 	}
@@ -191,6 +195,9 @@ func (d *Driver) Probe(ctx context.Context) (*dahua.ProbeResult, error) {
 	}
 
 	for _, channel := range channels {
+		if !channelInventoryWanted(cfg, channel) {
+			continue
+		}
 		childID := channelDeviceID(cfg.ID, channel.Index)
 		children = append(children, dahua.Device{
 			ID:           childID,
@@ -227,6 +234,7 @@ func (d *Driver) Probe(ctx context.Context) (*dahua.ProbeResult, error) {
 				"rtsp_main_url":    buildRTSPURL(cfg.BaseURL, channel.Index+1, 0),
 				"rtsp_sub_url":     buildRTSPURL(cfg.BaseURL, channel.Index+1, 1),
 				"snapshot_rel_url": fmt.Sprintf("/api/v1/nvr/%s/channels/%d/snapshot", cfg.ID, channel.Index+1),
+				"stream_available": d.streamAvailable(ctx, cfg, channel.Index+1),
 			},
 		}
 
@@ -353,6 +361,7 @@ func (d *Driver) UpdateConfig(cfg config.DeviceConfig) error {
 	d.cfg = cfg
 	d.cfgMu.Unlock()
 	d.client.UpdateConfig(cfg)
+	d.rtsp.UpdateConfig(cfg)
 	d.onvif.UpdateConfig(cfg)
 	d.InvalidateInventoryCache()
 	return nil
@@ -538,6 +547,42 @@ func mergeChannelInventory(titles map[int]string, streams map[int]channelInvento
 	return items
 }
 
+func channelInventoryUsable(item channelInventory) bool {
+	return strings.TrimSpace(item.MainResolution) != "" ||
+		strings.TrimSpace(item.MainCodec) != "" ||
+		strings.TrimSpace(item.SubResolution) != "" ||
+		strings.TrimSpace(item.SubCodec) != ""
+}
+
+func channelInventoryWanted(cfg config.DeviceConfig, item channelInventory) bool {
+	channelNumber := item.Index + 1
+	if !cfg.AllowsChannel(channelNumber) {
+		return false
+	}
+	if !channelInventoryUsable(item) {
+		return false
+	}
+	return !channelInventoryLooksLikePlaceholder(item)
+}
+
+func channelInventoryLooksLikePlaceholder(item channelInventory) bool {
+	name := strings.TrimSpace(item.Name)
+	if name == "" {
+		return false
+	}
+
+	matches := placeholderChannelNamePattern.FindStringSubmatch(name)
+	if len(matches) != 3 {
+		return false
+	}
+
+	index, err := strconv.Atoi(matches[2])
+	if err != nil {
+		return false
+	}
+	return index == item.Index+1
+}
+
 func parseDiskInventory(values map[string]string) []diskInventory {
 	type aggregate struct {
 		diskInventory
@@ -670,4 +715,16 @@ func buildRTSPURL(baseURL string, channel int, subtype int) string {
 		RawQuery: url.Values{"channel": []string{strconv.Itoa(channel)}, "subtype": []string{strconv.Itoa(subtype)}}.Encode(),
 	}
 	return rtspURL.String()
+}
+
+func (d *Driver) streamAvailable(ctx context.Context, cfg config.DeviceConfig, channel int) bool {
+	available, err := d.rtsp.StreamAvailable(
+		ctx,
+		buildRTSPURL(cfg.BaseURL, channel, 1),
+		buildRTSPURL(cfg.BaseURL, channel, 0),
+	)
+	if err != nil {
+		d.logger.Debug().Err(err).Int("channel", channel).Msg("rtsp availability probe failed")
+	}
+	return available
 }

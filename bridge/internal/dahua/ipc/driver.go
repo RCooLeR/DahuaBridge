@@ -15,6 +15,7 @@ import (
 	"RCooLeR/DahuaBridge/internal/dahua"
 	"RCooLeR/DahuaBridge/internal/dahua/cgi"
 	"RCooLeR/DahuaBridge/internal/dahua/rpc"
+	dahuartsp "RCooLeR/DahuaBridge/internal/dahua/rtsp"
 	"RCooLeR/DahuaBridge/internal/onvif"
 	"github.com/rs/zerolog"
 )
@@ -24,6 +25,7 @@ type Driver struct {
 	cfg    config.DeviceConfig
 	cgi    *cgi.Client
 	rpc    *rpc.Client
+	rtsp   *dahuartsp.Checker
 	onvif  *onvif.Client
 	logger zerolog.Logger
 }
@@ -33,6 +35,7 @@ func New(cfg config.DeviceConfig, logger zerolog.Logger, client *cgi.Client) *Dr
 		cfg:    cfg,
 		cgi:    client,
 		rpc:    rpc.New(cfg),
+		rtsp:   dahuartsp.NewChecker(cfg),
 		onvif:  onvif.New(cfg),
 		logger: logger.With().Str("device_id", cfg.ID).Str("device_type", string(dahua.DeviceKindIPC)).Logger(),
 	}
@@ -152,6 +155,7 @@ func (d *Driver) Probe(ctx context.Context) (*dahua.ProbeResult, error) {
 				"rtsp_main_url":    buildRTSPURL(cfg.BaseURL, 1, 0),
 				"rtsp_sub_url":     buildRTSPURL(cfg.BaseURL, 1, 1),
 				"snapshot_rel_url": fmt.Sprintf("/api/v1/ipc/%s/snapshot", cfg.ID),
+				"stream_available": d.streamAvailable(ctx, cfg),
 			},
 		},
 	}
@@ -268,6 +272,7 @@ func (d *Driver) UpdateConfig(cfg config.DeviceConfig) error {
 	d.mu.Unlock()
 	d.cgi.UpdateConfig(cfg)
 	d.rpc.UpdateConfig(cfg)
+	d.rtsp.UpdateConfig(cfg)
 	d.onvif.UpdateConfig(cfg)
 	return nil
 }
@@ -350,6 +355,18 @@ func buildRTSPURL(baseURL string, channel int, subtype int) string {
 		RawQuery: url.Values{"channel": []string{strconv.Itoa(channel)}, "subtype": []string{strconv.Itoa(subtype)}}.Encode(),
 	}
 	return rtspURL.String()
+}
+
+func (d *Driver) streamAvailable(ctx context.Context, cfg config.DeviceConfig) bool {
+	available, err := d.rtsp.StreamAvailable(
+		ctx,
+		buildRTSPURL(cfg.BaseURL, 1, 1),
+		buildRTSPURL(cfg.BaseURL, 1, 0),
+	)
+	if err != nil {
+		d.logger.Debug().Err(err).Msg("rtsp availability probe failed")
+	}
+	return available
 }
 
 var _ dahua.Driver = (*Driver)(nil)

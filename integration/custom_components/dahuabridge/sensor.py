@@ -17,6 +17,7 @@ from .catalog import (
 )
 from .const import DOMAIN
 from .entity import DahuaBridgeEntity
+from .registry_cleanup import prune_stale_entities
 
 
 async def async_setup_entry(
@@ -28,6 +29,7 @@ async def async_setup_entry(
     @callback
     def async_discover_entities() -> None:
         new_entities: list[SensorEntity] = []
+        desired_unique_ids: set[str] = set()
 
         for record in catalog_records(coordinator.data):
             device_id = device_id_for_record(record)
@@ -36,11 +38,20 @@ async def async_setup_entry(
 
             for field in scalar_field_names(record):
                 entity_key = f"{device_id}:{field}"
+                desired_unique_ids.add(f"{device_id}_{field}")
                 if entity_key in seen:
                     continue
                 seen.add(entity_key)
                 new_entities.append(DahuaBridgeStateSensor(coordinator, device_id, field))
 
+        if coordinator.can_prune_registry:
+            prune_stale_entities(
+                hass,
+                entry,
+                "sensor",
+                desired_unique_ids,
+                coordinator.stale_entity_miss_counts,
+            )
         if new_entities:
             async_add_entities(new_entities)
 
@@ -64,4 +75,4 @@ class DahuaBridgeStateSensor(DahuaBridgeEntity, SensorEntity):
 
     @property
     def available(self) -> bool:
-        return super().available and self.device_online
+        return super().available

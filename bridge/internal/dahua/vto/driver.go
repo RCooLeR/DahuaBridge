@@ -15,6 +15,7 @@ import (
 	"RCooLeR/DahuaBridge/internal/config"
 	"RCooLeR/DahuaBridge/internal/dahua"
 	"RCooLeR/DahuaBridge/internal/dahua/cgi"
+	dahuartsp "RCooLeR/DahuaBridge/internal/dahua/rtsp"
 	"RCooLeR/DahuaBridge/internal/onvif"
 	"github.com/rs/zerolog"
 )
@@ -24,8 +25,12 @@ type Driver struct {
 	cfg    config.DeviceConfig
 	client *cgi.Client
 	rpc    *rpcClient
+	rtsp   *dahuartsp.Checker
 	onvif  *onvif.Client
 	logger zerolog.Logger
+
+	probeCache       *cachedProbeMetadata
+	probeCacheExpiry time.Time
 }
 
 type lockInventory struct {
@@ -44,6 +49,17 @@ type alarmInventory struct {
 	Enabled     bool
 }
 
+type cachedProbeMetadata struct {
+	systemInfo      map[string]string
+	machineName     map[string]string
+	softwareVersion string
+	accessKV        map[string]string
+	commKV          map[string]string
+	alarmKV         map[string]string
+	encodeKV        map[string]string
+	onvifDiscovery  *onvif.Discovery
+}
+
 var (
 	vtoAccessNamePattern         = regexp.MustCompile(`^table\.AccessControl\[(\d+)\]\.Name$`)
 	vtoAccessStatePattern        = regexp.MustCompile(`^table\.AccessControl\[(\d+)\]\.State$`)
@@ -55,6 +71,11 @@ var (
 	vtoAlarmEnablePattern        = regexp.MustCompile(`^table\.Alarm\[(\d+)\]\.Enable$`)
 )
 
+const (
+	vtoProbeMetadataCacheTTL     = 15 * time.Minute
+	vtoProbeMetadataRetryBackoff = 3 * time.Minute
+)
+
 func New(cfg config.DeviceConfig, logger zerolog.Logger, client *cgi.Client) *Driver {
 	rpc, err := newRPCClient(cfg)
 	if err != nil {
@@ -64,6 +85,7 @@ func New(cfg config.DeviceConfig, logger zerolog.Logger, client *cgi.Client) *Dr
 		cfg:    cfg,
 		client: client,
 		rpc:    rpc,
+		rtsp:   dahuartsp.NewChecker(cfg),
 		onvif:  onvif.New(cfg),
 		logger: logger.With().Str("device_id", cfg.ID).Str("device_type", string(dahua.DeviceKindVTO)).Logger(),
 	}
@@ -87,75 +109,29 @@ func (d *Driver) PollInterval() time.Duration {
 
 func (d *Driver) Probe(ctx context.Context) (*dahua.ProbeResult, error) {
 	cfg := d.currentConfig()
-	systemInfo, err := d.client.GetKeyValues(ctx, "/cgi-bin/magicBox.cgi", url.Values{
-		"action": []string{"getSystemInfo"},
-	})
+	metadata, err := d.loadProbeMetadata(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("fetch system info: %w", err)
+		return nil, err
 	}
 
-	machineName, err := d.client.GetKeyValues(ctx, "/cgi-bin/magicBox.cgi", url.Values{
-		"action": []string{"getMachineName"},
-	})
-	if err != nil {
-		d.logger.Warn().Err(err).Msg("machine name probe failed")
-	}
-
-	softwareVersion, err := d.client.GetText(ctx, "/cgi-bin/magicBox.cgi", url.Values{
-		"action": []string{"getSoftwareVersion"},
-	})
-	if err != nil {
-		d.logger.Warn().Err(err).Msg("software version probe failed")
-	}
-
-	accessKV, err := d.client.GetKeyValues(ctx, "/cgi-bin/configManager.cgi", url.Values{
-		"action": []string{"getConfig"},
-		"name":   []string{"AccessControl"},
-	})
-	if err != nil {
-		d.logger.Warn().Err(err).Msg("access control probe failed")
-	}
-
-	commKV, err := d.client.GetKeyValues(ctx, "/cgi-bin/configManager.cgi", url.Values{
-		"action": []string{"getConfig"},
-		"name":   []string{"CommGlobal"},
-	})
-	if err != nil {
-		d.logger.Warn().Err(err).Msg("comm global probe failed")
-	}
-
-	alarmKV, err := d.client.GetKeyValues(ctx, "/cgi-bin/configManager.cgi", url.Values{
-		"action": []string{"getConfig"},
-		"name":   []string{"Alarm"},
-	})
-	if err != nil {
-		d.logger.Warn().Err(err).Msg("alarm probe failed")
-	}
-
-	encodeKV, err := d.client.GetKeyValues(ctx, "/cgi-bin/configManager.cgi", url.Values{
-		"action": []string{"getConfig"},
-		"name":   []string{"Encode"},
-	})
-	if err != nil {
-		d.logger.Warn().Err(err).Msg("encode probe failed")
-	}
-
-	name := firstNonEmpty(machineName["name"], cfg.Name, cfg.ID)
-	firmware, buildDate := parseSoftwareVersion(softwareVersion)
-	mainResolution, mainCodec, subResolution, subCodec, audioCodec := parseVTOEncode(encodeKV)
-	locks := parseVTOLocks(accessKV)
-	alarms := parseVTOAlarms(alarmKV)
+	name := firstNonEmpty(metadata.machineName["name"], cfg.Name, cfg.ID)
+	firmware, buildDate := parseSoftwareVersion(metadata.softwareVersion)
+	mainResolution, mainCodec, subResolution, subCodec, audioCodec := parseVTOEncode(metadata.encodeKV)
+	locks := parseVTOLocks(metadata.accessKV)
+	alarms := parseVTOAlarms(metadata.alarmKV)
+	locks = filterVTOLocks(cfg, locks)
+	alarms = filterVTOAlarms(cfg, alarms)
 
 	raw := map[string]string{
-		"deviceType":      systemInfo["deviceType"],
-		"processor":       systemInfo["processor"],
-		"serialNumber":    systemInfo["serialNumber"],
-		"updateSerial":    systemInfo["updateSerial"],
+		"deviceType":      metadata.systemInfo["deviceType"],
+		"processor":       metadata.systemInfo["processor"],
+		"serialNumber":    metadata.systemInfo["serialNumber"],
+		"updateSerial":    metadata.systemInfo["updateSerial"],
 		"name":            name,
 		"version":         firmware,
 		"build_date":      buildDate,
-		"current_profile": commKV["table.CommGlobal.CurrentProfile"],
-		"alarm_enable":    commKV["table.CommGlobal.AlarmEnable"],
+		"current_profile": metadata.commKV["table.CommGlobal.CurrentProfile"],
+		"alarm_enable":    metadata.commKV["table.CommGlobal.AlarmEnable"],
 		"main_resolution": mainResolution,
 		"main_codec":      mainCodec,
 		"sub_resolution":  subResolution,
@@ -167,18 +143,18 @@ func (d *Driver) Probe(ctx context.Context) (*dahua.ProbeResult, error) {
 		ID:           cfg.ID,
 		Name:         name,
 		Manufacturer: cfg.Manufacturer,
-		Model:        firstNonEmpty(cfg.Model, systemInfo["updateSerial"]),
-		Serial:       systemInfo["serialNumber"],
+		Model:        firstNonEmpty(cfg.Model, metadata.systemInfo["updateSerial"]),
+		Serial:       metadata.systemInfo["serialNumber"],
 		Firmware:     firmware,
 		BuildDate:    buildDate,
 		BaseURL:      cfg.BaseURL,
 		Kind:         dahua.DeviceKindVTO,
 		Attributes: map[string]string{
-			"device_type":       systemInfo["deviceType"],
-			"processor":         systemInfo["processor"],
-			"update_serial":     systemInfo["updateSerial"],
-			"current_profile":   commKV["table.CommGlobal.CurrentProfile"],
-			"alarm_enable":      commKV["table.CommGlobal.AlarmEnable"],
+			"device_type":       metadata.systemInfo["deviceType"],
+			"processor":         metadata.systemInfo["processor"],
+			"update_serial":     metadata.systemInfo["updateSerial"],
+			"current_profile":   metadata.commKV["table.CommGlobal.CurrentProfile"],
+			"alarm_enable":      metadata.commKV["table.CommGlobal.AlarmEnable"],
 			"main_resolution":   mainResolution,
 			"main_codec":        mainCodec,
 			"sub_resolution":    subResolution,
@@ -198,11 +174,11 @@ func (d *Driver) Probe(ctx context.Context) (*dahua.ProbeResult, error) {
 			Available: true,
 			Info: map[string]any{
 				"name":              name,
-				"serial":            systemInfo["serialNumber"],
+				"serial":            metadata.systemInfo["serialNumber"],
 				"firmware":          firmware,
 				"build_date":        buildDate,
-				"current_profile":   commKV["table.CommGlobal.CurrentProfile"],
-				"alarm_enable":      parseBool(commKV["table.CommGlobal.AlarmEnable"]),
+				"current_profile":   metadata.commKV["table.CommGlobal.CurrentProfile"],
+				"alarm_enable":      parseBool(metadata.commKV["table.CommGlobal.AlarmEnable"]),
 				"main_resolution":   mainResolution,
 				"main_codec":        mainCodec,
 				"sub_resolution":    subResolution,
@@ -214,57 +190,54 @@ func (d *Driver) Probe(ctx context.Context) (*dahua.ProbeResult, error) {
 				"lock_count":        len(locks),
 				"alarm_input_count": len(alarms),
 				"call_state":        "idle",
+				"stream_available":  d.streamAvailable(ctx, cfg),
 			},
 		},
 	}
 
-	if d.onvif.Enabled() {
-		discovery, err := d.onvif.Discover(ctx)
-		if err != nil {
-			d.logger.Warn().Err(err).Msg("onvif probe failed")
-		} else {
-			root.Attributes["onvif_h264_profile_count"] = strconv.Itoa(discovery.H264ProfileCount())
-			root.Attributes["onvif_device_service_url"] = discovery.DeviceServiceURL
-			root.Attributes["onvif_media_service_url"] = discovery.MediaServiceURL
-			raw["onvif_device_service_url"] = discovery.DeviceServiceURL
-			raw["onvif_media_service_url"] = discovery.MediaServiceURL
-			raw["onvif_h264_profile_count"] = strconv.Itoa(discovery.H264ProfileCount())
+	if metadata.onvifDiscovery != nil {
+		discovery := metadata.onvifDiscovery
+		root.Attributes["onvif_h264_profile_count"] = strconv.Itoa(discovery.H264ProfileCount())
+		root.Attributes["onvif_device_service_url"] = discovery.DeviceServiceURL
+		root.Attributes["onvif_media_service_url"] = discovery.MediaServiceURL
+		raw["onvif_device_service_url"] = discovery.DeviceServiceURL
+		raw["onvif_media_service_url"] = discovery.MediaServiceURL
+		raw["onvif_h264_profile_count"] = strconv.Itoa(discovery.H264ProfileCount())
 
-			state := states[cfg.ID]
-			state.Info["onvif_probed"] = true
-			state.Info["onvif_device_service_url"] = discovery.DeviceServiceURL
-			state.Info["onvif_media_service_url"] = discovery.MediaServiceURL
-			state.Info["onvif_h264_profile_count"] = discovery.H264ProfileCount()
-			state.Info["onvif_profiles"] = discovery.ProfileMaps()
+		state := states[cfg.ID]
+		state.Info["onvif_probed"] = true
+		state.Info["onvif_device_service_url"] = discovery.DeviceServiceURL
+		state.Info["onvif_media_service_url"] = discovery.MediaServiceURL
+		state.Info["onvif_h264_profile_count"] = discovery.H264ProfileCount()
+		state.Info["onvif_profiles"] = discovery.ProfileMaps()
 
-			best, ok := discovery.BestH264ProfileForChannel(1)
-			if ok {
-				root.Attributes["onvif_h264_available"] = "true"
-				root.Attributes["onvif_profile_token"] = best.Token
-				root.Attributes["onvif_profile_name"] = best.Name
-				root.Attributes["onvif_stream_url"] = best.StreamURI
-				if best.SnapshotURI != "" {
-					root.Attributes["onvif_snapshot_url"] = best.SnapshotURI
-				}
-				root.Attributes["recommended_ha_integration"] = "onvif"
-
-				state.Info["onvif_h264_available"] = true
-				state.Info["onvif_profile_token"] = best.Token
-				state.Info["onvif_profile_name"] = best.Name
-				state.Info["onvif_stream_url"] = best.StreamURI
-				if best.SnapshotURI != "" {
-					state.Info["onvif_snapshot_url"] = best.SnapshotURI
-				}
-				state.Info["recommended_ha_integration"] = "onvif"
-			} else {
-				root.Attributes["onvif_h264_available"] = "false"
-				root.Attributes["recommended_ha_integration"] = "bridge_media"
-				state.Info["onvif_h264_available"] = false
-				state.Info["recommended_ha_integration"] = "bridge_media"
+		best, ok := discovery.BestH264ProfileForChannel(1)
+		if ok {
+			root.Attributes["onvif_h264_available"] = "true"
+			root.Attributes["onvif_profile_token"] = best.Token
+			root.Attributes["onvif_profile_name"] = best.Name
+			root.Attributes["onvif_stream_url"] = best.StreamURI
+			if best.SnapshotURI != "" {
+				root.Attributes["onvif_snapshot_url"] = best.SnapshotURI
 			}
+			root.Attributes["recommended_ha_integration"] = "onvif"
 
-			states[cfg.ID] = state
+			state.Info["onvif_h264_available"] = true
+			state.Info["onvif_profile_token"] = best.Token
+			state.Info["onvif_profile_name"] = best.Name
+			state.Info["onvif_stream_url"] = best.StreamURI
+			if best.SnapshotURI != "" {
+				state.Info["onvif_snapshot_url"] = best.SnapshotURI
+			}
+			state.Info["recommended_ha_integration"] = "onvif"
+		} else {
+			root.Attributes["onvif_h264_available"] = "false"
+			root.Attributes["recommended_ha_integration"] = "bridge_media"
+			state.Info["onvif_h264_available"] = false
+			state.Info["recommended_ha_integration"] = "bridge_media"
 		}
+
+		states[cfg.ID] = state
 	}
 
 	for _, lock := range locks {
@@ -423,6 +396,8 @@ func (d *Driver) videoTalkPhoneCallState(ctx context.Context, objectID int64) (s
 func (d *Driver) UpdateConfig(cfg config.DeviceConfig) error {
 	d.mu.Lock()
 	d.cfg = cfg
+	d.probeCache = nil
+	d.probeCacheExpiry = time.Time{}
 	d.mu.Unlock()
 	d.client.UpdateConfig(cfg)
 	if d.rpc != nil {
@@ -430,6 +405,7 @@ func (d *Driver) UpdateConfig(cfg config.DeviceConfig) error {
 			return err
 		}
 	}
+	d.rtsp.UpdateConfig(cfg)
 	d.onvif.UpdateConfig(cfg)
 	return nil
 }
@@ -552,6 +528,36 @@ func parseVTOAlarms(values map[string]string) []alarmInventory {
 	return result
 }
 
+func filterVTOLocks(cfg config.DeviceConfig, items []lockInventory) []lockInventory {
+	if len(items) == 0 {
+		return nil
+	}
+
+	filtered := make([]lockInventory, 0, len(items))
+	for _, item := range items {
+		if !cfg.AllowsLock(item.Index + 1) {
+			continue
+		}
+		filtered = append(filtered, item)
+	}
+	return filtered
+}
+
+func filterVTOAlarms(cfg config.DeviceConfig, items []alarmInventory) []alarmInventory {
+	if len(items) == 0 {
+		return nil
+	}
+
+	filtered := make([]alarmInventory, 0, len(items))
+	for _, item := range items {
+		if !cfg.AllowsAlarm(item.Index + 1) {
+			continue
+		}
+		filtered = append(filtered, item)
+	}
+	return filtered
+}
+
 func parseVTOEncode(values map[string]string) (mainResolution string, mainCodec string, subResolution string, subCodec string, audioCodec string) {
 	mainResolution = values["table.Encode[0].MainFormat[0].Video.resolution"]
 	mainCodec = values["table.Encode[0].MainFormat[0].Video.Compression"]
@@ -601,6 +607,190 @@ func buildVTOStreamURL(baseURL string, subtype int) string {
 		Path:     "/cam/realmonitor",
 		RawQuery: url.Values{"channel": []string{"1"}, "subtype": []string{strconv.Itoa(subtype)}}.Encode(),
 	}).String()
+}
+
+func (d *Driver) streamAvailable(ctx context.Context, cfg config.DeviceConfig) bool {
+	available, err := d.rtsp.StreamAvailable(
+		ctx,
+		buildVTOStreamURL(cfg.BaseURL, 1),
+		buildVTOStreamURL(cfg.BaseURL, 0),
+	)
+	if err != nil {
+		d.logger.Debug().Err(err).Msg("rtsp availability probe failed")
+	}
+	return available
+}
+
+func (d *Driver) loadProbeMetadata(ctx context.Context) (*cachedProbeMetadata, error) {
+	if cached, ok := d.cachedProbeMetadata(); ok {
+		return cached, nil
+	}
+
+	stale := d.cachedProbeMetadataStale()
+	metadata := cloneCachedProbeMetadata(stale)
+	if metadata == nil {
+		metadata = &cachedProbeMetadata{}
+	}
+	refreshed := false
+
+	systemInfo, err := d.client.GetKeyValues(ctx, "/cgi-bin/magicBox.cgi", url.Values{
+		"action": []string{"getSystemInfo"},
+	})
+	if err != nil {
+		if len(metadata.systemInfo) == 0 {
+			return nil, fmt.Errorf("fetch system info: %w", err)
+		}
+		d.logger.Warn().Err(err).Msg("system info probe failed, using cached value")
+	} else {
+		metadata.systemInfo = cloneStringMap(systemInfo)
+		refreshed = true
+	}
+
+	if machineName, err := d.client.GetKeyValues(ctx, "/cgi-bin/magicBox.cgi", url.Values{
+		"action": []string{"getMachineName"},
+	}); err != nil {
+		d.logCachedProbeFailure("machine name probe failed", err, len(metadata.machineName) > 0)
+	} else {
+		metadata.machineName = cloneStringMap(machineName)
+		refreshed = true
+	}
+
+	if softwareVersion, err := d.client.GetText(ctx, "/cgi-bin/magicBox.cgi", url.Values{
+		"action": []string{"getSoftwareVersion"},
+	}); err != nil {
+		d.logCachedProbeFailure("software version probe failed", err, metadata.softwareVersion != "")
+	} else {
+		metadata.softwareVersion = softwareVersion
+		refreshed = true
+	}
+
+	if accessKV, err := d.client.GetKeyValues(ctx, "/cgi-bin/configManager.cgi", url.Values{
+		"action": []string{"getConfig"},
+		"name":   []string{"AccessControl"},
+	}); err != nil {
+		d.logCachedProbeFailure("access control probe failed", err, len(metadata.accessKV) > 0)
+	} else {
+		metadata.accessKV = cloneStringMap(accessKV)
+		refreshed = true
+	}
+
+	if commKV, err := d.client.GetKeyValues(ctx, "/cgi-bin/configManager.cgi", url.Values{
+		"action": []string{"getConfig"},
+		"name":   []string{"CommGlobal"},
+	}); err != nil {
+		d.logCachedProbeFailure("comm global probe failed", err, len(metadata.commKV) > 0)
+	} else {
+		metadata.commKV = cloneStringMap(commKV)
+		refreshed = true
+	}
+
+	if alarmKV, err := d.client.GetKeyValues(ctx, "/cgi-bin/configManager.cgi", url.Values{
+		"action": []string{"getConfig"},
+		"name":   []string{"Alarm"},
+	}); err != nil {
+		d.logCachedProbeFailure("alarm probe failed", err, len(metadata.alarmKV) > 0)
+	} else {
+		metadata.alarmKV = cloneStringMap(alarmKV)
+		refreshed = true
+	}
+
+	if encodeKV, err := d.client.GetKeyValues(ctx, "/cgi-bin/configManager.cgi", url.Values{
+		"action": []string{"getConfig"},
+		"name":   []string{"Encode"},
+	}); err != nil {
+		d.logCachedProbeFailure("encode probe failed", err, len(metadata.encodeKV) > 0)
+	} else {
+		metadata.encodeKV = cloneStringMap(encodeKV)
+		refreshed = true
+	}
+
+	if d.onvif.Enabled() {
+		if discovery, err := d.onvif.Discover(ctx); err != nil {
+			d.logCachedProbeFailure("onvif probe failed", err, metadata.onvifDiscovery != nil)
+		} else {
+			metadata.onvifDiscovery = cloneONVIFDiscovery(discovery)
+			refreshed = true
+		}
+	}
+
+	d.storeProbeMetadata(metadata, d.nextProbeMetadataTTL(refreshed, stale != nil))
+	return metadata, nil
+}
+
+func (d *Driver) logCachedProbeFailure(message string, err error, cached bool) {
+	event := d.logger.Warn().Err(err)
+	if cached {
+		event.Msg(message + ", using cached value")
+		return
+	}
+	event.Msg(message)
+}
+
+func (d *Driver) cachedProbeMetadata() (*cachedProbeMetadata, bool) {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	if d.probeCache == nil || time.Now().After(d.probeCacheExpiry) {
+		return nil, false
+	}
+	return cloneCachedProbeMetadata(d.probeCache), true
+}
+
+func (d *Driver) cachedProbeMetadataStale() *cachedProbeMetadata {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	return cloneCachedProbeMetadata(d.probeCache)
+}
+
+func (d *Driver) storeProbeMetadata(metadata *cachedProbeMetadata, ttl time.Duration) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.probeCache = cloneCachedProbeMetadata(metadata)
+	d.probeCacheExpiry = time.Now().Add(ttl)
+}
+
+func (d *Driver) nextProbeMetadataTTL(refreshed bool, hadStale bool) time.Duration {
+	if !refreshed && hadStale {
+		return vtoProbeMetadataRetryBackoff
+	}
+	return vtoProbeMetadataCacheTTL
+}
+
+func cloneCachedProbeMetadata(value *cachedProbeMetadata) *cachedProbeMetadata {
+	if value == nil {
+		return nil
+	}
+	return &cachedProbeMetadata{
+		systemInfo:      cloneStringMap(value.systemInfo),
+		machineName:     cloneStringMap(value.machineName),
+		softwareVersion: value.softwareVersion,
+		accessKV:        cloneStringMap(value.accessKV),
+		commKV:          cloneStringMap(value.commKV),
+		alarmKV:         cloneStringMap(value.alarmKV),
+		encodeKV:        cloneStringMap(value.encodeKV),
+		onvifDiscovery:  cloneONVIFDiscovery(value.onvifDiscovery),
+	}
+}
+
+func cloneStringMap(value map[string]string) map[string]string {
+	if len(value) == 0 {
+		return nil
+	}
+	cloned := make(map[string]string, len(value))
+	for key, item := range value {
+		cloned[key] = item
+	}
+	return cloned
+}
+
+func cloneONVIFDiscovery(value *onvif.Discovery) *onvif.Discovery {
+	if value == nil {
+		return nil
+	}
+	cloned := *value
+	if len(value.Profiles) > 0 {
+		cloned.Profiles = append([]onvif.Profile(nil), value.Profiles...)
+	}
+	return &cloned
 }
 
 var _ dahua.Driver = (*Driver)(nil)

@@ -318,8 +318,8 @@ func applyHASelection(entry *Entry, state dahua.DeviceState) {
 }
 
 func recommendProfile(mainCodec string, mainResolution string, subCodec string, subResolution string) string {
-	mainCodec = strings.ToLower(strings.TrimSpace(mainCodec))
-	if strings.Contains(mainCodec, "265") || strings.Contains(mainCodec, "hevc") {
+	switch codecFamily(mainCodec) {
+	case "h265":
 		return "stable"
 	}
 
@@ -333,6 +333,31 @@ func recommendProfile(mainCodec string, mainResolution string, subCodec string, 
 	}
 
 	return "quality"
+}
+
+func codecFamily(codec string) string {
+	normalized := strings.ToLower(strings.TrimSpace(codec))
+	normalized = strings.ReplaceAll(normalized, "smart", "")
+	normalized = strings.ReplaceAll(normalized, "+", "")
+	normalized = strings.ReplaceAll(normalized, ".", "")
+	normalized = strings.ReplaceAll(normalized, "-", "")
+	normalized = strings.ReplaceAll(normalized, "_", "")
+	normalized = strings.ReplaceAll(normalized, " ", "")
+
+	switch {
+	case strings.Contains(normalized, "265"), strings.Contains(normalized, "hevc"):
+		return "h265"
+	case strings.Contains(normalized, "264"), strings.Contains(normalized, "avc"):
+		return "h264"
+	case strings.Contains(normalized, "mjpeg"), strings.Contains(normalized, "mjpg"):
+		return "mjpeg"
+	case strings.Contains(normalized, "mpeg4"):
+		return "mpeg4"
+	case strings.Contains(normalized, "svac"):
+		return "svac"
+	default:
+		return normalized
+	}
 }
 
 func valueOrState(value string, state dahua.DeviceState, key string) string {

@@ -8,6 +8,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from .catalog import button_specs_for_record, catalog_records, device_id_for_record
 from .const import DOMAIN
 from .entity import DahuaBridgeEntity
+from .registry_cleanup import prune_stale_entities
 
 
 async def async_setup_entry(
@@ -19,6 +20,7 @@ async def async_setup_entry(
     @callback
     def async_discover_entities() -> None:
         new_entities: list[ButtonEntity] = []
+        desired_unique_ids: set[str] = set()
 
         for record in catalog_records(coordinator.data):
             device_id = device_id_for_record(record)
@@ -27,6 +29,7 @@ async def async_setup_entry(
 
             for spec in button_specs_for_record(record):
                 entity_key = f"{device_id}:{spec.key}"
+                desired_unique_ids.add(f"{device_id}_{spec.key}")
                 if entity_key in seen:
                     continue
                 seen.add(entity_key)
@@ -36,6 +39,14 @@ async def async_setup_entry(
                     )
                 )
 
+        if coordinator.can_prune_registry:
+            prune_stale_entities(
+                hass,
+                entry,
+                "button",
+                desired_unique_ids,
+                coordinator.stale_entity_miss_counts,
+            )
         if new_entities:
             async_add_entities(new_entities)
 

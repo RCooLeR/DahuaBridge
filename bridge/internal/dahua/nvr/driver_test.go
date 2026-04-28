@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 
+	"RCooLeR/DahuaBridge/internal/config"
 	"RCooLeR/DahuaBridge/internal/dahua"
 	"RCooLeR/DahuaBridge/internal/onvif"
 )
@@ -228,5 +229,77 @@ func TestAttachONVIFChannelStateIncludesSnapshotURI(t *testing.T) {
 	}
 	if state.Info["onvif_snapshot_url"] != "http://nvr.example.local/onvif/snapshot1.jpg" {
 		t.Fatalf("unexpected state snapshot url %#v", state.Info["onvif_snapshot_url"])
+	}
+}
+
+func TestChannelInventoryLooksLikePlaceholder(t *testing.T) {
+	tests := []struct {
+		name string
+		item channelInventory
+		want bool
+	}{
+		{
+			name: "ukrainian placeholder",
+			item: channelInventory{Index: 11, Name: "Канал12"},
+			want: true,
+		},
+		{
+			name: "english placeholder",
+			item: channelInventory{Index: 6, Name: "Channel 07"},
+			want: true,
+		},
+		{
+			name: "real named channel",
+			item: channelInventory{Index: 11, Name: "Garage"},
+			want: false,
+		},
+		{
+			name: "mismatched number",
+			item: channelInventory{Index: 11, Name: "Канал13"},
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := channelInventoryLooksLikePlaceholder(tt.item); got != tt.want {
+				t.Fatalf("channelInventoryLooksLikePlaceholder() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestChannelInventoryWanted(t *testing.T) {
+	cfg := config.DeviceConfig{ChannelAllowlist: []int{1, 2, 3}}
+
+	if channelInventoryWanted(cfg, channelInventory{
+		Index:          3,
+		Name:           "Front Gate",
+		MainResolution: "2560x1440",
+		MainCodec:      "H.265",
+	}) {
+		t.Fatal("expected channel 4 to be rejected by allowlist")
+	}
+
+	if channelInventoryWanted(config.DeviceConfig{}, channelInventory{
+		Index:          11,
+		Name:           "Канал12",
+		MainResolution: "2880x1620",
+		MainCodec:      "H.265",
+		SubResolution:  "640x480",
+		SubCodec:       "H.264",
+	}) {
+		t.Fatal("expected placeholder channel to be rejected")
+	}
+
+	if !channelInventoryWanted(config.DeviceConfig{}, channelInventory{
+		Index:          0,
+		Name:           "Вхід",
+		MainResolution: "3840x2160",
+		MainCodec:      "H.265",
+		SubResolution:  "704x576",
+		SubCodec:       "H.265",
+	}) {
+		t.Fatal("expected real channel to be accepted")
 	}
 }

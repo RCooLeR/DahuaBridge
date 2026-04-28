@@ -43,7 +43,7 @@ Example:
 
 ```yaml
 home_assistant:
-  public_base_url: http://192.168.1.50:8080
+  public_base_url: http://192.168.1.50:9205
 ```
 
 Use a URL that both your browser and Home Assistant can actually open.
@@ -74,13 +74,56 @@ docker build -t dahuabridge ./bridge
 
 If you prefer compose, start from `bridge/compose.example.yaml`.
 
+If you want Intel QSV acceleration:
+
+1. Pass `/dev/dri` into the container.
+2. Give the container access to the `render` / `video` groups if needed.
+3. Keep `media.hwaccel_args` enabled only after you confirm it actually works.
+4. If QSV fails, set:
+
+```yaml
+media:
+  hwaccel_args: []
+```
+
+### Option C: Baked Config Image
+
+Use this if you do not want config/data volumes at all.
+
+1. In `bridge/`, copy:
+
+```text
+config.example.yaml -> config.image.yaml
+```
+
+2. Edit `config.image.yaml` with your real settings.
+3. Build:
+
+```bash
+docker build -t dahuabridge-baked -f bridge/Dockerfile.baked ./bridge
+```
+
+4. Run:
+
+```bash
+docker run -d --name dahuabridge -p 9205:9205 dahuabridge-baked
+```
+
+5. If you prefer compose, start from `bridge/compose.baked.example.yaml`.
+
+Important:
+
+- `config.image.yaml` becomes part of the image.
+- Do not publish that image to a public registry if it contains real secrets.
+- Bridge state will live in the container writable layer unless your config changes the path.
+
 ## Step 3: Check The Bridge
 
 Open these URLs:
 
-1. `http://YOUR_BRIDGE_HOST:8080/healthz`
-2. `http://YOUR_BRIDGE_HOST:8080/api/v1/status`
-3. `http://YOUR_BRIDGE_HOST:8080/admin`
+1. `http://YOUR_BRIDGE_HOST:9205/healthz`
+2. `http://YOUR_BRIDGE_HOST:9205/api/v1/status`
+3. `http://YOUR_BRIDGE_HOST:9205/admin`
 
 What you want:
 
@@ -111,7 +154,7 @@ integration/custom_components/dahuabridge
 7. Enter the bridge URL, for example:
 
 ```text
-http://192.168.1.50:8080
+http://192.168.1.50:9205
 ```
 
 8. Finish setup.

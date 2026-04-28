@@ -6,8 +6,12 @@ DOMAIN = "dahuabridge"
 
 CONF_BRIDGE_URL = "bridge_url"
 CONF_SCAN_INTERVAL = "scan_interval"
+CONF_PREFERRED_VIDEO_PROFILE = "preferred_video_profile"
+CONF_PREFERRED_VIDEO_SOURCE = "preferred_video_source"
 
 DEFAULT_SCAN_INTERVAL = 15
+DEFAULT_PREFERRED_VIDEO_PROFILE = "auto"
+DEFAULT_PREFERRED_VIDEO_SOURCE = "auto"
 
 CATALOG_PATH = "/api/v1/home-assistant/native/catalog"
 STATUS_PATH = "/api/v1/status"

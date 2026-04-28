@@ -61,9 +61,36 @@ BINARY_DEVICE_CLASSES = {
     "intrusion": BinarySensorDeviceClass.MOTION,
     "motion": BinarySensorDeviceClass.MOTION,
     "online": BinarySensorDeviceClass.CONNECTIVITY,
+    "stream_available": BinarySensorDeviceClass.RUNNING,
     "tamper": BinarySensorDeviceClass.TAMPER,
     "tripwire": BinarySensorDeviceClass.MOTION,
     "vehicle": BinarySensorDeviceClass.MOTION,
+}
+
+TRANSIENT_BINARY_FIELDS = {
+    "access",
+    "active",
+    "call",
+    "doorbell",
+    "human",
+    "intrusion",
+    "motion",
+    "tamper",
+    "tripwire",
+    "vehicle",
+}
+
+TRANSIENT_EVENT_PREFIXES = {
+    "access": ("accesscontrol_",),
+    "active": ("alarmlocal_",),
+    "call": ("call_",),
+    "doorbell": ("doorbell_",),
+    "human": ("smartmotionhuman_",),
+    "intrusion": ("crossregiondetection_",),
+    "motion": ("videomotion_",),
+    "tamper": ("tamper_",),
+    "tripwire": ("crosslinedetection_",),
+    "vehicle": ("smartmotionvehicle_",),
 }
 
 FIELD_NAMES = {
@@ -92,6 +119,7 @@ FIELD_NAMES = {
     "recommended_ha_integration": "Recommended HA Integration",
     "recommended_ha_reason": "Recommended HA Reason",
     "recommended_profile": "Recommended Profile",
+    "stream_available": "Stream Available",
     "sub_codec": "Sub Codec",
     "sub_resolution": "Sub Resolution",
     "used_percent": "Storage Used Percent",
@@ -172,13 +200,21 @@ def available_for_record(record: dict[str, Any] | None) -> bool:
 
 
 def stream_source_for_record(record: dict[str, Any] | None) -> str | None:
+    return stream_source_for_record_with_preferences(record, "auto", "auto")
+
+
+def stream_source_for_record_with_preferences(
+    record: dict[str, Any] | None,
+    preferred_profile: str = "auto",
+    preferred_source: str = "auto",
+) -> str | None:
     stream = stream_for_record(record)
     profiles = stream.get("profiles", {})
     if not isinstance(profiles, dict):
         return None
 
-    preferred = str(stream.get("recommended_profile", "")).strip()
-    order = [preferred, "stable", "default", "quality", "substream"]
+    order = profile_order_for_record(record, preferred_profile)
+    source_order = source_order_for_preference(preferred_source)
     seen: set[str] = set()
     for name in order:
         if not name or name in seen:
@@ -187,10 +223,37 @@ def stream_source_for_record(record: dict[str, Any] | None) -> str | None:
         profile = profiles.get(name, {})
         if not isinstance(profile, dict):
             continue
-        for key in ("local_hls_url", "stream_url", "local_mjpeg_url"):
+        for key in source_order:
             value = str(profile.get(key, "")).strip()
             if value:
                 return value
+    return None
+
+
+def mjpeg_url_for_record(record: dict[str, Any] | None) -> str | None:
+    return mjpeg_url_for_record_with_preferences(record, "auto")
+
+
+def mjpeg_url_for_record_with_preferences(
+    record: dict[str, Any] | None, preferred_profile: str = "auto"
+) -> str | None:
+    stream = stream_for_record(record)
+    profiles = stream.get("profiles", {})
+    if not isinstance(profiles, dict):
+        return None
+
+    order = profile_order_for_record(record, preferred_profile)
+    seen: set[str] = set()
+    for name in order:
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        profile = profiles.get(name, {})
+        if not isinstance(profile, dict):
+            continue
+        value = str(profile.get("local_mjpeg_url", "")).strip()
+        if value:
+            return value
     return None
 
 
@@ -200,10 +263,45 @@ def snapshot_url_for_record(record: dict[str, Any] | None) -> str | None:
     return value or None
 
 
+def stream_available_for_record(record: dict[str, Any] | None) -> bool:
+    value = merged_fields_for_record(record).get("stream_available")
+    if isinstance(value, bool):
+        return value
+    return stream_source_for_record(record) is not None
+
+
+def profile_order_for_record(
+    record: dict[str, Any] | None, preferred_profile: str = "auto"
+) -> list[str]:
+    stream = stream_for_record(record)
+    recommended = str(stream.get("recommended_profile", "")).strip()
+    preference = str(preferred_profile).strip().lower() or "auto"
+    if preference == "stable":
+        return ["stable", "substream", recommended, "default", "quality"]
+    if preference == "quality":
+        return ["quality", "default", recommended, "stable", "substream"]
+    if preference == "substream":
+        return ["substream", "stable", recommended, "default", "quality"]
+    return [recommended, "stable", "default", "quality", "substream"]
+
+
+def source_order_for_preference(preferred_source: str = "auto") -> tuple[str, ...]:
+    preference = str(preferred_source).strip().lower() or "auto"
+    if preference == "hls":
+        return ("local_hls_url", "stream_url", "local_mjpeg_url")
+    if preference == "mjpeg":
+        return ("local_mjpeg_url", "local_hls_url", "stream_url")
+    return ("stream_url", "local_hls_url", "local_mjpeg_url")
+
+
 def bool_field_names(record: dict[str, Any]) -> list[str]:
     result = []
     for key, value in merged_fields_for_record(record).items():
         if isinstance(value, bool):
+            if field_requires_online(key) and not should_expose_transient_field(
+                record, key, value
+            ):
+                continue
             result.append(key)
     return sorted(result)
 
@@ -233,6 +331,24 @@ def name_for_field(field: str) -> str:
 
 def binary_device_class_for_field(field: str) -> str | None:
     return BINARY_DEVICE_CLASSES.get(field)
+
+
+def field_requires_online(field: str) -> bool:
+    return field in TRANSIENT_BINARY_FIELDS
+
+
+def should_expose_transient_field(
+    record: dict[str, Any], field: str, value: bool
+) -> bool:
+    if value:
+        return True
+
+    last_event_type = str(value_for_field(record, "last_event_type") or "").strip().lower()
+    if not last_event_type:
+        return False
+
+    prefixes = TRANSIENT_EVENT_PREFIXES.get(field, ())
+    return any(last_event_type.startswith(prefix) for prefix in prefixes)
 
 
 def entity_category_for_field(field: str) -> EntityCategory | None:
