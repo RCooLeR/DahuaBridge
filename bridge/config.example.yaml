@@ -72,8 +72,8 @@ media:
   # RTSP input preset for bridge-hosted MJPEG/HLS/WebRTC ffmpeg workers.
   # "low_latency" keeps the current aggressive flags. "stable" removes them and keeps corruption discard only.
   input_preset: low_latency
-  # Video encoder for bridge-hosted HLS/WebRTC transcodes. "software" uses libx264. "qsv" uses Intel h264_qsv when hwaccel is active.
-  # MJPEG output remains software-encoded JPEG either way.
+  # Video encoder for bridge-hosted MJPEG/HLS/WebRTC transcodes. "software" uses CPU codecs.
+  # "qsv" uses Intel QSV video encode when hwaccel is active: mjpeg_qsv for MJPEG and h264_qsv for HLS/WebRTC video.
   video_encoder: software
   # Time after which an unused media worker is shut down.
   idle_timeout: 30s

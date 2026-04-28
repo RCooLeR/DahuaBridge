@@ -198,7 +198,7 @@ func (s *webrtcSession) start(ctx context.Context, offer WebRTCSessionDescriptio
 	}
 	go s.forwardRTP(videoConn, tracks.video)
 	go s.forwardRTP(audioConn, tracks.audio)
-	cmd, err := s.startFFmpeg(videoPort, audioPort)
+	cmd, err := s.startFFmpeg(videoPort, audioPort, videoConn, audioConn)
 	if err != nil {
 		_ = peerConnection.Close()
 		_ = videoConn.Close()
@@ -211,7 +211,6 @@ func (s *webrtcSession) start(ctx context.Context, offer WebRTCSessionDescriptio
 	s.mu.Unlock()
 
 	go s.closePeerOnCancel()
-	go s.waitForFFmpeg(cmd, videoConn, audioConn)
 
 	localDescription := peerConnection.LocalDescription()
 	if localDescription == nil {
@@ -283,38 +282,94 @@ func newPeerConnection(iceServers []WebRTCICEServer) (*webrtc.PeerConnection, we
 	}, nil
 }
 
-func (s *webrtcSession) startFFmpeg(videoPort int, audioPort int) (*exec.Cmd, error) {
-	args := s.buildFFmpegArgs(videoPort, audioPort)
-	s.logger.Debug().Strs("ffmpeg_args", redactFFmpegArgs(args)).Msg("starting webrtc ffmpeg")
-	cmd := exec.CommandContext(s.ctx, s.parent.cfg.FFmpegPath, args...)
-	stderr, err := cmd.StderrPipe()
-	if err != nil {
-		return nil, fmt.Errorf("ffmpeg stderr pipe: %w", err)
+func (s *webrtcSession) startFFmpeg(videoPort int, audioPort int, conns ...*net.UDPConn) (*exec.Cmd, error) {
+	attempts := buildFFmpegStartAttempts(s.parent.cfg)
+	probeWindow := 1500 * time.Millisecond
+	if s.parent.cfg.StartTimeout > 0 && s.parent.cfg.StartTimeout < probeWindow {
+		probeWindow = s.parent.cfg.StartTimeout
 	}
-	if err := cmd.Start(); err != nil {
-		_ = stderr.Close()
-		return nil, fmt.Errorf("start ffmpeg: %w", err)
+	if probeWindow < 250*time.Millisecond {
+		probeWindow = 250 * time.Millisecond
 	}
 
-	go func() {
-		<-s.ctx.Done()
-		_ = stderr.Close()
-	}()
-	go s.captureFFmpegStderr(stderr)
-	return cmd, nil
+	for index, attempt := range attempts {
+		if index > 0 {
+			s.logger.Warn().
+				Bool("hwaccel", attempt.useHWAccel).
+				Str("input_preset", attempt.inputPreset).
+				Msg("retrying webrtc ffmpeg with fallback")
+		}
+
+		args := s.buildFFmpegArgs(videoPort, audioPort, attempt)
+		s.logger.Debug().
+			Bool("hwaccel", attempt.useHWAccel).
+			Str("input_preset", attempt.inputPreset).
+			Strs("ffmpeg_args", redactFFmpegArgs(args)).
+			Msg("starting webrtc ffmpeg")
+		cmd := exec.CommandContext(s.ctx, s.parent.cfg.FFmpegPath, args...)
+		stderr, err := cmd.StderrPipe()
+		if err != nil {
+			return nil, fmt.Errorf("ffmpeg stderr pipe: %w", err)
+		}
+		if err := cmd.Start(); err != nil {
+			_ = stderr.Close()
+			if index < len(attempts)-1 {
+				continue
+			}
+			return nil, fmt.Errorf("start ffmpeg: %w", err)
+		}
+
+		waitDone := make(chan error, 1)
+		stderrDone := make(chan string, 1)
+		go func() {
+			waitDone <- cmd.Wait()
+		}()
+		go func() {
+			body, _ := io.ReadAll(io.LimitReader(stderr, 64*1024))
+			stderrDone <- strings.TrimSpace(string(body))
+		}()
+
+		timer := time.NewTimer(probeWindow)
+		select {
+		case <-s.ctx.Done():
+			timer.Stop()
+			return nil, s.ctx.Err()
+		case err := <-waitDone:
+			timer.Stop()
+			stderrText := <-stderrDone
+			if errors.Is(s.ctx.Err(), context.Canceled) {
+				return nil, s.ctx.Err()
+			}
+			if stderrText != "" {
+				s.logger.Debug().
+					Bool("hwaccel", attempt.useHWAccel).
+					Str("input_preset", attempt.inputPreset).
+					Str("ffmpeg_stderr", stderrText).
+					Msg("webrtc ffmpeg stderr")
+			}
+			if index < len(attempts)-1 {
+				continue
+			}
+			if err != nil {
+				if stderrText != "" {
+					err = fmt.Errorf("%w: %s", err, stderrText)
+				}
+				return nil, err
+			}
+			if stderrText != "" {
+				return nil, errors.New(stderrText)
+			}
+			return nil, errors.New("webrtc ffmpeg exited before producing media")
+		case <-timer.C:
+			go s.waitForFFmpeg(cmd, waitDone, stderrDone, attempt, conns...)
+			return cmd, nil
+		}
+	}
+
+	return nil, errors.New("failed to start webrtc ffmpeg")
 }
 
-func (s *webrtcSession) captureFFmpegStderr(stderr io.ReadCloser) {
-	body, _ := io.ReadAll(io.LimitReader(stderr, 64*1024))
-	message := strings.TrimSpace(string(body))
-	if message == "" || s.ctx.Err() != nil {
-		return
-	}
-	s.logger.Debug().Str("ffmpeg_stderr", message).Msg("webrtc ffmpeg stderr")
-	s.setError(errors.New(message))
-}
-
-func (s *webrtcSession) buildFFmpegArgs(videoPort int, audioPort int) []string {
+func (s *webrtcSession) buildFFmpegArgs(videoPort int, audioPort int, attempt ffmpegStartAttempt) []string {
 	frameRate := s.parent.cfg.FrameRate
 	if s.profile.FrameRate > 0 {
 		frameRate = s.profile.FrameRate
@@ -325,19 +380,16 @@ func (s *webrtcSession) buildFFmpegArgs(videoPort int, audioPort int) []string {
 		"-hide_banner",
 		"-loglevel", ffmpegLogLevel(s.parent.cfg),
 	}
-	args = append(args, s.parent.cfg.HWAccelArgs...)
-	args = append(args, buildRTSPInputArgs(s.profile, s.parent.cfg.InputPreset)...)
+	args = appendInputHWAccelArgs(args, s.parent.cfg, attempt.useHWAccel)
+	args = append(args, buildRTSPInputArgs(s.profile, attempt.inputPreset)...)
 	if s.parent.cfg.Threads > 0 {
 		args = append(args, "-threads", strconv.Itoa(s.parent.cfg.Threads))
 	}
 	args = append(args,
 		"-map", "0:v:0",
 	)
-	args = appendVideoEncoderArgs(args, s.parent.cfg, hardwareAccelEnabled(s.parent.cfg.HWAccelArgs), gopSize, "ultrafast")
-	filterChain := buildFilterChain(frameRate, s.parent.cfg.ScaleWidth, s.parent.cfg.ScaleHeight)
-	if len(filterChain) > 0 {
-		args = append(args, "-vf", strings.Join(filterChain, ","))
-	}
+	args = appendVideoEncoderArgs(args, s.parent.cfg, attempt.useHWAccel, gopSize, "ultrafast")
+	args = appendVideoFilterArgs(args, s.parent.cfg, attempt.useHWAccel, frameRate)
 	args = append(args,
 		"-f", "rtp",
 		fmt.Sprintf("rtp://127.0.0.1:%d?pkt_size=1200", videoPort),
@@ -489,7 +541,7 @@ func (s *webrtcSession) closePeerOnCancel() {
 	}
 }
 
-func (s *webrtcSession) waitForFFmpeg(cmd *exec.Cmd, conns ...*net.UDPConn) {
+func (s *webrtcSession) waitForFFmpeg(cmd *exec.Cmd, waitDone <-chan error, stderrDone <-chan string, attempt ffmpegStartAttempt, conns ...*net.UDPConn) {
 	defer s.parent.removeWebRTCSession(s.key, s)
 	defer s.cancel()
 	for _, conn := range conns {
@@ -498,13 +550,28 @@ func (s *webrtcSession) waitForFFmpeg(cmd *exec.Cmd, conns ...*net.UDPConn) {
 		}
 	}
 
-	err := cmd.Wait()
+	err := <-waitDone
+	stderrText := <-stderrDone
 	if errors.Is(s.ctx.Err(), context.Canceled) {
 		return
 	}
+	if stderrText != "" {
+		s.logger.Debug().
+			Bool("hwaccel", attempt.useHWAccel).
+			Str("input_preset", attempt.inputPreset).
+			Str("ffmpeg_stderr", stderrText).
+			Msg("webrtc ffmpeg stderr")
+	}
 	if err != nil {
+		if stderrText != "" {
+			err = fmt.Errorf("%w: %s", err, stderrText)
+		}
 		s.setError(err)
 		s.cancel()
+		return
+	}
+	if stderrText != "" {
+		s.setError(errors.New(stderrText))
 	}
 }
 

@@ -89,6 +89,25 @@ func TestBuildFilterChain(t *testing.T) {
 	}
 }
 
+func TestBuildQSVFilterChain(t *testing.T) {
+	filters := buildQSVFilterChain(5, 960, 0)
+	if len(filters) != 1 {
+		t.Fatalf("expected 1 qsv filter, got %d", len(filters))
+	}
+	if !strings.Contains(filters[0], "vpp_qsv=") {
+		t.Fatalf("unexpected qsv filter %q", filters[0])
+	}
+	if !strings.Contains(filters[0], "framerate=5") {
+		t.Fatalf("unexpected qsv framerate filter %q", filters[0])
+	}
+	if !strings.Contains(filters[0], "w=960") || !strings.Contains(filters[0], "h=-1") {
+		t.Fatalf("unexpected qsv scale filter %q", filters[0])
+	}
+	if !strings.Contains(filters[0], "format=nv12") {
+		t.Fatalf("unexpected qsv format filter %q", filters[0])
+	}
+}
+
 func TestWaitUntilReadyReturnsWorkerError(t *testing.T) {
 	manager := New(config.MediaConfig{
 		Enabled:        true,
@@ -272,6 +291,9 @@ func TestBuildHLSArgs(t *testing.T) {
 	if !strings.Contains(joined, "-c:a aac") {
 		t.Fatalf("expected aac audio args, got %q", joined)
 	}
+	if !strings.Contains(joined, "-vf fps=5,scale=960:-2") {
+		t.Fatalf("expected software filter chain, got %q", joined)
+	}
 	if strings.Contains(joined, "-an") {
 		t.Fatalf("did not expect audio to be disabled in hls args, got %q", joined)
 	}
@@ -372,8 +394,14 @@ func TestBuildHLSArgsWithQSVEncoder(t *testing.T) {
 	if !strings.Contains(joined, "-c:v h264_qsv") {
 		t.Fatalf("expected qsv encoder args, got %q", joined)
 	}
+	if !strings.Contains(joined, "-hwaccel_output_format qsv") {
+		t.Fatalf("expected explicit qsv hwaccel output format, got %q", joined)
+	}
 	if !strings.Contains(joined, "-pix_fmt nv12") {
 		t.Fatalf("expected qsv pixel format args, got %q", joined)
+	}
+	if !strings.Contains(joined, "-vf vpp_qsv=framerate=5:w=960:h=-1:format=nv12") {
+		t.Fatalf("expected qsv filter chain, got %q", joined)
 	}
 	if strings.Contains(joined, "-preset veryfast") {
 		t.Fatalf("did not expect libx264 preset args in qsv mode, got %q", joined)
@@ -410,7 +438,7 @@ func TestBuildWebRTCArgs(t *testing.T) {
 		cancel: cancel,
 	}
 
-	args := session.buildFFmpegArgs(51000, 51002)
+	args := session.buildFFmpegArgs(51000, 51002, ffmpegStartAttempt{useHWAccel: false, inputPreset: manager.cfg.InputPreset})
 	joined := strings.Join(args, " ")
 	if !strings.Contains(joined, "-f rtp") {
 		t.Fatalf("expected rtp output args, got %q", joined)
@@ -423,6 +451,9 @@ func TestBuildWebRTCArgs(t *testing.T) {
 	}
 	if !strings.Contains(joined, "-c:v libx264") {
 		t.Fatalf("expected h264 transcode args, got %q", joined)
+	}
+	if !strings.Contains(joined, "-vf fps=5,scale=960:-2") {
+		t.Fatalf("expected software filter chain, got %q", joined)
 	}
 	if !strings.Contains(joined, "-map 0:a:0?") || !strings.Contains(joined, "-c:a libopus") {
 		t.Fatalf("expected optional opus audio args in webrtc path, got %q", joined)
@@ -464,13 +495,105 @@ func TestBuildWebRTCArgsWithQSVEncoder(t *testing.T) {
 		cancel: cancel,
 	}
 
-	args := session.buildFFmpegArgs(51000, 51002)
+	args := session.buildFFmpegArgs(51000, 51002, ffmpegStartAttempt{useHWAccel: true, inputPreset: manager.cfg.InputPreset})
 	joined := strings.Join(args, " ")
 	if !strings.Contains(joined, "-c:v h264_qsv") {
 		t.Fatalf("expected qsv encoder args, got %q", joined)
 	}
+	if !strings.Contains(joined, "-hwaccel_output_format qsv") {
+		t.Fatalf("expected explicit qsv hwaccel output format, got %q", joined)
+	}
+	if !strings.Contains(joined, "-vf vpp_qsv=framerate=5:w=960:h=-1:format=nv12") {
+		t.Fatalf("expected qsv filter chain, got %q", joined)
+	}
 	if strings.Contains(joined, "-preset ultrafast") {
 		t.Fatalf("did not expect libx264 preset args in qsv mode, got %q", joined)
+	}
+}
+
+func TestBuildMJPEGArgsWithQSVEncoder(t *testing.T) {
+	manager := New(config.MediaConfig{
+		Enabled:        true,
+		StartTimeout:   time.Second,
+		IdleTimeout:    time.Second,
+		MaxWorkers:     2,
+		VideoEncoder:   "qsv",
+		FrameRate:      5,
+		JPEGQuality:    7,
+		Threads:        1,
+		ScaleWidth:     960,
+		HLSSegmentTime: 2 * time.Second,
+		HLSListSize:    6,
+		HWAccelArgs:    []string{"-hwaccel", "qsv"},
+	}, testResolver{}, zerolog.Nop(), nil)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	w := &worker{
+		key:         "test:stable",
+		streamID:    "test",
+		profileName: "stable",
+		profile: streams.Profile{
+			Name:      "stable",
+			StreamURL: "rtsp://example.local/stream",
+			FrameRate: 5,
+		},
+		parent:      manager,
+		ctx:         ctx,
+		cancel:      cancel,
+		subscribers: map[chan []byte]struct{}{},
+		ready:       make(chan struct{}),
+		startErr:    make(chan error, 1),
+	}
+
+	args := w.buildFFmpegArgs(ffmpegStartAttempt{useHWAccel: true, inputPreset: manager.cfg.InputPreset})
+	joined := strings.Join(args, " ")
+	if !strings.Contains(joined, "-c:v mjpeg_qsv") {
+		t.Fatalf("expected qsv mjpeg encoder args, got %q", joined)
+	}
+	if !strings.Contains(joined, "-hwaccel_output_format qsv") {
+		t.Fatalf("expected explicit qsv hwaccel output format, got %q", joined)
+	}
+	if !strings.Contains(joined, "-global_quality 70") {
+		t.Fatalf("expected mapped qsv quality args, got %q", joined)
+	}
+	if !strings.Contains(joined, "-vf vpp_qsv=framerate=5:w=960:h=-1:format=nv12") {
+		t.Fatalf("expected qsv mjpeg filter chain, got %q", joined)
+	}
+}
+
+func TestMapSoftwareJPEGQualityToQSV(t *testing.T) {
+	if got := mapSoftwareJPEGQualityToQSV(7); got != 70 {
+		t.Fatalf("expected mapped quality 70, got %d", got)
+	}
+	if got := mapSoftwareJPEGQualityToQSV(0); got != 80 {
+		t.Fatalf("expected default mapped quality 80, got %d", got)
+	}
+}
+
+func TestAppendInputHWAccelArgsAddsExplicitQSVOutputFormat(t *testing.T) {
+	args := appendInputHWAccelArgs(nil, config.MediaConfig{
+		HWAccelArgs: []string{"-init_hw_device", "qsv=hw@va", "-hwaccel", "qsv"},
+	}, true)
+	joined := strings.Join(args, " ")
+	if !strings.Contains(joined, "-hwaccel_output_format qsv") {
+		t.Fatalf("expected qsv output format in args, got %q", joined)
+	}
+}
+
+func TestAppendInputHWAccelArgsDoesNotDuplicateOutputFormat(t *testing.T) {
+	args := appendInputHWAccelArgs(nil, config.MediaConfig{
+		HWAccelArgs: []string{"-hwaccel", "qsv", "-hwaccel_output_format", "qsv"},
+	}, true)
+	count := 0
+	for _, arg := range args {
+		if arg == "-hwaccel_output_format" {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Fatalf("expected one hwaccel_output_format arg, got %d in %+v", count, args)
 	}
 }
 

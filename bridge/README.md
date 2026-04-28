@@ -151,8 +151,8 @@ Intel QSV notes:
 - For hardware acceleration, pass `/dev/dri` into the container.
 - The container user may also need access to the host `render` / `video` groups.
 - `media.input_preset: stable` is the safer choice when RTSP feeds show gray artifacts, freeze bursts, or recover only on keyframes.
-- Set `media.video_encoder: qsv` if you want bridge-hosted `HLS` and playback `WebRTC` video encoded with Intel `h264_qsv`.
-- `MJPEG` output is still software-encoded JPEG; the bridge does not currently provide hardware MJPEG encode.
+- Set `media.video_encoder: qsv` if you want bridge-hosted video work pushed onto Intel QSV where supported:
+  `mjpeg_qsv` for MJPEG and `h264_qsv` for HLS / playback WebRTC video.
 - If QSV still fails, set `media.hwaccel_args: []` and/or `media.video_encoder: software` to fall back to software decode/transcode.
 
 ## Configuration Notes
@@ -197,12 +197,12 @@ media:
 
 ### `media.video_encoder`
 
-Controls the video encoder used by bridge-hosted `HLS` and playback `WebRTC` ffmpeg workers:
+Controls the video encoder used by bridge-hosted `MJPEG`, `HLS`, and playback `WebRTC` ffmpeg workers:
 
-- `software`: use `libx264`
-- `qsv`: use Intel `h264_qsv` when the hardware acceleration path is active
+- `software`: use CPU codecs (`mjpeg` / `libx264`)
+- `qsv`: use Intel QSV video encode when the hardware acceleration path is active (`mjpeg_qsv` / `h264_qsv`)
 
-If `qsv` is selected but the worker falls back to a non-hardware retry, the bridge automatically reverts that retry to `libx264`.
+If `qsv` is selected but the worker falls back to a non-hardware retry, the bridge automatically reverts that retry to software codecs.
 
 ### `media.input_preset`
 

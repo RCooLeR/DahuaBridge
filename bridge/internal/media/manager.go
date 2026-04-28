@@ -726,20 +726,15 @@ func (w *worker) buildFFmpegArgs(attempt ffmpegStartAttempt) []string {
 		"-hide_banner",
 		"-loglevel", ffmpegLogLevel(w.parent.cfg),
 	}
-	if attempt.useHWAccel {
-		args = append(args, w.parent.cfg.HWAccelArgs...)
-	}
+	args = appendInputHWAccelArgs(args, w.parent.cfg, attempt.useHWAccel)
 	args = append(args, buildRTSPInputArgs(w.profile, attempt.inputPreset)...)
 	args = append(args, "-an")
 	if w.parent.cfg.Threads > 0 {
 		args = append(args, "-threads", strconv.Itoa(w.parent.cfg.Threads))
 	}
-	args = append(args,
-		"-vf", strings.Join(buildFilterChain(frameRate, w.parent.cfg.ScaleWidth, w.parent.cfg.ScaleHeight), ","),
-		"-q:v", strconv.Itoa(w.parent.cfg.JPEGQuality),
-		"-f", "mjpeg",
-		"pipe:1",
-	)
+	args = appendVideoFilterArgs(args, w.parent.cfg, attempt.useHWAccel, frameRate)
+	args = appendMJPEGEncoderArgs(args, w.parent.cfg, attempt.useHWAccel)
+	args = append(args, "-f", "mjpeg", "pipe:1")
 	return args
 }
 
@@ -1008,22 +1003,17 @@ func (w *hlsWorker) buildFFmpegArgs(attempt ffmpegStartAttempt) []string {
 	}
 	segmentSeconds := int(maxInt(int(w.parent.cfg.HLSSegmentTime/time.Second), 1))
 	gopSize := maxInt(frameRate*segmentSeconds, frameRate)
-	filterChain := buildFilterChain(frameRate, w.parent.cfg.ScaleWidth, w.parent.cfg.ScaleHeight)
 
 	args := []string{
 		"-hide_banner",
 		"-loglevel", ffmpegLogLevel(w.parent.cfg),
 	}
-	if attempt.useHWAccel {
-		args = append(args, w.parent.cfg.HWAccelArgs...)
-	}
+	args = appendInputHWAccelArgs(args, w.parent.cfg, attempt.useHWAccel)
 	args = append(args, buildRTSPInputArgs(w.profile, attempt.inputPreset)...)
 	if w.parent.cfg.Threads > 0 {
 		args = append(args, "-threads", strconv.Itoa(w.parent.cfg.Threads))
 	}
-	if len(filterChain) > 0 {
-		args = append(args, "-vf", strings.Join(filterChain, ","))
-	}
+	args = appendVideoFilterArgs(args, w.parent.cfg, attempt.useHWAccel, frameRate)
 	args = append(args,
 		"-map", "0:v:0",
 		"-map", "0:a:0?",
@@ -1242,6 +1232,29 @@ func buildFilterChain(frameRate int, scaleWidth int, scaleHeight int) []string {
 	return filters
 }
 
+func buildQSVFilterChain(frameRate int, scaleWidth int, scaleHeight int) []string {
+	options := []string{fmt.Sprintf("framerate=%d", frameRate)}
+	switch {
+	case scaleWidth > 0 && scaleHeight > 0:
+		options = append(options,
+			fmt.Sprintf("w=%d", scaleWidth),
+			fmt.Sprintf("h=%d", scaleHeight),
+		)
+	case scaleWidth > 0:
+		options = append(options,
+			fmt.Sprintf("w=%d", scaleWidth),
+			"h=-1",
+		)
+	case scaleHeight > 0:
+		options = append(options,
+			"w=-1",
+			fmt.Sprintf("h=%d", scaleHeight),
+		)
+	}
+	options = append(options, "format=nv12")
+	return []string{"vpp_qsv=" + strings.Join(options, ":")}
+}
+
 func validateHLSFileName(name string) error {
 	if strings.TrimSpace(name) == "" {
 		return errors.New("invalid hls asset name")
@@ -1288,10 +1301,53 @@ func hardwareAccelEnabled(args []string) bool {
 	return len(args) > 0
 }
 
+func appendInputHWAccelArgs(args []string, cfg config.MediaConfig, useHWAccel bool) []string {
+	if !useHWAccel {
+		return args
+	}
+
+	args = append(args, cfg.HWAccelArgs...)
+	if qsvHWAccelConfigured(cfg.HWAccelArgs) && !containsArg(cfg.HWAccelArgs, "-hwaccel_output_format") {
+		args = append(args, "-hwaccel_output_format", "qsv")
+	}
+	return args
+}
+
+func qsvHWAccelConfigured(args []string) bool {
+	for _, arg := range args {
+		if strings.Contains(strings.ToLower(strings.TrimSpace(arg)), "qsv") {
+			return true
+		}
+	}
+	return false
+}
+
+func containsArg(args []string, target string) bool {
+	for _, arg := range args {
+		if strings.EqualFold(strings.TrimSpace(arg), target) {
+			return true
+		}
+	}
+	return false
+}
+
 func useQSVVideoEncoder(cfg config.MediaConfig, useHWAccel bool) bool {
 	return useHWAccel &&
 		hardwareAccelEnabled(cfg.HWAccelArgs) &&
 		strings.EqualFold(strings.TrimSpace(cfg.VideoEncoder), "qsv")
+}
+
+func appendVideoFilterArgs(args []string, cfg config.MediaConfig, useHWAccel bool, frameRate int) []string {
+	var filterChain []string
+	if useQSVVideoEncoder(cfg, useHWAccel) {
+		filterChain = buildQSVFilterChain(frameRate, cfg.ScaleWidth, cfg.ScaleHeight)
+	} else {
+		filterChain = buildFilterChain(frameRate, cfg.ScaleWidth, cfg.ScaleHeight)
+	}
+	if len(filterChain) == 0 {
+		return args
+	}
+	return append(args, "-vf", strings.Join(filterChain, ","))
 }
 
 func appendVideoEncoderArgs(args []string, cfg config.MediaConfig, useHWAccel bool, gopSize int, softwarePreset string) []string {
@@ -1317,6 +1373,33 @@ func appendVideoEncoderArgs(args []string, cfg config.MediaConfig, useHWAccel bo
 		"-keyint_min", strconv.Itoa(gopSize),
 		"-sc_threshold", "0",
 	)
+}
+
+func appendMJPEGEncoderArgs(args []string, cfg config.MediaConfig, useHWAccel bool) []string {
+	if useQSVVideoEncoder(cfg, useHWAccel) {
+		return append(args,
+			"-c:v", "mjpeg_qsv",
+			"-global_quality", strconv.Itoa(mapSoftwareJPEGQualityToQSV(cfg.JPEGQuality)),
+		)
+	}
+
+	return append(args,
+		"-q:v", strconv.Itoa(cfg.JPEGQuality),
+	)
+}
+
+func mapSoftwareJPEGQualityToQSV(jpegQuality int) int {
+	if jpegQuality <= 0 {
+		return 80
+	}
+	quality := 100 - ((jpegQuality - 1) * 5)
+	if quality < 1 {
+		return 1
+	}
+	if quality > 100 {
+		return 100
+	}
+	return quality
 }
 
 func isHardwareAccelFailure(stderrText string) bool {
