@@ -15,15 +15,24 @@ import (
 	"RCooLeR/DahuaBridge/internal/config"
 	"RCooLeR/DahuaBridge/internal/dahua"
 	"RCooLeR/DahuaBridge/internal/dahua/cgi"
+	dahuarpc "RCooLeR/DahuaBridge/internal/dahua/rpc"
 	dahuartsp "RCooLeR/DahuaBridge/internal/dahua/rtsp"
 	"RCooLeR/DahuaBridge/internal/onvif"
 	"github.com/rs/zerolog"
+)
+
+const recordingTimeLayout = "2006-01-02 15:04:05"
+
+var (
+	recordingItemPattern = regexp.MustCompile(`^items\[(\d+)\]\.(Channel|Cluster|CutLength|Disk|EndTime|FilePath|Length|Partition|StartTime|Type|VideoStream)$`)
+	recordingFlagPattern = regexp.MustCompile(`^items\[(\d+)\]\.Flags\[(\d+)\]$`)
 )
 
 type Driver struct {
 	cfgMu  sync.RWMutex
 	cfg    config.DeviceConfig
 	client *cgi.Client
+	rpc    *dahuarpc.Client
 	rtsp   *dahuartsp.Checker
 	onvif  *onvif.Client
 	logger zerolog.Logger
@@ -81,6 +90,7 @@ func New(cfg config.DeviceConfig, logger zerolog.Logger, client *cgi.Client) *Dr
 	return &Driver{
 		cfg:    cfg,
 		client: client,
+		rpc:    dahuarpc.New(cfg),
 		rtsp:   dahuartsp.NewChecker(cfg),
 		onvif:  onvif.New(cfg),
 		logger: logger.With().Str("device_id", cfg.ID).Str("device_type", string(dahua.DeviceKindNVR)).Logger(),
@@ -194,6 +204,11 @@ func (d *Driver) Probe(ctx context.Context) (*dahua.ProbeResult, error) {
 		states[cfg.ID] = rootState
 	}
 
+	recordModes, recordModeErr := d.loadRecordModes(ctx)
+	if recordModeErr != nil {
+		d.logger.Debug().Err(recordModeErr).Msg("record mode probe failed")
+	}
+
 	for _, channel := range channels {
 		if !channelInventoryWanted(cfg, channel) {
 			continue
@@ -237,6 +252,39 @@ func (d *Driver) Probe(ctx context.Context) (*dahua.ProbeResult, error) {
 				"stream_available": d.streamAvailable(ctx, cfg, channel.Index+1),
 			},
 		}
+		state := states[childID]
+		recordingCapabilities := dahua.NVRRecordingCapabilities{}
+		if recordModeErr == nil {
+			recordingCapabilities = recordingCapabilitiesForChannel(channel.Index+1, recordModes)
+			attachChannelRecordingState(&state, recordingCapabilities)
+		}
+		ptzCapabilities, ptzErr := d.ptzCapabilities(ctx, channel.Index+1)
+		if ptzErr != nil {
+			d.logger.Debug().Err(ptzErr).Int("channel", channel.Index+1).Msg("channel ptz capability probe failed")
+		}
+		auxCapabilities, auxErr := d.auxCapabilities(ctx, channel.Index+1, ptzCapabilities)
+		if auxErr != nil {
+			d.logger.Debug().Err(auxErr).Int("channel", channel.Index+1).Msg("channel aux capability probe failed")
+		}
+		audioCapabilities, audioNotes := d.audioCapabilities(ctx, channel.Index+1)
+		attachChannelControlState(&state, dahua.NVRChannelControlCapabilities{
+			DeviceID:  cfg.ID,
+			Channel:   channel.Index + 1,
+			PTZ:       ptzCapabilities,
+			Aux:       auxCapabilities,
+			Audio:     audioCapabilities,
+			Recording: recordingCapabilities,
+		})
+		notes := make([]string, 0, 4)
+		if ptzErr != nil && auxCapabilities.Supported {
+			notes = append(notes, "ptz_capability_query_failed_aux_fallback_used")
+		}
+		if !ptzCapabilities.Supported && auxCapabilities.Supported && len(auxCapabilities.Features) > 0 {
+			notes = append(notes, "non_ptz_channel_feature_surface_detected")
+		}
+		notes = append(notes, audioNotes...)
+		attachValidationNotes(&state, notes)
+		states[childID] = state
 
 		if onvifDiscovery != nil {
 			child := children[len(children)-1]
@@ -356,11 +404,79 @@ func (d *Driver) Snapshot(ctx context.Context, channel int) ([]byte, string, err
 	})
 }
 
+func (d *Driver) FindRecordings(ctx context.Context, query dahua.NVRRecordingQuery) (dahua.NVRRecordingSearchResult, error) {
+	if query.Channel <= 0 {
+		return dahua.NVRRecordingSearchResult{}, fmt.Errorf("channel must be >= 1")
+	}
+	if query.StartTime.IsZero() || query.EndTime.IsZero() {
+		return dahua.NVRRecordingSearchResult{}, fmt.Errorf("start and end time are required")
+	}
+	if query.EndTime.Before(query.StartTime) {
+		return dahua.NVRRecordingSearchResult{}, fmt.Errorf("end time must not be before start time")
+	}
+	if query.Limit <= 0 {
+		query.Limit = 25
+	}
+
+	handleKV, err := d.client.GetKeyValues(ctx, "/cgi-bin/mediaFileFind.cgi", url.Values{
+		"action": []string{"factory.create"},
+	})
+	if err != nil {
+		return dahua.NVRRecordingSearchResult{}, fmt.Errorf("create recording search handle: %w", err)
+	}
+	handle := strings.TrimSpace(handleKV["result"])
+	if handle == "" {
+		return dahua.NVRRecordingSearchResult{}, fmt.Errorf("recording search handle is empty")
+	}
+	defer func() {
+		closeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_, _ = d.client.GetText(closeCtx, "/cgi-bin/mediaFileFind.cgi", url.Values{
+			"action": []string{"close"},
+			"object": []string{handle},
+		})
+	}()
+
+	findBody, err := d.client.GetText(ctx, "/cgi-bin/mediaFileFind.cgi", url.Values{
+		"action":              []string{"findFile"},
+		"object":              []string{handle},
+		"condition.Channel":   []string{strconv.Itoa(query.Channel)},
+		"condition.StartTime": []string{query.StartTime.Format(recordingTimeLayout)},
+		"condition.EndTime":   []string{query.EndTime.Format(recordingTimeLayout)},
+	})
+	if err != nil {
+		return dahua.NVRRecordingSearchResult{}, fmt.Errorf("start recording search: %w", err)
+	}
+	if !strings.EqualFold(strings.TrimSpace(findBody), "OK") {
+		return dahua.NVRRecordingSearchResult{}, fmt.Errorf("start recording search returned %q", strings.TrimSpace(findBody))
+	}
+
+	itemsKV, err := d.client.GetKeyValues(ctx, "/cgi-bin/mediaFileFind.cgi", url.Values{
+		"action": []string{"findNextFile"},
+		"object": []string{handle},
+		"count":  []string{strconv.Itoa(query.Limit)},
+	})
+	if err != nil {
+		return dahua.NVRRecordingSearchResult{}, fmt.Errorf("fetch recording search results: %w", err)
+	}
+
+	result := parseRecordingSearchResult(itemsKV)
+	result.DeviceID = d.ID()
+	result.Channel = query.Channel
+	result.StartTime = query.StartTime.Format(recordingTimeLayout)
+	result.EndTime = query.EndTime.Format(recordingTimeLayout)
+	result.Limit = query.Limit
+	return result, nil
+}
+
 func (d *Driver) UpdateConfig(cfg config.DeviceConfig) error {
 	d.cfgMu.Lock()
 	d.cfg = cfg
 	d.cfgMu.Unlock()
 	d.client.UpdateConfig(cfg)
+	if d.rpc != nil {
+		d.rpc.UpdateConfig(cfg)
+	}
 	d.rtsp.UpdateConfig(cfg)
 	d.onvif.UpdateConfig(cfg)
 	d.InvalidateInventoryCache()
@@ -454,6 +570,7 @@ func firstNonEmpty(values ...string) string {
 
 var _ dahua.Driver = (*Driver)(nil)
 var _ dahua.SnapshotProvider = (*Driver)(nil)
+var _ dahua.NVRRecordingSearcher = (*Driver)(nil)
 var _ dahua.NVRInventoryRefresher = (*Driver)(nil)
 var _ dahua.ConfigurableDriver = (*Driver)(nil)
 
@@ -687,12 +804,107 @@ func summarizeDisks(disks []diskInventory) diskSummary {
 	return summary
 }
 
+func parseRecordingSearchResult(values map[string]string) dahua.NVRRecordingSearchResult {
+	result := dahua.NVRRecordingSearchResult{}
+	if count, err := strconv.Atoi(strings.TrimSpace(values["found"])); err == nil && count >= 0 {
+		result.ReturnedCount = count
+	}
+
+	items := make(map[int]*dahua.NVRRecording)
+	get := func(index int) *dahua.NVRRecording {
+		item, ok := items[index]
+		if !ok {
+			item = &dahua.NVRRecording{}
+			items[index] = item
+		}
+		return item
+	}
+
+	for key, value := range values {
+		if matches := recordingItemPattern.FindStringSubmatch(key); len(matches) == 3 {
+			index, err := strconv.Atoi(matches[1])
+			if err != nil {
+				continue
+			}
+			item := get(index)
+			switch matches[2] {
+			case "Channel":
+				if parsed, ok := parseInt(value); ok {
+					item.Channel = parsed + 1
+				}
+			case "Cluster":
+				item.Cluster, _ = parseInt(value)
+			case "CutLength":
+				item.CutLengthBytes, _ = parseInt64(value)
+			case "Disk":
+				item.Disk, _ = parseInt(value)
+			case "EndTime":
+				item.EndTime = strings.TrimSpace(value)
+			case "FilePath":
+				item.FilePath = strings.TrimSpace(value)
+			case "Length":
+				item.LengthBytes, _ = parseInt64(value)
+			case "Partition":
+				item.Partition, _ = parseInt(value)
+			case "StartTime":
+				item.StartTime = strings.TrimSpace(value)
+			case "Type":
+				item.Type = strings.TrimSpace(value)
+			case "VideoStream":
+				item.VideoStream = strings.TrimSpace(value)
+			}
+			continue
+		}
+
+		if matches := recordingFlagPattern.FindStringSubmatch(key); len(matches) == 3 {
+			index, err := strconv.Atoi(matches[1])
+			if err != nil {
+				continue
+			}
+			item := get(index)
+			item.Flags = append(item.Flags, strings.TrimSpace(value))
+		}
+	}
+
+	indexes := make([]int, 0, len(items))
+	for index := range items {
+		indexes = append(indexes, index)
+	}
+	sort.Ints(indexes)
+
+	result.Items = make([]dahua.NVRRecording, 0, len(indexes))
+	for _, index := range indexes {
+		result.Items = append(result.Items, *items[index])
+	}
+	if result.ReturnedCount == 0 {
+		result.ReturnedCount = len(result.Items)
+	}
+	return result
+}
+
 func channelDeviceID(rootID string, index int) string {
 	return fmt.Sprintf("%s_channel_%02d", rootID, index+1)
 }
 
 func diskDeviceID(rootID string, index int) string {
 	return fmt.Sprintf("%s_disk_%02d", rootID, index)
+}
+
+func parseInt(value string) (int, bool) {
+	parsed, err := strconv.Atoi(strings.TrimSpace(value))
+	return parsed, err == nil
+}
+
+func parseInt64(value string) (int64, bool) {
+	parsed, err := strconv.ParseInt(strings.TrimSpace(value), 10, 64)
+	if err == nil {
+		return parsed, true
+	}
+	floatValue, floatErr := strconv.ParseFloat(strings.TrimSpace(value), 64)
+	if floatErr != nil {
+		return 0, false
+	}
+	return int64(floatValue), true
 }
 
 func buildRTSPURL(baseURL string, channel int, subtype int) string {

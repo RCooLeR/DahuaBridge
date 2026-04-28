@@ -30,6 +30,7 @@ It probes devices, reads event streams, publishes MQTT discovery/state, exposes 
 - Some checklist items still require real-device validation before they can be marked done.
 
 Current project status is tracked in [../docs/project-status.md](../docs/project-status.md).
+Control coverage is documented in [../docs/controls.md](../docs/controls.md).
 
 ## High-Level Model
 
@@ -282,7 +283,7 @@ Install flow:
 Current characteristics:
 
 - best fit for unified `NVR channel`, `IPC`, and `VTO` device views
-- bridge-native camera plus related state/button entities
+- bridge-native camera plus related state/button/switch/number entities
 - polling-based first slice, not MQTT push-based yet
 - meant for users who care more about one clean HA device per streamable thing than about ONVIF-native camera entities
 - for the cleanest Home Assistant entity list, set `home_assistant.entity_mode: native` and then call `POST /api/v1/home-assistant/mqtt/discovery/remove` once
@@ -407,11 +408,27 @@ For the bridge-native custom integration, also use:
 - `POST /api/v1/vto/{deviceID}/locks/{lockIndex}/unlock`
 - `POST /api/v1/vto/{deviceID}/call/answer`
 - `POST /api/v1/vto/{deviceID}/call/hangup`
+- `GET /api/v1/vto/{deviceID}/controls`
+- `POST /api/v1/vto/{deviceID}/audio/output-volume`
+- `POST /api/v1/vto/{deviceID}/audio/input-volume`
+- `POST /api/v1/vto/{deviceID}/audio/mute`
+- `POST /api/v1/vto/{deviceID}/recording`
 - `GET /api/v1/vto/{deviceID}/intercom`
 - `GET /api/v1/vto/{deviceID}/intercom/status`
 - `POST /api/v1/vto/{deviceID}/intercom/reset`
 - `POST /api/v1/vto/{deviceID}/intercom/uplink/enable`
 - `POST /api/v1/vto/{deviceID}/intercom/uplink/disable`
+
+### NVR Control And Archive Actions
+
+- `GET /api/v1/nvr/{deviceID}/recordings`
+- `GET /api/v1/nvr/{deviceID}/channels/{channel}/controls`
+- `POST /api/v1/nvr/{deviceID}/channels/{channel}/ptz`
+- `POST /api/v1/nvr/{deviceID}/channels/{channel}/aux`
+- `POST /api/v1/nvr/{deviceID}/channels/{channel}/recording`
+- `POST /api/v1/nvr/{deviceID}/playback/sessions`
+- `GET /api/v1/nvr/playback/sessions/{sessionID}`
+- `POST /api/v1/nvr/playback/sessions/{sessionID}/seek`
 
 ### Home Assistant Helpers
 

@@ -130,13 +130,18 @@ class DahuaBridgeAPI:
     async def async_post_action(self, target: str) -> dict[str, Any]:
         return await self._async_request_json("POST", target)
 
+    async def async_post_json(
+        self, target: str, payload: dict[str, Any]
+    ) -> dict[str, Any]:
+        return await self._async_request_json("POST", target, payload)
+
     async def _async_request_json(
-        self, method: str, target: str
+        self, method: str, target: str, payload: dict[str, Any] | None = None
     ) -> dict[str, Any]:
         url = self._absolute_url(target)
         try:
             _LOGGER.debug("Requesting bridge JSON via %s %s", method, url)
-            async with self._session.request(method, url) as response:
+            async with self._session.request(method, url, json=payload) as response:
                 body = await response.text()
                 if response.status >= 400:
                     _LOGGER.warning(

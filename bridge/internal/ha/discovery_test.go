@@ -121,7 +121,7 @@ func TestExtraEntityConfigsForNVRHealth(t *testing.T) {
 		ID:   "west20_nvr",
 		Name: "West 20 NVR",
 		Kind: dahua.DeviceKindNVR,
-	}, "dahuabridge/devices/west20_nvr/availability", "dahuabridge/devices/west20_nvr/info")
+	}, dahua.DeviceState{}, "dahuabridge/devices/west20_nvr/availability", "dahuabridge/devices/west20_nvr/info")
 
 	expected := map[string]struct {
 		component string
@@ -220,7 +220,7 @@ func TestExtraEntityConfigsForVTOCallSession(t *testing.T) {
 		ID:   "front_vto",
 		Name: "Front Door",
 		Kind: dahua.DeviceKindVTO,
-	}, "dahuabridge/devices/front_vto/availability", "dahuabridge/devices/front_vto/info")
+	}, dahua.DeviceState{}, "dahuabridge/devices/front_vto/availability", "dahuabridge/devices/front_vto/info")
 
 	found := make(map[string]discoveredEntity, len(entities))
 	for _, entity := range entities {
@@ -293,6 +293,330 @@ func TestExtraEntityConfigsForVTOCallSession(t *testing.T) {
 	}
 	if disable.config.CommandTopic != "dahuabridge/devices/front_vto/command/uplink_disable" {
 		t.Fatalf("unexpected command topic for uplink disable: %q", disable.config.CommandTopic)
+	}
+}
+
+func TestExtraEntityConfigsForNVRChannelControls(t *testing.T) {
+	publisher := &DiscoveryPublisher{
+		cfg: config.Config{
+			MQTT: config.MQTTConfig{
+				TopicPrefix: "dahuabridge",
+			},
+			HomeAssistant: config.HomeAssistantConfig{
+				NodeID: "dahuabridge",
+			},
+		},
+	}
+
+	entities := publisher.extraEntityConfigs(dahua.Device{
+		ID:   "west20_nvr_channel_08",
+		Name: "Channel 8",
+		Kind: dahua.DeviceKindNVRChannel,
+	}, dahua.DeviceState{
+		Info: map[string]any{
+			"control_aux_features":           []string{"siren", "warning_light", "wiper"},
+			"control_audio_supported":        false,
+			"control_audio_mute_supported":   false,
+			"control_audio_volume_supported": false,
+			"control_recording_supported":    true,
+			"validation_notes_text":          "non_ptz_channel_feature_surface_detected",
+		},
+	}, "dahuabridge/devices/west20_nvr_channel_08/availability", "dahuabridge/devices/west20_nvr_channel_08/info")
+
+	found := make(map[string]discoveredEntity, len(entities))
+	for _, entity := range entities {
+		found[entity.objectID] = entity
+	}
+
+	expectedButtons := map[string]string{
+		"siren":           "dahuabridge/devices/west20_nvr_channel_08/command/siren",
+		"warning_light":   "dahuabridge/devices/west20_nvr_channel_08/command/warning_light",
+		"wiper":           "dahuabridge/devices/west20_nvr_channel_08/command/wiper",
+		"recording_start": "dahuabridge/devices/west20_nvr_channel_08/command/recording_start",
+		"recording_stop":  "dahuabridge/devices/west20_nvr_channel_08/command/recording_stop",
+	}
+
+	for objectID, topic := range expectedButtons {
+		entity, ok := found[objectID]
+		if !ok {
+			t.Fatalf("missing nvr channel control entity %q", objectID)
+		}
+		if entity.component != "button" {
+			t.Fatalf("unexpected component for %q: %q", objectID, entity.component)
+		}
+		if entity.config.CommandTopic != topic {
+			t.Fatalf("unexpected command topic for %q: %q", objectID, entity.config.CommandTopic)
+		}
+	}
+
+	recordingActive, ok := found["recording_active"]
+	if !ok {
+		t.Fatal("missing recording active entity")
+	}
+	if recordingActive.component != "binary_sensor" {
+		t.Fatalf("unexpected component for recording_active: %q", recordingActive.component)
+	}
+	if !strings.Contains(recordingActive.config.ValueTemplate, "control_recording_active") {
+		t.Fatalf("unexpected value template for recording_active: %q", recordingActive.config.ValueTemplate)
+	}
+
+	recordingMode, ok := found["recording_mode"]
+	if !ok {
+		t.Fatal("missing recording mode entity")
+	}
+	if recordingMode.component != "sensor" {
+		t.Fatalf("unexpected component for recording_mode: %q", recordingMode.component)
+	}
+	if !strings.Contains(recordingMode.config.ValueTemplate, "control_recording_mode") {
+		t.Fatalf("unexpected value template for recording_mode: %q", recordingMode.config.ValueTemplate)
+	}
+
+	audioDiagnostics := map[string]string{
+		"audio_control_supported":        "control_audio_supported",
+		"audio_mute_control_supported":   "control_audio_mute_supported",
+		"audio_volume_control_supported": "control_audio_volume_supported",
+		"audio_playback_supported":       "control_audio_playback_supported",
+		"audio_playback_siren_supported": "control_audio_playback_siren",
+		"audio_playback_clip_count":      "control_audio_playback_file_count",
+	}
+	for objectID, templateField := range audioDiagnostics {
+		entity, ok := found[objectID]
+		if !ok {
+			t.Fatalf("missing audio diagnostic entity %q", objectID)
+		}
+		if objectID == "audio_playback_clip_count" {
+			if entity.component != "sensor" {
+				t.Fatalf("unexpected component for %q: %q", objectID, entity.component)
+			}
+		} else if entity.component != "binary_sensor" {
+			t.Fatalf("unexpected component for %q: %q", objectID, entity.component)
+		}
+		if !strings.Contains(entity.config.ValueTemplate, templateField) {
+			t.Fatalf("unexpected value template for %q: %q", objectID, entity.config.ValueTemplate)
+		}
+	}
+
+	validationNotes, ok := found["validation_notes"]
+	if !ok {
+		t.Fatal("missing validation notes entity")
+	}
+	if validationNotes.component != "sensor" {
+		t.Fatalf("unexpected component for validation_notes: %q", validationNotes.component)
+	}
+	if !strings.Contains(validationNotes.config.ValueTemplate, "validation_notes_text") {
+		t.Fatalf("unexpected value template for validation_notes: %q", validationNotes.config.ValueTemplate)
+	}
+}
+
+func TestExtraEntityConfigsForVTOSupportDiagnostics(t *testing.T) {
+	publisher := &DiscoveryPublisher{
+		cfg: config.Config{
+			MQTT: config.MQTTConfig{
+				TopicPrefix: "dahuabridge",
+			},
+			HomeAssistant: config.HomeAssistantConfig{
+				NodeID: "dahuabridge",
+			},
+		},
+	}
+
+	entities := publisher.extraEntityConfigs(dahua.Device{
+		ID:   "front_vto",
+		Name: "Front Door",
+		Kind: dahua.DeviceKindVTO,
+	}, dahua.DeviceState{
+		Info: map[string]any{
+			"control_audio_output_volume_supported":  false,
+			"control_audio_input_volume_supported":   false,
+			"control_audio_mute_supported":           false,
+			"control_recording_supported":            false,
+			"control_audio_output_volume":            80,
+			"control_audio_input_volume":             90,
+			"control_audio_muted":                    false,
+			"control_recording_auto_enabled":         true,
+			"control_recording_auto_time_seconds":    11,
+			"control_stream_audio_enabled":           true,
+			"control_direct_talkback_supported":      false,
+			"control_full_call_acceptance_supported": false,
+			"record_storage_event_snapshot_local":    false,
+			"validation_notes_text":                  "vto_audio_control_surface_not_exposed",
+		},
+	}, "dahuabridge/devices/front_vto/availability", "dahuabridge/devices/front_vto/info")
+
+	found := make(map[string]discoveredEntity, len(entities))
+	for _, entity := range entities {
+		found[entity.objectID] = entity
+	}
+
+	expectedDiagnostics := map[string]string{
+		"audio_output_volume_control_supported": "control_audio_output_volume_supported",
+		"audio_input_volume_control_supported":  "control_audio_input_volume_supported",
+		"mute_control_supported":                "control_audio_mute_supported",
+		"recording_control_supported":           "control_recording_supported",
+		"output_volume":                         "control_audio_output_volume",
+		"input_volume":                          "control_audio_input_volume",
+		"muted":                                 "control_audio_muted",
+		"auto_record_enabled":                   "control_recording_auto_enabled",
+		"auto_record_time_seconds":              "control_recording_auto_time_seconds",
+		"stream_audio_enabled":                  "control_stream_audio_enabled",
+		"direct_talkback_supported":             "control_direct_talkback_supported",
+		"full_call_acceptance_supported":        "control_full_call_acceptance_supported",
+		"event_snapshot_local_storage":          "record_storage_event_snapshot_local",
+		"validation_notes":                      "validation_notes_text",
+	}
+
+	for objectID, templateField := range expectedDiagnostics {
+		entity, ok := found[objectID]
+		if !ok {
+			t.Fatalf("missing vto diagnostic entity %q", objectID)
+		}
+		if objectID == "validation_notes" || objectID == "output_volume" || objectID == "input_volume" || objectID == "auto_record_time_seconds" {
+			if entity.component != "sensor" {
+				t.Fatalf("unexpected component for %q: %q", objectID, entity.component)
+			}
+		} else if entity.component != "binary_sensor" {
+			t.Fatalf("unexpected component for %q: %q", objectID, entity.component)
+		}
+		if !strings.Contains(entity.config.ValueTemplate, templateField) {
+			t.Fatalf("unexpected value template for %q: %q", objectID, entity.config.ValueTemplate)
+		}
+	}
+}
+
+func TestExtraEntityConfigsForVTOControlSwitches(t *testing.T) {
+	publisher := &DiscoveryPublisher{
+		cfg: config.Config{
+			MQTT: config.MQTTConfig{
+				TopicPrefix: "dahuabridge",
+			},
+			HomeAssistant: config.HomeAssistantConfig{
+				NodeID: "dahuabridge",
+			},
+		},
+	}
+
+	entities := publisher.extraEntityConfigs(dahua.Device{
+		ID:   "front_vto",
+		Name: "Front Door",
+		Kind: dahua.DeviceKindVTO,
+	}, dahua.DeviceState{
+		Info: map[string]any{
+			"control_audio_mute_supported":        true,
+			"control_recording_supported":         true,
+			"control_audio_muted":                 true,
+			"control_recording_auto_enabled":      false,
+			"control_recording_auto_time_seconds": 11,
+		},
+	}, "dahuabridge/devices/front_vto/availability", "dahuabridge/devices/front_vto/info")
+
+	found := make(map[string]discoveredEntity, len(entities))
+	for _, entity := range entities {
+		found[entity.objectID] = entity
+	}
+
+	mute, ok := found["mute"]
+	if !ok {
+		t.Fatal("missing mute switch entity")
+	}
+	if mute.component != "switch" {
+		t.Fatalf("unexpected component for mute: %q", mute.component)
+	}
+	if mute.config.CommandTopic != "dahuabridge/devices/front_vto/command/mute" {
+		t.Fatalf("unexpected mute command topic %q", mute.config.CommandTopic)
+	}
+	if mute.config.PayloadOn != "ON" || mute.config.PayloadOff != "OFF" {
+		t.Fatalf("unexpected mute payloads %+v", mute.config)
+	}
+	if !strings.Contains(mute.config.ValueTemplate, "control_audio_muted") {
+		t.Fatalf("unexpected mute value template %q", mute.config.ValueTemplate)
+	}
+
+	autoRecord, ok := found["auto_record"]
+	if !ok {
+		t.Fatal("missing auto_record switch entity")
+	}
+	if autoRecord.component != "switch" {
+		t.Fatalf("unexpected component for auto_record: %q", autoRecord.component)
+	}
+	if autoRecord.config.CommandTopic != "dahuabridge/devices/front_vto/command/auto_record" {
+		t.Fatalf("unexpected auto_record command topic %q", autoRecord.config.CommandTopic)
+	}
+	if autoRecord.config.PayloadOn != "ON" || autoRecord.config.PayloadOff != "OFF" {
+		t.Fatalf("unexpected auto_record payloads %+v", autoRecord.config)
+	}
+	if !strings.Contains(autoRecord.config.ValueTemplate, "control_recording_auto_enabled") {
+		t.Fatalf("unexpected auto_record value template %q", autoRecord.config.ValueTemplate)
+	}
+}
+
+func TestExtraEntityConfigsForVTOVolumeControls(t *testing.T) {
+	publisher := &DiscoveryPublisher{
+		cfg: config.Config{
+			MQTT: config.MQTTConfig{
+				TopicPrefix: "dahuabridge",
+			},
+			HomeAssistant: config.HomeAssistantConfig{
+				NodeID: "dahuabridge",
+			},
+		},
+	}
+
+	entities := publisher.extraEntityConfigs(dahua.Device{
+		ID:   "front_vto",
+		Name: "Front Door",
+		Kind: dahua.DeviceKindVTO,
+	}, dahua.DeviceState{
+		Info: map[string]any{
+			"control_audio_output_volume_supported": true,
+			"control_audio_input_volume_supported":  true,
+			"control_audio_output_volume":           80,
+			"control_audio_input_volume":            65,
+		},
+	}, "dahuabridge/devices/front_vto/availability", "dahuabridge/devices/front_vto/info")
+
+	found := make(map[string]discoveredEntity, len(entities))
+	for _, entity := range entities {
+		found[entity.objectID] = entity
+	}
+
+	outputVolume, ok := found["output_volume_control"]
+	if !ok {
+		t.Fatal("missing output_volume_control number entity")
+	}
+	if outputVolume.component != "number" {
+		t.Fatalf("unexpected component for output_volume_control: %q", outputVolume.component)
+	}
+	if outputVolume.config.CommandTopic != "dahuabridge/devices/front_vto/command/output_volume" {
+		t.Fatalf("unexpected output volume command topic %q", outputVolume.config.CommandTopic)
+	}
+	if outputVolume.config.Min == nil || *outputVolume.config.Min != 0 || outputVolume.config.Max == nil || *outputVolume.config.Max != 100 || outputVolume.config.Step == nil || *outputVolume.config.Step != 1 {
+		t.Fatalf("unexpected output volume bounds %+v", outputVolume.config)
+	}
+	if outputVolume.config.Mode != "slider" {
+		t.Fatalf("unexpected output volume mode %q", outputVolume.config.Mode)
+	}
+	if !strings.Contains(outputVolume.config.ValueTemplate, "control_audio_output_volume") {
+		t.Fatalf("unexpected output volume template %q", outputVolume.config.ValueTemplate)
+	}
+
+	inputVolume, ok := found["input_volume_control"]
+	if !ok {
+		t.Fatal("missing input_volume_control number entity")
+	}
+	if inputVolume.component != "number" {
+		t.Fatalf("unexpected component for input_volume_control: %q", inputVolume.component)
+	}
+	if inputVolume.config.CommandTopic != "dahuabridge/devices/front_vto/command/input_volume" {
+		t.Fatalf("unexpected input volume command topic %q", inputVolume.config.CommandTopic)
+	}
+	if inputVolume.config.Min == nil || *inputVolume.config.Min != 0 || inputVolume.config.Max == nil || *inputVolume.config.Max != 100 || inputVolume.config.Step == nil || *inputVolume.config.Step != 1 {
+		t.Fatalf("unexpected input volume bounds %+v", inputVolume.config)
+	}
+	if inputVolume.config.Mode != "slider" {
+		t.Fatalf("unexpected input volume mode %q", inputVolume.config.Mode)
+	}
+	if !strings.Contains(inputVolume.config.ValueTemplate, "control_audio_input_volume") {
+		t.Fatalf("unexpected input volume template %q", inputVolume.config.ValueTemplate)
 	}
 }
 

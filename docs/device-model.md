@@ -308,6 +308,8 @@ The native Home Assistant integration generally follows these patterns:
 - online binary sensor: `binary_sensor.<device_id>_online`
 - state binary sensor: `binary_sensor.<device_id>_<field>`
 - state sensor: `sensor.<device_id>_<field>`
+- control switch: `switch.<device_id>_<field>`
+- control number: `number.<device_id>_<field>`
 - action button: `button.<device_id>_<action>`
 
 Examples:
@@ -315,7 +317,11 @@ Examples:
 - `camera.west20_nvr_channel_01_camera`
 - `binary_sensor.west20_nvr_channel_01_motion`
 - `sensor.front_vto_call_state`
+- `switch.front_vto_muted`
+- `number.front_vto_output_volume`
 - `button.west20_nvr_refresh_inventory`
+
+See [controls.md](controls.md) for the actual control surface and API mappings.
 
 Final Home Assistant entity IDs can still be adjusted by Home Assistant rules or user renames, but these are the default patterns.
 

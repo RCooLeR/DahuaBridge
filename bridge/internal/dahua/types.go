@@ -8,7 +8,11 @@ import (
 	"RCooLeR/DahuaBridge/internal/config"
 )
 
-var ErrDeviceNotFound = errors.New("device not found")
+var (
+	ErrDeviceNotFound          = errors.New("device not found")
+	ErrPlaybackSessionNotFound = errors.New("playback session not found")
+	ErrUnsupportedOperation    = errors.New("unsupported operation")
+)
 
 type DeviceKind string
 
@@ -98,6 +102,219 @@ type SnapshotProvider interface {
 	Snapshot(context.Context, int) ([]byte, string, error)
 }
 
+type NVRRecordingQuery struct {
+	Channel   int
+	StartTime time.Time
+	EndTime   time.Time
+	Limit     int
+}
+
+type NVRRecording struct {
+	Channel        int      `json:"channel"`
+	StartTime      string   `json:"start_time"`
+	EndTime        string   `json:"end_time"`
+	FilePath       string   `json:"file_path,omitempty"`
+	Type           string   `json:"type,omitempty"`
+	VideoStream    string   `json:"video_stream,omitempty"`
+	Disk           int      `json:"disk,omitempty"`
+	Partition      int      `json:"partition,omitempty"`
+	Cluster        int      `json:"cluster,omitempty"`
+	LengthBytes    int64    `json:"length_bytes,omitempty"`
+	CutLengthBytes int64    `json:"cut_length_bytes,omitempty"`
+	Flags          []string `json:"flags,omitempty"`
+}
+
+type NVRRecordingSearchResult struct {
+	DeviceID      string         `json:"device_id"`
+	Channel       int            `json:"channel"`
+	StartTime     string         `json:"start_time"`
+	EndTime       string         `json:"end_time"`
+	Limit         int            `json:"limit"`
+	ReturnedCount int            `json:"returned_count"`
+	Items         []NVRRecording `json:"items"`
+}
+
+type NVRRecordingSearcher interface {
+	FindRecordings(context.Context, NVRRecordingQuery) (NVRRecordingSearchResult, error)
+}
+
+type NVRPlaybackSessionRequest struct {
+	Channel   int
+	StartTime time.Time
+	EndTime   time.Time
+	SeekTime  time.Time
+}
+
+type NVRPlaybackProfile struct {
+	Name           string `json:"name"`
+	HLSURL         string `json:"hls_url,omitempty"`
+	MJPEGURL       string `json:"mjpeg_url,omitempty"`
+	WebRTCOfferURL string `json:"webrtc_offer_url,omitempty"`
+}
+
+type NVRPlaybackSession struct {
+	ID                 string                        `json:"id"`
+	StreamID           string                        `json:"stream_id"`
+	DeviceID           string                        `json:"device_id"`
+	SourceStreamID     string                        `json:"source_stream_id,omitempty"`
+	Name               string                        `json:"name"`
+	Channel            int                           `json:"channel"`
+	StartTime          string                        `json:"start_time"`
+	EndTime            string                        `json:"end_time"`
+	SeekTime           string                        `json:"seek_time"`
+	RecommendedProfile string                        `json:"recommended_profile"`
+	SnapshotURL        string                        `json:"snapshot_url,omitempty"`
+	CreatedAt          string                        `json:"created_at"`
+	ExpiresAt          string                        `json:"expires_at"`
+	Profiles           map[string]NVRPlaybackProfile `json:"profiles"`
+}
+
+type NVRChannelControlCapabilities struct {
+	DeviceID  string                      `json:"device_id"`
+	Channel   int                         `json:"channel"`
+	PTZ       NVRPTZCapabilities          `json:"ptz"`
+	Aux       NVRAuxCapabilities          `json:"aux"`
+	Audio     NVRChannelAudioCapabilities `json:"audio"`
+	Recording NVRRecordingCapabilities    `json:"recording"`
+}
+
+type NVRChannelAudioCapabilities struct {
+	Supported              bool                                `json:"supported"`
+	Mute                   bool                                `json:"mute"`
+	Volume                 bool                                `json:"volume"`
+	VolumePermissionDenied bool                                `json:"volume_permission_denied,omitempty"`
+	Playback               NVRChannelAudioPlaybackCapabilities `json:"playback"`
+}
+
+type NVRChannelAudioPlaybackCapabilities struct {
+	Supported  bool                  `json:"supported"`
+	Siren      bool                  `json:"siren"`
+	QuickReply bool                  `json:"quick_reply"`
+	Formats    []string              `json:"formats,omitempty"`
+	FileCount  int                   `json:"file_count,omitempty"`
+	Files      []NVRChannelAudioFile `json:"files,omitempty"`
+}
+
+type NVRChannelAudioFile struct {
+	Name      string `json:"name"`
+	Path      string `json:"path,omitempty"`
+	SizeBytes int64  `json:"size_bytes,omitempty"`
+}
+
+type NVRPTZCapabilities struct {
+	Supported          bool     `json:"supported"`
+	Pan                bool     `json:"pan"`
+	Tilt               bool     `json:"tilt"`
+	Zoom               bool     `json:"zoom"`
+	Focus              bool     `json:"focus"`
+	MoveRelatively     bool     `json:"move_relatively"`
+	AutoScan           bool     `json:"auto_scan"`
+	Preset             bool     `json:"preset"`
+	Pattern            bool     `json:"pattern"`
+	Tour               bool     `json:"tour"`
+	Aux                bool     `json:"aux"`
+	AuxFunctions       []string `json:"aux_functions,omitempty"`
+	PanSpeedMin        int      `json:"pan_speed_min,omitempty"`
+	PanSpeedMax        int      `json:"pan_speed_max,omitempty"`
+	TiltSpeedMin       int      `json:"tilt_speed_min,omitempty"`
+	TiltSpeedMax       int      `json:"tilt_speed_max,omitempty"`
+	PresetMin          int      `json:"preset_min,omitempty"`
+	PresetMax          int      `json:"preset_max,omitempty"`
+	HorizontalAngleMin int      `json:"horizontal_angle_min,omitempty"`
+	HorizontalAngleMax int      `json:"horizontal_angle_max,omitempty"`
+	VerticalAngleMin   int      `json:"vertical_angle_min,omitempty"`
+	VerticalAngleMax   int      `json:"vertical_angle_max,omitempty"`
+	Commands           []string `json:"commands,omitempty"`
+}
+
+type NVRRecordingCapabilities struct {
+	Supported bool   `json:"supported"`
+	Active    bool   `json:"active"`
+	Mode      string `json:"mode,omitempty"`
+}
+
+type NVRAuxCapabilities struct {
+	Supported bool     `json:"supported"`
+	Outputs   []string `json:"outputs,omitempty"`
+	Features  []string `json:"features,omitempty"`
+}
+
+type NVRPTZAction string
+
+const (
+	NVRPTZActionStart NVRPTZAction = "start"
+	NVRPTZActionStop  NVRPTZAction = "stop"
+	NVRPTZActionPulse NVRPTZAction = "pulse"
+)
+
+type NVRPTZCommand string
+
+const (
+	NVRPTZCommandUp        NVRPTZCommand = "up"
+	NVRPTZCommandDown      NVRPTZCommand = "down"
+	NVRPTZCommandLeft      NVRPTZCommand = "left"
+	NVRPTZCommandRight     NVRPTZCommand = "right"
+	NVRPTZCommandLeftUp    NVRPTZCommand = "left_up"
+	NVRPTZCommandRightUp   NVRPTZCommand = "right_up"
+	NVRPTZCommandLeftDown  NVRPTZCommand = "left_down"
+	NVRPTZCommandRightDown NVRPTZCommand = "right_down"
+	NVRPTZCommandZoomIn    NVRPTZCommand = "zoom_in"
+	NVRPTZCommandZoomOut   NVRPTZCommand = "zoom_out"
+	NVRPTZCommandFocusNear NVRPTZCommand = "focus_near"
+	NVRPTZCommandFocusFar  NVRPTZCommand = "focus_far"
+)
+
+type NVRPTZRequest struct {
+	Channel  int
+	Action   NVRPTZAction
+	Command  NVRPTZCommand
+	Speed    int
+	Duration time.Duration
+}
+
+type NVRAuxAction string
+
+const (
+	NVRAuxActionStart NVRAuxAction = "start"
+	NVRAuxActionStop  NVRAuxAction = "stop"
+	NVRAuxActionPulse NVRAuxAction = "pulse"
+)
+
+type NVRAuxRequest struct {
+	Channel  int
+	Action   NVRAuxAction
+	Output   string
+	Duration time.Duration
+}
+
+type NVRRecordingAction string
+
+const (
+	NVRRecordingActionStart NVRRecordingAction = "start"
+	NVRRecordingActionStop  NVRRecordingAction = "stop"
+)
+
+type NVRRecordingRequest struct {
+	Channel int
+	Action  NVRRecordingAction
+}
+
+type NVRChannelControlReader interface {
+	ChannelControlCapabilities(context.Context, int) (NVRChannelControlCapabilities, error)
+}
+
+type NVRPTZController interface {
+	PTZ(context.Context, NVRPTZRequest) error
+}
+
+type NVRAuxController interface {
+	Aux(context.Context, NVRAuxRequest) error
+}
+
+type NVRRecordingController interface {
+	Recording(context.Context, NVRRecordingRequest) error
+}
+
 type EventSource interface {
 	StreamEvents(context.Context, chan<- Event) error
 }
@@ -109,6 +326,63 @@ type VTOLockController interface {
 type VTOCallController interface {
 	AnswerCall(context.Context) error
 	HangupCall(context.Context) error
+}
+
+type VTOControlCapabilities struct {
+	DeviceID                    string                   `json:"device_id"`
+	Call                        VTOCallCapabilities      `json:"call"`
+	Locks                       VTOLockCapabilities      `json:"locks"`
+	Audio                       VTOAudioCapabilities     `json:"audio"`
+	Recording                   VTORecordingCapabilities `json:"recording"`
+	DirectTalkbackSupported     bool                     `json:"direct_talkback_supported"`
+	FullCallAcceptanceSupported bool                     `json:"full_call_acceptance_supported"`
+	ValidationNotes             []string                 `json:"validation_notes,omitempty"`
+}
+
+type VTOCallCapabilities struct {
+	Answer bool   `json:"answer"`
+	Hangup bool   `json:"hangup"`
+	State  string `json:"state,omitempty"`
+}
+
+type VTOLockCapabilities struct {
+	Supported bool  `json:"supported"`
+	Count     int   `json:"count,omitempty"`
+	Indexes   []int `json:"indexes,omitempty"`
+}
+
+type VTOAudioCapabilities struct {
+	OutputVolume       bool   `json:"output_volume"`
+	InputVolume        bool   `json:"input_volume"`
+	Mute               bool   `json:"mute"`
+	Codec              string `json:"codec,omitempty"`
+	OutputVolumeLevel  int    `json:"output_volume_level,omitempty"`
+	OutputVolumeLevels []int  `json:"output_volume_levels,omitempty"`
+	InputVolumeLevel   int    `json:"input_volume_level,omitempty"`
+	InputVolumeLevels  []int  `json:"input_volume_levels,omitempty"`
+	Muted              bool   `json:"muted,omitempty"`
+	StreamAudioEnabled bool   `json:"stream_audio_enabled,omitempty"`
+}
+
+type VTORecordingCapabilities struct {
+	Supported             bool `json:"supported"`
+	EventSnapshotLocal    bool `json:"event_snapshot_local"`
+	AutoRecordEnabled     bool `json:"auto_record_enabled,omitempty"`
+	AutoRecordTimeSeconds int  `json:"auto_record_time_seconds,omitempty"`
+}
+
+type VTOControlReader interface {
+	ControlCapabilities(context.Context) (VTOControlCapabilities, error)
+}
+
+type VTOAudioController interface {
+	SetAudioOutputVolume(context.Context, int, int) error
+	SetAudioInputVolume(context.Context, int, int) error
+	SetAudioMute(context.Context, bool) error
+}
+
+type VTORecordingController interface {
+	SetRecordingEnabled(context.Context, bool) error
 }
 
 type NVRInventoryRefresher interface {

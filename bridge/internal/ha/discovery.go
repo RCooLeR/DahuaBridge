@@ -38,6 +38,10 @@ type entityConfig struct {
 	StateTopic        string        `json:"state_topic"`
 	CommandTopic      string        `json:"command_topic,omitempty"`
 	ValueTemplate     string        `json:"value_template,omitempty"`
+	Min               *float64      `json:"min,omitempty"`
+	Max               *float64      `json:"max,omitempty"`
+	Step              *float64      `json:"step,omitempty"`
+	Mode              string        `json:"mode,omitempty"`
 	PayloadOn         string        `json:"payload_on,omitempty"`
 	PayloadOff        string        `json:"payload_off,omitempty"`
 	PayloadPress      string        `json:"payload_press,omitempty"`
@@ -140,7 +144,7 @@ func (p *DiscoveryPublisher) PublishProbe(ctx context.Context, result *dahua.Pro
 			if err := p.publishDiscovery(ctx, "sensor", device.ID, "firmware", metadataConfig); err != nil {
 				return err
 			}
-			for _, extra := range p.extraEntityConfigs(device, availabilityTopic, infoTopic) {
+			for _, extra := range p.extraEntityConfigs(device, state, availabilityTopic, infoTopic) {
 				if err := p.publishDiscovery(ctx, extra.component, device.ID, extra.objectID, extra.config); err != nil {
 					return err
 				}
@@ -243,7 +247,8 @@ func (p *DiscoveryPublisher) RemoveProbeDiscovery(ctx context.Context, result *d
 
 		availabilityTopic := p.deviceTopic(device.ID, "availability")
 		infoTopic := p.deviceTopic(device.ID, "info")
-		for _, extra := range p.extraEntityConfigs(device, availabilityTopic, infoTopic) {
+		state := result.States[device.ID]
+		for _, extra := range p.extraEntityConfigs(device, state, availabilityTopic, infoTopic) {
 			if err := p.clearDiscoveryTopic(ctx, p.discoveryTopic(extra.component, device.ID, extra.objectID)); err != nil {
 				return LegacyDiscoveryCleanupResult{}, err
 			}
@@ -396,6 +401,17 @@ type discoveredEntity struct {
 	config    entityConfig
 }
 
+func removeDiscoveredEntity(entities []discoveredEntity, objectID string) []discoveredEntity {
+	filtered := entities[:0]
+	for _, entity := range entities {
+		if entity.objectID == objectID {
+			continue
+		}
+		filtered = append(filtered, entity)
+	}
+	return filtered
+}
+
 type discoveredTrigger struct {
 	objectID string
 	config   deviceTriggerConfig
@@ -498,7 +514,7 @@ func sanitizeEntityID(value string) string {
 	return result
 }
 
-func (p *DiscoveryPublisher) extraEntityConfigs(device dahua.Device, availabilityTopic string, infoTopic string) []discoveredEntity {
+func (p *DiscoveryPublisher) extraEntityConfigs(device dahua.Device, state dahua.DeviceState, availabilityTopic string, infoTopic string) []discoveredEntity {
 	switch device.Kind {
 	case dahua.DeviceKindNVR:
 		return []discoveredEntity{
@@ -646,7 +662,7 @@ func (p *DiscoveryPublisher) extraEntityConfigs(device dahua.Device, availabilit
 			},
 		}
 	case dahua.DeviceKindNVRChannel:
-		return []discoveredEntity{
+		entities := []discoveredEntity{
 			{
 				component: "sensor",
 				objectID:  "channel_number",
@@ -820,6 +836,251 @@ func (p *DiscoveryPublisher) extraEntityConfigs(device dahua.Device, availabilit
 				},
 			},
 		}
+		if hasStateFeature(state.Info, "control_aux_features", "siren") {
+			entities = append(entities, discoveredEntity{
+				component: "button",
+				objectID:  "siren",
+				config: entityConfig{
+					Name:              "Siren",
+					UniqueID:          fmt.Sprintf("%s_%s_siren", p.cfg.HomeAssistant.NodeID, device.ID),
+					CommandTopic:      p.commandTopic(device.ID, "siren"),
+					PayloadPress:      "PRESS",
+					ObjectID:          fmt.Sprintf("%s_siren", device.ID),
+					AvailabilityTopic: availabilityTopic,
+					AvailabilityMode:  "latest",
+					Icon:              "mdi:bullhorn",
+					Device:            toDevicePayload(device),
+				},
+			})
+		}
+		if hasStateFeature(state.Info, "control_aux_features", "warning_light") {
+			entities = append(entities, discoveredEntity{
+				component: "button",
+				objectID:  "warning_light",
+				config: entityConfig{
+					Name:              "Warning Light",
+					UniqueID:          fmt.Sprintf("%s_%s_warning_light", p.cfg.HomeAssistant.NodeID, device.ID),
+					CommandTopic:      p.commandTopic(device.ID, "warning_light"),
+					PayloadPress:      "PRESS",
+					ObjectID:          fmt.Sprintf("%s_warning_light", device.ID),
+					AvailabilityTopic: availabilityTopic,
+					AvailabilityMode:  "latest",
+					Icon:              "mdi:alarm-light",
+					Device:            toDevicePayload(device),
+				},
+			})
+		}
+		if hasStateFeature(state.Info, "control_aux_features", "wiper") {
+			entities = append(entities, discoveredEntity{
+				component: "button",
+				objectID:  "wiper",
+				config: entityConfig{
+					Name:              "Wiper",
+					UniqueID:          fmt.Sprintf("%s_%s_wiper", p.cfg.HomeAssistant.NodeID, device.ID),
+					CommandTopic:      p.commandTopic(device.ID, "wiper"),
+					PayloadPress:      "PRESS",
+					ObjectID:          fmt.Sprintf("%s_wiper", device.ID),
+					AvailabilityTopic: availabilityTopic,
+					AvailabilityMode:  "latest",
+					Icon:              "mdi:wiper",
+					Device:            toDevicePayload(device),
+				},
+			})
+		}
+		if _, ok := state.Info["control_audio_supported"]; ok {
+			entities = append(entities,
+				discoveredEntity{
+					component: "binary_sensor",
+					objectID:  "audio_control_supported",
+					config: entityConfig{
+						Name:              "Audio Control Supported",
+						UniqueID:          fmt.Sprintf("%s_%s_audio_control_supported", p.cfg.HomeAssistant.NodeID, device.ID),
+						StateTopic:        infoTopic,
+						ValueTemplate:     "{{ 'ON' if value_json.info.control_audio_supported else 'OFF' }}",
+						PayloadOn:         "ON",
+						PayloadOff:        "OFF",
+						EntityCategory:    "diagnostic",
+						ObjectID:          fmt.Sprintf("%s_audio_control_supported", device.ID),
+						AvailabilityTopic: availabilityTopic,
+						AvailabilityMode:  "latest",
+						Icon:              "mdi:volume-source",
+						Device:            toDevicePayload(device),
+					},
+				},
+				discoveredEntity{
+					component: "binary_sensor",
+					objectID:  "audio_mute_control_supported",
+					config: entityConfig{
+						Name:              "Audio Mute Supported",
+						UniqueID:          fmt.Sprintf("%s_%s_audio_mute_control_supported", p.cfg.HomeAssistant.NodeID, device.ID),
+						StateTopic:        infoTopic,
+						ValueTemplate:     "{{ 'ON' if value_json.info.control_audio_mute_supported else 'OFF' }}",
+						PayloadOn:         "ON",
+						PayloadOff:        "OFF",
+						EntityCategory:    "diagnostic",
+						ObjectID:          fmt.Sprintf("%s_audio_mute_control_supported", device.ID),
+						AvailabilityTopic: availabilityTopic,
+						AvailabilityMode:  "latest",
+						Icon:              "mdi:volume-mute",
+						Device:            toDevicePayload(device),
+					},
+				},
+				discoveredEntity{
+					component: "binary_sensor",
+					objectID:  "audio_volume_control_supported",
+					config: entityConfig{
+						Name:              "Audio Volume Supported",
+						UniqueID:          fmt.Sprintf("%s_%s_audio_volume_control_supported", p.cfg.HomeAssistant.NodeID, device.ID),
+						StateTopic:        infoTopic,
+						ValueTemplate:     "{{ 'ON' if value_json.info.control_audio_volume_supported else 'OFF' }}",
+						PayloadOn:         "ON",
+						PayloadOff:        "OFF",
+						EntityCategory:    "diagnostic",
+						ObjectID:          fmt.Sprintf("%s_audio_volume_control_supported", device.ID),
+						AvailabilityTopic: availabilityTopic,
+						AvailabilityMode:  "latest",
+						Icon:              "mdi:volume-high",
+						Device:            toDevicePayload(device),
+					},
+				},
+				discoveredEntity{
+					component: "binary_sensor",
+					objectID:  "audio_playback_supported",
+					config: entityConfig{
+						Name:              "Audio Playback Supported",
+						UniqueID:          fmt.Sprintf("%s_%s_audio_playback_supported", p.cfg.HomeAssistant.NodeID, device.ID),
+						StateTopic:        infoTopic,
+						ValueTemplate:     "{{ 'ON' if value_json.info.control_audio_playback_supported else 'OFF' }}",
+						PayloadOn:         "ON",
+						PayloadOff:        "OFF",
+						EntityCategory:    "diagnostic",
+						ObjectID:          fmt.Sprintf("%s_audio_playback_supported", device.ID),
+						AvailabilityTopic: availabilityTopic,
+						AvailabilityMode:  "latest",
+						Icon:              "mdi:play-box-multiple",
+						Device:            toDevicePayload(device),
+					},
+				},
+				discoveredEntity{
+					component: "binary_sensor",
+					objectID:  "audio_playback_siren_supported",
+					config: entityConfig{
+						Name:              "Audio Siren Supported",
+						UniqueID:          fmt.Sprintf("%s_%s_audio_playback_siren_supported", p.cfg.HomeAssistant.NodeID, device.ID),
+						StateTopic:        infoTopic,
+						ValueTemplate:     "{{ 'ON' if value_json.info.control_audio_playback_siren else 'OFF' }}",
+						PayloadOn:         "ON",
+						PayloadOff:        "OFF",
+						EntityCategory:    "diagnostic",
+						ObjectID:          fmt.Sprintf("%s_audio_playback_siren_supported", device.ID),
+						AvailabilityTopic: availabilityTopic,
+						AvailabilityMode:  "latest",
+						Icon:              "mdi:bullhorn",
+						Device:            toDevicePayload(device),
+					},
+				},
+				discoveredEntity{
+					component: "sensor",
+					objectID:  "audio_playback_clip_count",
+					config: entityConfig{
+						Name:              "Audio Playback Clip Count",
+						UniqueID:          fmt.Sprintf("%s_%s_audio_playback_clip_count", p.cfg.HomeAssistant.NodeID, device.ID),
+						StateTopic:        infoTopic,
+						ValueTemplate:     "{{ value_json.info.control_audio_playback_file_count }}",
+						EntityCategory:    "diagnostic",
+						ObjectID:          fmt.Sprintf("%s_audio_playback_clip_count", device.ID),
+						AvailabilityTopic: availabilityTopic,
+						AvailabilityMode:  "latest",
+						Icon:              "mdi:playlist-music",
+						Device:            toDevicePayload(device),
+					},
+				},
+			)
+		}
+		if stateInfoBool(state.Info, "control_recording_supported") {
+			entities = append(entities,
+				discoveredEntity{
+					component: "binary_sensor",
+					objectID:  "recording_active",
+					config: entityConfig{
+						Name:              "Recording Active",
+						UniqueID:          fmt.Sprintf("%s_%s_recording_active", p.cfg.HomeAssistant.NodeID, device.ID),
+						StateTopic:        infoTopic,
+						ValueTemplate:     "{{ 'ON' if value_json.info.control_recording_active else 'OFF' }}",
+						PayloadOn:         "ON",
+						PayloadOff:        "OFF",
+						ObjectID:          fmt.Sprintf("%s_recording_active", device.ID),
+						AvailabilityTopic: availabilityTopic,
+						AvailabilityMode:  "latest",
+						Icon:              "mdi:record-rec",
+						Device:            toDevicePayload(device),
+					},
+				},
+				discoveredEntity{
+					component: "sensor",
+					objectID:  "recording_mode",
+					config: entityConfig{
+						Name:              "Recording Mode",
+						UniqueID:          fmt.Sprintf("%s_%s_recording_mode", p.cfg.HomeAssistant.NodeID, device.ID),
+						StateTopic:        infoTopic,
+						ValueTemplate:     "{{ value_json.info.control_recording_mode }}",
+						EntityCategory:    "diagnostic",
+						ObjectID:          fmt.Sprintf("%s_recording_mode", device.ID),
+						AvailabilityTopic: availabilityTopic,
+						AvailabilityMode:  "latest",
+						Icon:              "mdi:video-wireless",
+						Device:            toDevicePayload(device),
+					},
+				},
+				discoveredEntity{
+					component: "button",
+					objectID:  "recording_start",
+					config: entityConfig{
+						Name:              "Start Recording",
+						UniqueID:          fmt.Sprintf("%s_%s_recording_start", p.cfg.HomeAssistant.NodeID, device.ID),
+						CommandTopic:      p.commandTopic(device.ID, "recording_start"),
+						PayloadPress:      "PRESS",
+						ObjectID:          fmt.Sprintf("%s_recording_start", device.ID),
+						AvailabilityTopic: availabilityTopic,
+						AvailabilityMode:  "latest",
+						Icon:              "mdi:record-rec",
+						Device:            toDevicePayload(device),
+					},
+				},
+				discoveredEntity{
+					component: "button",
+					objectID:  "recording_stop",
+					config: entityConfig{
+						Name:              "Stop Recording",
+						UniqueID:          fmt.Sprintf("%s_%s_recording_stop", p.cfg.HomeAssistant.NodeID, device.ID),
+						CommandTopic:      p.commandTopic(device.ID, "recording_stop"),
+						PayloadPress:      "PRESS",
+						ObjectID:          fmt.Sprintf("%s_recording_stop", device.ID),
+						AvailabilityTopic: availabilityTopic,
+						AvailabilityMode:  "latest",
+						Icon:              "mdi:stop-circle-outline",
+						Device:            toDevicePayload(device),
+					},
+				},
+			)
+		}
+		entities = append(entities, discoveredEntity{
+			component: "sensor",
+			objectID:  "validation_notes",
+			config: entityConfig{
+				Name:              "Validation Notes",
+				UniqueID:          fmt.Sprintf("%s_%s_validation_notes", p.cfg.HomeAssistant.NodeID, device.ID),
+				StateTopic:        infoTopic,
+				ValueTemplate:     "{{ value_json.info.validation_notes_text }}",
+				EntityCategory:    "diagnostic",
+				ObjectID:          fmt.Sprintf("%s_validation_notes", device.ID),
+				AvailabilityTopic: availabilityTopic,
+				AvailabilityMode:  "latest",
+				Icon:              "mdi:note-text-outline",
+				Device:            toDevicePayload(device),
+			},
+		})
+		return entities
 	case dahua.DeviceKindNVRDisk:
 		return []discoveredEntity{
 			{
@@ -934,6 +1195,237 @@ func (p *DiscoveryPublisher) extraEntityConfigs(device dahua.Device, availabilit
 					AvailabilityTopic: availabilityTopic,
 					AvailabilityMode:  "latest",
 					Icon:              "mdi:alarm-light",
+					Device:            toDevicePayload(device),
+				},
+			},
+			{
+				component: "binary_sensor",
+				objectID:  "audio_output_volume_control_supported",
+				config: entityConfig{
+					Name:              "Output Volume Control Supported",
+					UniqueID:          fmt.Sprintf("%s_%s_audio_output_volume_control_supported", p.cfg.HomeAssistant.NodeID, device.ID),
+					StateTopic:        infoTopic,
+					ValueTemplate:     "{{ 'ON' if value_json.info.control_audio_output_volume_supported else 'OFF' }}",
+					PayloadOn:         "ON",
+					PayloadOff:        "OFF",
+					EntityCategory:    "diagnostic",
+					ObjectID:          fmt.Sprintf("%s_audio_output_volume_control_supported", device.ID),
+					AvailabilityTopic: availabilityTopic,
+					AvailabilityMode:  "latest",
+					Icon:              "mdi:volume-high",
+					Device:            toDevicePayload(device),
+				},
+			},
+			{
+				component: "binary_sensor",
+				objectID:  "audio_input_volume_control_supported",
+				config: entityConfig{
+					Name:              "Mic Volume Control Supported",
+					UniqueID:          fmt.Sprintf("%s_%s_audio_input_volume_control_supported", p.cfg.HomeAssistant.NodeID, device.ID),
+					StateTopic:        infoTopic,
+					ValueTemplate:     "{{ 'ON' if value_json.info.control_audio_input_volume_supported else 'OFF' }}",
+					PayloadOn:         "ON",
+					PayloadOff:        "OFF",
+					EntityCategory:    "diagnostic",
+					ObjectID:          fmt.Sprintf("%s_audio_input_volume_control_supported", device.ID),
+					AvailabilityTopic: availabilityTopic,
+					AvailabilityMode:  "latest",
+					Icon:              "mdi:microphone",
+					Device:            toDevicePayload(device),
+				},
+			},
+			{
+				component: "binary_sensor",
+				objectID:  "mute_control_supported",
+				config: entityConfig{
+					Name:              "Mute Control Supported",
+					UniqueID:          fmt.Sprintf("%s_%s_mute_control_supported", p.cfg.HomeAssistant.NodeID, device.ID),
+					StateTopic:        infoTopic,
+					ValueTemplate:     "{{ 'ON' if value_json.info.control_audio_mute_supported else 'OFF' }}",
+					PayloadOn:         "ON",
+					PayloadOff:        "OFF",
+					EntityCategory:    "diagnostic",
+					ObjectID:          fmt.Sprintf("%s_mute_control_supported", device.ID),
+					AvailabilityTopic: availabilityTopic,
+					AvailabilityMode:  "latest",
+					Icon:              "mdi:volume-mute",
+					Device:            toDevicePayload(device),
+				},
+			},
+			{
+				component: "binary_sensor",
+				objectID:  "recording_control_supported",
+				config: entityConfig{
+					Name:              "Recording Control Supported",
+					UniqueID:          fmt.Sprintf("%s_%s_recording_control_supported", p.cfg.HomeAssistant.NodeID, device.ID),
+					StateTopic:        infoTopic,
+					ValueTemplate:     "{{ 'ON' if value_json.info.control_recording_supported else 'OFF' }}",
+					PayloadOn:         "ON",
+					PayloadOff:        "OFF",
+					EntityCategory:    "diagnostic",
+					ObjectID:          fmt.Sprintf("%s_recording_control_supported", device.ID),
+					AvailabilityTopic: availabilityTopic,
+					AvailabilityMode:  "latest",
+					Icon:              "mdi:record-rec",
+					Device:            toDevicePayload(device),
+				},
+			},
+			{
+				component: "binary_sensor",
+				objectID:  "direct_talkback_supported",
+				config: entityConfig{
+					Name:              "Direct Talkback Supported",
+					UniqueID:          fmt.Sprintf("%s_%s_direct_talkback_supported", p.cfg.HomeAssistant.NodeID, device.ID),
+					StateTopic:        infoTopic,
+					ValueTemplate:     "{{ 'ON' if value_json.info.control_direct_talkback_supported else 'OFF' }}",
+					PayloadOn:         "ON",
+					PayloadOff:        "OFF",
+					EntityCategory:    "diagnostic",
+					ObjectID:          fmt.Sprintf("%s_direct_talkback_supported", device.ID),
+					AvailabilityTopic: availabilityTopic,
+					AvailabilityMode:  "latest",
+					Icon:              "mdi:microphone-message",
+					Device:            toDevicePayload(device),
+				},
+			},
+			{
+				component: "binary_sensor",
+				objectID:  "full_call_acceptance_supported",
+				config: entityConfig{
+					Name:              "Full Call Acceptance Supported",
+					UniqueID:          fmt.Sprintf("%s_%s_full_call_acceptance_supported", p.cfg.HomeAssistant.NodeID, device.ID),
+					StateTopic:        infoTopic,
+					ValueTemplate:     "{{ 'ON' if value_json.info.control_full_call_acceptance_supported else 'OFF' }}",
+					PayloadOn:         "ON",
+					PayloadOff:        "OFF",
+					EntityCategory:    "diagnostic",
+					ObjectID:          fmt.Sprintf("%s_full_call_acceptance_supported", device.ID),
+					AvailabilityTopic: availabilityTopic,
+					AvailabilityMode:  "latest",
+					Icon:              "mdi:phone-check",
+					Device:            toDevicePayload(device),
+				},
+			},
+			{
+				component: "binary_sensor",
+				objectID:  "event_snapshot_local_storage",
+				config: entityConfig{
+					Name:              "Event Snapshot Local Storage",
+					UniqueID:          fmt.Sprintf("%s_%s_event_snapshot_local_storage", p.cfg.HomeAssistant.NodeID, device.ID),
+					StateTopic:        infoTopic,
+					ValueTemplate:     "{{ 'ON' if value_json.info.record_storage_event_snapshot_local else 'OFF' }}",
+					PayloadOn:         "ON",
+					PayloadOff:        "OFF",
+					EntityCategory:    "diagnostic",
+					ObjectID:          fmt.Sprintf("%s_event_snapshot_local_storage", device.ID),
+					AvailabilityTopic: availabilityTopic,
+					AvailabilityMode:  "latest",
+					Icon:              "mdi:content-save-outline",
+					Device:            toDevicePayload(device),
+				},
+			},
+			{
+				component: "sensor",
+				objectID:  "output_volume",
+				config: entityConfig{
+					Name:              "Output Volume",
+					UniqueID:          fmt.Sprintf("%s_%s_output_volume", p.cfg.HomeAssistant.NodeID, device.ID),
+					StateTopic:        infoTopic,
+					ValueTemplate:     "{{ value_json.info.control_audio_output_volume }}",
+					EntityCategory:    "diagnostic",
+					UnitOfMeasurement: "%",
+					ObjectID:          fmt.Sprintf("%s_output_volume", device.ID),
+					AvailabilityTopic: availabilityTopic,
+					AvailabilityMode:  "latest",
+					Icon:              "mdi:volume-high",
+					Device:            toDevicePayload(device),
+				},
+			},
+			{
+				component: "sensor",
+				objectID:  "input_volume",
+				config: entityConfig{
+					Name:              "Mic Volume",
+					UniqueID:          fmt.Sprintf("%s_%s_input_volume", p.cfg.HomeAssistant.NodeID, device.ID),
+					StateTopic:        infoTopic,
+					ValueTemplate:     "{{ value_json.info.control_audio_input_volume }}",
+					EntityCategory:    "diagnostic",
+					UnitOfMeasurement: "%",
+					ObjectID:          fmt.Sprintf("%s_input_volume", device.ID),
+					AvailabilityTopic: availabilityTopic,
+					AvailabilityMode:  "latest",
+					Icon:              "mdi:microphone",
+					Device:            toDevicePayload(device),
+				},
+			},
+			{
+				component: "binary_sensor",
+				objectID:  "muted",
+				config: entityConfig{
+					Name:              "Muted",
+					UniqueID:          fmt.Sprintf("%s_%s_muted", p.cfg.HomeAssistant.NodeID, device.ID),
+					StateTopic:        infoTopic,
+					ValueTemplate:     "{{ 'ON' if value_json.info.control_audio_muted else 'OFF' }}",
+					PayloadOn:         "ON",
+					PayloadOff:        "OFF",
+					EntityCategory:    "diagnostic",
+					ObjectID:          fmt.Sprintf("%s_muted", device.ID),
+					AvailabilityTopic: availabilityTopic,
+					AvailabilityMode:  "latest",
+					Icon:              "mdi:volume-off",
+					Device:            toDevicePayload(device),
+				},
+			},
+			{
+				component: "binary_sensor",
+				objectID:  "auto_record_enabled",
+				config: entityConfig{
+					Name:              "Auto Record Enabled",
+					UniqueID:          fmt.Sprintf("%s_%s_auto_record_enabled", p.cfg.HomeAssistant.NodeID, device.ID),
+					StateTopic:        infoTopic,
+					ValueTemplate:     "{{ 'ON' if value_json.info.control_recording_auto_enabled else 'OFF' }}",
+					PayloadOn:         "ON",
+					PayloadOff:        "OFF",
+					EntityCategory:    "diagnostic",
+					ObjectID:          fmt.Sprintf("%s_auto_record_enabled", device.ID),
+					AvailabilityTopic: availabilityTopic,
+					AvailabilityMode:  "latest",
+					Icon:              "mdi:record-rec",
+					Device:            toDevicePayload(device),
+				},
+			},
+			{
+				component: "sensor",
+				objectID:  "auto_record_time_seconds",
+				config: entityConfig{
+					Name:              "Auto Record Time",
+					UniqueID:          fmt.Sprintf("%s_%s_auto_record_time_seconds", p.cfg.HomeAssistant.NodeID, device.ID),
+					StateTopic:        infoTopic,
+					ValueTemplate:     "{{ value_json.info.control_recording_auto_time_seconds }}",
+					EntityCategory:    "diagnostic",
+					UnitOfMeasurement: "s",
+					ObjectID:          fmt.Sprintf("%s_auto_record_time_seconds", device.ID),
+					AvailabilityTopic: availabilityTopic,
+					AvailabilityMode:  "latest",
+					Icon:              "mdi:timer-outline",
+					Device:            toDevicePayload(device),
+				},
+			},
+			{
+				component: "binary_sensor",
+				objectID:  "stream_audio_enabled",
+				config: entityConfig{
+					Name:              "Stream Audio Enabled",
+					UniqueID:          fmt.Sprintf("%s_%s_stream_audio_enabled", p.cfg.HomeAssistant.NodeID, device.ID),
+					StateTopic:        infoTopic,
+					ValueTemplate:     "{{ 'ON' if value_json.info.control_stream_audio_enabled else 'OFF' }}",
+					PayloadOn:         "ON",
+					PayloadOff:        "OFF",
+					EntityCategory:    "diagnostic",
+					ObjectID:          fmt.Sprintf("%s_stream_audio_enabled", device.ID),
+					AvailabilityTopic: availabilityTopic,
+					AvailabilityMode:  "latest",
+					Icon:              "mdi:speaker-wireless",
 					Device:            toDevicePayload(device),
 				},
 			},
@@ -1088,6 +1580,84 @@ func (p *DiscoveryPublisher) extraEntityConfigs(device dahua.Device, availabilit
 				},
 			},
 			{
+				component: "number",
+				objectID:  "output_volume_control",
+				config: entityConfig{
+					Name:              "Output Volume Control",
+					UniqueID:          fmt.Sprintf("%s_%s_output_volume_control", p.cfg.HomeAssistant.NodeID, device.ID),
+					StateTopic:        infoTopic,
+					CommandTopic:      p.commandTopic(device.ID, "output_volume"),
+					ValueTemplate:     "{{ value_json.info.control_audio_output_volume }}",
+					Min:               float64Ptr(0),
+					Max:               float64Ptr(100),
+					Step:              float64Ptr(1),
+					Mode:              "slider",
+					ObjectID:          fmt.Sprintf("%s_output_volume_control", device.ID),
+					AvailabilityTopic: availabilityTopic,
+					AvailabilityMode:  "latest",
+					UnitOfMeasurement: "%",
+					Icon:              "mdi:volume-high",
+					Device:            toDevicePayload(device),
+				},
+			},
+			{
+				component: "number",
+				objectID:  "input_volume_control",
+				config: entityConfig{
+					Name:              "Input Volume Control",
+					UniqueID:          fmt.Sprintf("%s_%s_input_volume_control", p.cfg.HomeAssistant.NodeID, device.ID),
+					StateTopic:        infoTopic,
+					CommandTopic:      p.commandTopic(device.ID, "input_volume"),
+					ValueTemplate:     "{{ value_json.info.control_audio_input_volume }}",
+					Min:               float64Ptr(0),
+					Max:               float64Ptr(100),
+					Step:              float64Ptr(1),
+					Mode:              "slider",
+					ObjectID:          fmt.Sprintf("%s_input_volume_control", device.ID),
+					AvailabilityTopic: availabilityTopic,
+					AvailabilityMode:  "latest",
+					UnitOfMeasurement: "%",
+					Icon:              "mdi:microphone",
+					Device:            toDevicePayload(device),
+				},
+			},
+			{
+				component: "switch",
+				objectID:  "mute",
+				config: entityConfig{
+					Name:              "Mute",
+					UniqueID:          fmt.Sprintf("%s_%s_mute", p.cfg.HomeAssistant.NodeID, device.ID),
+					StateTopic:        infoTopic,
+					CommandTopic:      p.commandTopic(device.ID, "mute"),
+					ValueTemplate:     "{{ 'ON' if value_json.info.control_audio_muted else 'OFF' }}",
+					PayloadOn:         "ON",
+					PayloadOff:        "OFF",
+					ObjectID:          fmt.Sprintf("%s_mute", device.ID),
+					AvailabilityTopic: availabilityTopic,
+					AvailabilityMode:  "latest",
+					Icon:              "mdi:volume-mute",
+					Device:            toDevicePayload(device),
+				},
+			},
+			{
+				component: "switch",
+				objectID:  "auto_record",
+				config: entityConfig{
+					Name:              "Auto Record",
+					UniqueID:          fmt.Sprintf("%s_%s_auto_record", p.cfg.HomeAssistant.NodeID, device.ID),
+					StateTopic:        infoTopic,
+					CommandTopic:      p.commandTopic(device.ID, "auto_record"),
+					ValueTemplate:     "{{ 'ON' if value_json.info.control_recording_auto_enabled else 'OFF' }}",
+					PayloadOn:         "ON",
+					PayloadOff:        "OFF",
+					ObjectID:          fmt.Sprintf("%s_auto_record", device.ID),
+					AvailabilityTopic: availabilityTopic,
+					AvailabilityMode:  "latest",
+					Icon:              "mdi:record-rec",
+					Device:            toDevicePayload(device),
+				},
+			},
+			{
 				component: "binary_sensor",
 				objectID:  "tamper",
 				config: entityConfig{
@@ -1120,6 +1690,22 @@ func (p *DiscoveryPublisher) extraEntityConfigs(device dahua.Device, availabilit
 				},
 			},
 			{
+				component: "sensor",
+				objectID:  "validation_notes",
+				config: entityConfig{
+					Name:              "Validation Notes",
+					UniqueID:          fmt.Sprintf("%s_%s_validation_notes", p.cfg.HomeAssistant.NodeID, device.ID),
+					StateTopic:        infoTopic,
+					ValueTemplate:     "{{ value_json.info.validation_notes_text }}",
+					EntityCategory:    "diagnostic",
+					ObjectID:          fmt.Sprintf("%s_validation_notes", device.ID),
+					AvailabilityTopic: availabilityTopic,
+					AvailabilityMode:  "latest",
+					Icon:              "mdi:note-text-outline",
+					Device:            toDevicePayload(device),
+				},
+			},
+			{
 				component: "event",
 				objectID:  "activity",
 				config: entityConfig{
@@ -1145,6 +1731,18 @@ func (p *DiscoveryPublisher) extraEntityConfigs(device dahua.Device, availabilit
 					Device: toDevicePayload(device),
 				},
 			},
+		}
+		if !stateInfoBool(state.Info, "control_audio_output_volume_supported") {
+			entities = removeDiscoveredEntity(entities, "output_volume_control")
+		}
+		if !stateInfoBool(state.Info, "control_audio_input_volume_supported") {
+			entities = removeDiscoveredEntity(entities, "input_volume_control")
+		}
+		if !stateInfoBool(state.Info, "control_audio_mute_supported") {
+			entities = removeDiscoveredEntity(entities, "mute")
+		}
+		if !stateInfoBool(state.Info, "control_recording_supported") {
+			entities = removeDiscoveredEntity(entities, "auto_record")
 		}
 		if p.cfg.Media.Enabled {
 			entities = append(entities, discoveredEntity{
@@ -1477,6 +2075,70 @@ func (p *DiscoveryPublisher) extraEntityConfigs(device dahua.Device, availabilit
 				},
 			},
 		}
+	default:
+		return nil
+	}
+}
+
+func hasStateFeature(values map[string]any, key string, want string) bool {
+	for _, value := range stateInfoStringSlice(values, key) {
+		if strings.EqualFold(value, want) {
+			return true
+		}
+	}
+	return false
+}
+
+func stateInfoBool(values map[string]any, key string) bool {
+	if values == nil {
+		return false
+	}
+	switch typed := values[key].(type) {
+	case bool:
+		return typed
+	case string:
+		return strings.EqualFold(strings.TrimSpace(typed), "true")
+	default:
+		return false
+	}
+}
+
+func float64Ptr(value float64) *float64 {
+	return &value
+}
+
+func stateInfoStringSlice(values map[string]any, key string) []string {
+	if values == nil {
+		return nil
+	}
+	raw, ok := values[key]
+	if !ok || raw == nil {
+		return nil
+	}
+
+	switch typed := raw.(type) {
+	case []string:
+		result := make([]string, 0, len(typed))
+		for _, value := range typed {
+			value = strings.TrimSpace(value)
+			if value != "" {
+				result = append(result, value)
+			}
+		}
+		return result
+	case []any:
+		result := make([]string, 0, len(typed))
+		for _, value := range typed {
+			text, ok := value.(string)
+			if !ok {
+				continue
+			}
+			text = strings.TrimSpace(text)
+			if text != "" {
+				result = append(result, text)
+			}
+		}
+		return result
 	default:
 		return nil
 	}

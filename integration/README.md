@@ -15,6 +15,7 @@ Main docs:
 - install guide: [../docs/install.md](../docs/install.md)
 - system overview: [../docs/how-it-works.md](../docs/how-it-works.md)
 - device and naming model: [../docs/device-model.md](../docs/device-model.md)
+- control surface: [../docs/controls.md](../docs/controls.md)
 - migration cleanup guide: [../docs/migration.md](../docs/migration.md)
 
 Short version:
@@ -34,7 +35,7 @@ Install target:
 
 Current characteristics:
 
-- unified device grouping for bridge-native camera, sensor, binary sensor, and button entities
+- unified device grouping for bridge-native camera, sensor, binary sensor, button, switch, and number entities
 - runtime-configurable poll interval through the Home Assistant options dialog
 - defaults now favor `quality` profile and bridge-hosted `HLS` for more responsive live playback
 - diagnostics download support for support/debugging, with bridge URLs and stream/action URLs redacted
