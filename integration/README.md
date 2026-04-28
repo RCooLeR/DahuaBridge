@@ -23,7 +23,7 @@ Short version:
 2. Copy `custom_components/dahuabridge` into your Home Assistant config.
 3. Restart Home Assistant.
 4. Add the `DahuaBridge` integration from the UI.
-5. Enter the bridge base URL, for example `http://bridge-host:8080`.
+5. Enter the bridge base URL, for example `http://bridge-host:9205`.
 6. Adjust the poll interval later from integration options if needed.
 
 Install target:

@@ -24,10 +24,10 @@ This repository is split into three main areas:
 1. Open [docs/install.md](/D:/Work/Projects/Go/src/RCooLeR/DahuaBridge/docs/install.md:1).
 2. Follow that guide from top to bottom.
 3. Start the bridge.
-4. Open `http://YOUR_BRIDGE_HOST:8080/admin` and make sure it loads.
+4. Open `http://YOUR_BRIDGE_HOST:9205/admin` and make sure it loads.
 5. Install the Home Assistant integration.
 6. Add the `DahuaBridge` integration in Home Assistant.
-7. Enter the bridge URL, for example `http://192.168.1.50:8080`.
+7. Enter the bridge URL, for example `http://192.168.1.50:9205`.
 
 ## Quick Commands
 

@@ -13,11 +13,13 @@ from .catalog import (
     catalog_records,
     device_id_for_record,
     entity_category_for_field,
+    field_requires_online,
     name_for_field,
     value_for_field,
 )
 from .const import DOMAIN
 from .entity import DahuaBridgeEntity
+from .registry_cleanup import prune_stale_entities
 
 
 async def async_setup_entry(
@@ -29,6 +31,7 @@ async def async_setup_entry(
     @callback
     def async_discover_entities() -> None:
         new_entities: list[BinarySensorEntity] = []
+        desired_unique_ids: set[str] = set()
 
         for record in catalog_records(coordinator.data):
             device_id = device_id_for_record(record)
@@ -36,12 +39,14 @@ async def async_setup_entry(
                 continue
 
             online_key = f"{device_id}:online"
+            desired_unique_ids.add(f"{device_id}_online")
             if online_key not in seen:
                 seen.add(online_key)
                 new_entities.append(DahuaBridgeOnlineBinarySensor(coordinator, device_id))
 
             for field in bool_field_names(record):
                 entity_key = f"{device_id}:{field}"
+                desired_unique_ids.add(f"{device_id}_{field}")
                 if entity_key in seen:
                     continue
                 seen.add(entity_key)
@@ -49,6 +54,14 @@ async def async_setup_entry(
                     DahuaBridgeStateBinarySensor(coordinator, device_id, field)
                 )
 
+        if coordinator.can_prune_registry:
+            prune_stale_entities(
+                hass,
+                entry,
+                "binary_sensor",
+                desired_unique_ids,
+                coordinator.stale_entity_miss_counts,
+            )
         if new_entities:
             async_add_entities(new_entities)
 
@@ -84,4 +97,6 @@ class DahuaBridgeStateBinarySensor(DahuaBridgeEntity, BinarySensorEntity):
 
     @property
     def available(self) -> bool:
-        return super().available and self.device_online
+        return super().available and (
+            self.device_online or not field_requires_online(self._field)
+        )

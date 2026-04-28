@@ -118,6 +118,45 @@ func TestRecommendProfilePrefersQualityForH264MainStream(t *testing.T) {
 	}
 }
 
+func TestRecommendProfilePrefersStableForDahuaH265Variants(t *testing.T) {
+	testCases := []string{
+		"H.265",
+		"H.265H",
+		"Smart H.265+",
+		"HEVC",
+	}
+
+	for _, codec := range testCases {
+		if got := recommendProfile(codec, "1920x1080", "H.264", "704x576"); got != "stable" {
+			t.Fatalf("expected stable recommendation for %q, got %q", codec, got)
+		}
+	}
+}
+
+func TestCodecFamilyNormalizesDahuaCodecNames(t *testing.T) {
+	testCases := map[string]string{
+		"H.264":        "h264",
+		"H.264B":       "h264",
+		"H.264H":       "h264",
+		"H.264M":       "h264",
+		"Smart H.264+": "h264",
+		"H.265":        "h265",
+		"H.265H":       "h265",
+		"Smart H.265+": "h265",
+		"HEVC":         "h265",
+		"MJPEG":        "mjpeg",
+		"MJPG":         "mjpeg",
+		"MPEG4":        "mpeg4",
+		"SVAC":         "svac",
+	}
+
+	for input, want := range testCases {
+		if got := codecFamily(input); got != want {
+			t.Fatalf("codecFamily(%q) = %q, want %q", input, got, want)
+		}
+	}
+}
+
 func TestBuildCatalogAppliesONVIFRecommendation(t *testing.T) {
 	catalog := BuildCatalog(CatalogInput{
 		ProbeResults: []*dahua.ProbeResult{

@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
 from aiohttp import ClientError, ClientSession
 
 from .const import CATALOG_PATH, STATUS_PATH
+
+_LOGGER = logging.getLogger(__name__)
 
 
 class DahuaBridgeAPIError(Exception):
@@ -33,23 +36,96 @@ class DahuaBridgeAPI:
     def absolute_url(self, target: str) -> str:
         return self._absolute_url(target)
 
+    def bridge_resource_url(self, target: str) -> str:
+        parsed_target = urlsplit(target)
+        if parsed_target.scheme not in {"http", "https"}:
+            return self._absolute_url(target)
+
+        parsed_base = urlsplit(self._base_url)
+        return urlunsplit(
+            (
+                parsed_base.scheme,
+                parsed_base.netloc,
+                parsed_target.path,
+                parsed_target.query,
+                parsed_target.fragment,
+            )
+        )
+
     async def async_get_status(self) -> dict[str, Any]:
         return await self._async_request_json("GET", STATUS_PATH)
 
-    async def async_get_catalog(self) -> dict[str, Any]:
-        return await self._async_request_json("GET", CATALOG_PATH)
+    async def async_get_catalog(self, include_credentials: bool = False) -> dict[str, Any]:
+        target = CATALOG_PATH
+        if include_credentials:
+            target = f"{CATALOG_PATH}?include_credentials=true"
+        return await self._async_request_json("GET", target)
 
     async def async_get_bytes(self, target: str) -> bytes:
         url = self._absolute_url(target)
         try:
+            _LOGGER.debug("Requesting bridge bytes from %s", url)
             async with self._session.get(url) as response:
                 if response.status >= 400:
+                    body = await response.text()
+                    _LOGGER.warning(
+                        "Bridge request failed: GET %s returned %s with body %s",
+                        url,
+                        response.status,
+                        body,
+                    )
                     raise DahuaBridgeAPIError(
-                        f"GET {url} returned {response.status}: {await response.text()}"
+                        f"GET {url} returned {response.status}: {body}"
                     )
                 return await response.read()
         except ClientError as err:
+            _LOGGER.warning("Bridge request failed: GET %s raised %r", url, err)
             raise DahuaBridgeAPIError(f"GET {url} failed: {err}") from err
+
+    async def async_get_mjpeg_frame(self, target: str) -> bytes:
+        url = self._absolute_url(target)
+        jpeg_start = b"\xff\xd8"
+        jpeg_end = b"\xff\xd9"
+        max_buffer = 4 * 1024 * 1024
+        buffer = bytearray()
+
+        try:
+            _LOGGER.debug("Requesting bridge MJPEG frame from %s", url)
+            async with self._session.get(url) as response:
+                if response.status >= 400:
+                    body = await response.text()
+                    _LOGGER.warning(
+                        "Bridge MJPEG request failed: GET %s returned %s with body %s",
+                        url,
+                        response.status,
+                        body,
+                    )
+                    raise DahuaBridgeAPIError(
+                        f"GET {url} returned {response.status}: {body}"
+                    )
+
+                async for chunk in response.content.iter_chunked(4096):
+                    if not chunk:
+                        continue
+                    buffer.extend(chunk)
+                    start = buffer.find(jpeg_start)
+                    if start >= 0:
+                        end = buffer.find(jpeg_end, start + 2)
+                        if end >= 0:
+                            frame = bytes(buffer[start : end + 2])
+                            _LOGGER.debug(
+                                "Bridge MJPEG frame extracted from %s (%d bytes)",
+                                url,
+                                len(frame),
+                            )
+                            return frame
+                    if len(buffer) > max_buffer:
+                        del buffer[: len(buffer) - max_buffer]
+        except ClientError as err:
+            _LOGGER.warning("Bridge MJPEG request failed: GET %s raised %r", url, err)
+            raise DahuaBridgeAPIError(f"GET {url} failed: {err}") from err
+
+        raise DahuaBridgeAPIError(f"GET {url} did not yield a JPEG frame")
 
     async def async_post_action(self, target: str) -> dict[str, Any]:
         return await self._async_request_json("POST", target)
@@ -59,29 +135,55 @@ class DahuaBridgeAPI:
     ) -> dict[str, Any]:
         url = self._absolute_url(target)
         try:
+            _LOGGER.debug("Requesting bridge JSON via %s %s", method, url)
             async with self._session.request(method, url) as response:
                 body = await response.text()
                 if response.status >= 400:
+                    _LOGGER.warning(
+                        "Bridge request failed: %s %s returned %s with body %s",
+                        method,
+                        url,
+                        response.status,
+                        body,
+                    )
                     raise DahuaBridgeAPIError(
                         f"{method} {url} returned {response.status}: {body}"
                     )
         except ClientError as err:
+            _LOGGER.warning(
+                "Bridge request failed: %s %s raised %r", method, url, err
+            )
             raise DahuaBridgeAPIError(f"{method} {url} failed: {err}") from err
 
         if not body.strip():
+            _LOGGER.debug("Bridge request returned empty JSON body: %s %s", method, url)
             return {}
 
         try:
             payload = json.loads(body)
         except json.JSONDecodeError as err:
+            _LOGGER.warning(
+                "Bridge request returned invalid JSON: %s %s body=%s error=%r",
+                method,
+                url,
+                body,
+                err,
+            )
             raise DahuaBridgeAPIError(
                 f"{method} {url} returned invalid JSON: {err}"
             ) from err
 
         if not isinstance(payload, dict):
+            _LOGGER.warning(
+                "Bridge request returned unexpected payload type: %s %s type=%s",
+                method,
+                url,
+                type(payload).__name__,
+            )
             raise DahuaBridgeAPIError(
                 f"{method} {url} returned unexpected payload type"
             )
+        _LOGGER.debug("Bridge request succeeded: %s %s", method, url)
         return payload
 
     def _absolute_url(self, target: str) -> str:

@@ -5,14 +5,19 @@ import (
 	"crypto/md5"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"RCooLeR/DahuaBridge/internal/buildinfo"
 	"RCooLeR/DahuaBridge/internal/config"
 	"RCooLeR/DahuaBridge/internal/dahua"
+	"RCooLeR/DahuaBridge/internal/dahua/cgi"
+	"RCooLeR/DahuaBridge/internal/metrics"
 	"github.com/rs/zerolog"
 )
 
@@ -69,6 +74,34 @@ func TestParseVTOAlarms(t *testing.T) {
 	}
 	if alarms[0].SenseMethod != "Button" || !alarms[0].Enabled {
 		t.Fatalf("unexpected alarm inventory: %+v", alarms[0])
+	}
+}
+
+func TestFilterVTOLocks(t *testing.T) {
+	cfg := config.DeviceConfig{LockAllowlist: []int{1}}
+	locks := []lockInventory{
+		{Index: 0, Name: "Door1"},
+		{Index: 1, Name: "Door2"},
+		{Index: 2, Name: "Door3"},
+	}
+
+	filtered := filterVTOLocks(cfg, locks)
+	if len(filtered) != 1 || filtered[0].Index != 0 {
+		t.Fatalf("unexpected filtered locks %+v", filtered)
+	}
+}
+
+func TestFilterVTOAlarms(t *testing.T) {
+	cfg := config.DeviceConfig{AlarmAllowlist: []int{1, 4}}
+	alarms := []alarmInventory{
+		{Index: 0, Name: "Alarm1"},
+		{Index: 1, Name: "Alarm2"},
+		{Index: 3, Name: "Alarm4"},
+	}
+
+	filtered := filterVTOAlarms(cfg, alarms)
+	if len(filtered) != 2 || filtered[0].Index != 0 || filtered[1].Index != 3 {
+		t.Fatalf("unexpected filtered alarms %+v", filtered)
 	}
 }
 
@@ -474,7 +507,193 @@ func TestDriverAnswerCallUsesVideoTalkPhoneService(t *testing.T) {
 	}
 }
 
+func TestDriverProbeCachesStaticMetadata(t *testing.T) {
+	var mu sync.Mutex
+	counts := map[string]int{}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		counts[requestKey(r)]++
+		mu.Unlock()
+
+		switch r.URL.Path {
+		case "/cgi-bin/magicBox.cgi":
+			switch r.URL.Query().Get("action") {
+			case "getSystemInfo":
+				fmt.Fprint(w, "deviceType=VTO\nprocessor=ARM\nserialNumber=SN123\nupdateSerial=VTO2311\n")
+			case "getMachineName":
+				fmt.Fprint(w, "name=Front Gate\n")
+			case "getSoftwareVersion":
+				fmt.Fprint(w, "version=1.2.3, build:2026-04-27\n")
+			default:
+				t.Fatalf("unexpected magicBox action: %s", r.URL.RawQuery)
+			}
+		case "/cgi-bin/configManager.cgi":
+			switch r.URL.Query().Get("name") {
+			case "AccessControl":
+				fmt.Fprint(w, "table.AccessControl[0].Name=Door1\ntable.AccessControl[0].State=Normal\ntable.AccessControl[0].SensorEnable=false\ntable.AccessControl[0].LockMode=2\ntable.AccessControl[0].UnlockHoldInterval=2\n")
+			case "CommGlobal":
+				fmt.Fprint(w, "table.CommGlobal.CurrentProfile=Villa\ntable.CommGlobal.AlarmEnable=true\n")
+			case "Alarm":
+				fmt.Fprint(w, "table.Alarm[0].Name=Alarm1\ntable.Alarm[0].SenseMethod=Button\ntable.Alarm[0].Enable=true\n")
+			case "Encode":
+				fmt.Fprint(w, "table.Encode[0].MainFormat[0].Video.resolution=1280x720\ntable.Encode[0].MainFormat[0].Video.Compression=H.264\ntable.Encode[0].ExtraFormat[0].Video.resolution=640x480\ntable.Encode[0].ExtraFormat[0].Video.Compression=H.264\ntable.Encode[0].MainFormat[0].Audio.Compression=PCM\n")
+			default:
+				t.Fatalf("unexpected configManager name: %s", r.URL.RawQuery)
+			}
+		default:
+			t.Fatalf("unexpected request path %q", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	cfg := config.DeviceConfig{
+		ID:             "front_vto",
+		BaseURL:        server.URL,
+		Username:       "admin",
+		Password:       "secret",
+		RequestTimeout: 2 * time.Second,
+		PollInterval:   30 * time.Second,
+	}
+	driver := New(cfg, zerolog.Nop(), cgi.New(cfg, metrics.New(buildinfo.BuildInfo{})))
+
+	result1, err := driver.Probe(context.Background())
+	if err != nil {
+		t.Fatalf("first probe returned error: %v", err)
+	}
+	result2, err := driver.Probe(context.Background())
+	if err != nil {
+		t.Fatalf("second probe returned error: %v", err)
+	}
+
+	if result1.Root.Name != "Front Gate" || result2.Root.Name != "Front Gate" {
+		t.Fatalf("unexpected probe names: %q / %q", result1.Root.Name, result2.Root.Name)
+	}
+	if got := len(result2.Children); got != 2 {
+		t.Fatalf("expected cached probe to preserve children, got %d", got)
+	}
+
+	for _, key := range []string{
+		"magicBox:getSystemInfo",
+		"magicBox:getMachineName",
+		"magicBox:getSoftwareVersion",
+		"config:AccessControl",
+		"config:CommGlobal",
+		"config:Alarm",
+		"config:Encode",
+	} {
+		mu.Lock()
+		got := counts[key]
+		mu.Unlock()
+		if got != 1 {
+			t.Fatalf("expected %s to be fetched once, got %d", key, got)
+		}
+	}
+}
+
+func TestDriverProbeUsesStaleMetadataOnRefreshFailure(t *testing.T) {
+	var mu sync.Mutex
+	failAccess := false
+	counts := map[string]int{}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		key := requestKey(r)
+		mu.Lock()
+		counts[key]++
+		shouldFailAccess := failAccess
+		mu.Unlock()
+
+		switch r.URL.Path {
+		case "/cgi-bin/magicBox.cgi":
+			switch r.URL.Query().Get("action") {
+			case "getSystemInfo":
+				fmt.Fprint(w, "deviceType=VTO\nprocessor=ARM\nserialNumber=SN123\nupdateSerial=VTO2311\n")
+			case "getMachineName":
+				fmt.Fprint(w, "name=Front Gate\n")
+			case "getSoftwareVersion":
+				fmt.Fprint(w, "version=1.2.3, build:2026-04-27\n")
+			default:
+				t.Fatalf("unexpected magicBox action: %s", r.URL.RawQuery)
+			}
+		case "/cgi-bin/configManager.cgi":
+			switch r.URL.Query().Get("name") {
+			case "AccessControl":
+				if shouldFailAccess {
+					http.Error(w, "timeout-ish failure", http.StatusGatewayTimeout)
+					return
+				}
+				fmt.Fprint(w, "table.AccessControl[0].Name=Door1\ntable.AccessControl[0].State=Normal\ntable.AccessControl[0].SensorEnable=false\ntable.AccessControl[0].LockMode=2\ntable.AccessControl[0].UnlockHoldInterval=2\n")
+			case "CommGlobal":
+				fmt.Fprint(w, "table.CommGlobal.CurrentProfile=Villa\ntable.CommGlobal.AlarmEnable=true\n")
+			case "Alarm":
+				fmt.Fprint(w, "table.Alarm[0].Name=Alarm1\ntable.Alarm[0].SenseMethod=Button\ntable.Alarm[0].Enable=true\n")
+			case "Encode":
+				fmt.Fprint(w, "table.Encode[0].MainFormat[0].Video.resolution=1280x720\ntable.Encode[0].MainFormat[0].Video.Compression=H.264\ntable.Encode[0].ExtraFormat[0].Video.resolution=640x480\ntable.Encode[0].ExtraFormat[0].Video.Compression=H.264\ntable.Encode[0].MainFormat[0].Audio.Compression=PCM\n")
+			default:
+				t.Fatalf("unexpected configManager name: %s", r.URL.RawQuery)
+			}
+		default:
+			t.Fatalf("unexpected request path %q", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	cfg := config.DeviceConfig{
+		ID:             "front_vto",
+		BaseURL:        server.URL,
+		Username:       "admin",
+		Password:       "secret",
+		RequestTimeout: 2 * time.Second,
+		PollInterval:   30 * time.Second,
+	}
+	driver := New(cfg, zerolog.Nop(), cgi.New(cfg, metrics.New(buildinfo.BuildInfo{})))
+
+	first, err := driver.Probe(context.Background())
+	if err != nil {
+		t.Fatalf("first probe returned error: %v", err)
+	}
+	if first.Root.Attributes["lock_count"] != "1" {
+		t.Fatalf("expected initial lock count 1, got %q", first.Root.Attributes["lock_count"])
+	}
+
+	driver.mu.Lock()
+	driver.probeCacheExpiry = time.Now().Add(-time.Second)
+	driver.mu.Unlock()
+
+	mu.Lock()
+	failAccess = true
+	mu.Unlock()
+
+	second, err := driver.Probe(context.Background())
+	if err != nil {
+		t.Fatalf("probe with stale metadata fallback returned error: %v", err)
+	}
+	if second.Root.Attributes["lock_count"] != "1" {
+		t.Fatalf("expected stale lock count 1, got %q", second.Root.Attributes["lock_count"])
+	}
+	if got := second.States["front_vto_lock_00"].Info["state"]; got != "Normal" {
+		t.Fatalf("expected stale lock state to survive refresh failure, got %+v", got)
+	}
+
+	mu.Lock()
+	got := counts["config:AccessControl"]
+	mu.Unlock()
+	if got != 2 {
+		t.Fatalf("expected AccessControl refresh attempt count 2, got %d", got)
+	}
+}
+
 func uppercaseMD5(value string) string {
 	sum := md5.Sum([]byte(value))
 	return strings.ToUpper(hex.EncodeToString(sum[:]))
+}
+
+func requestKey(r *http.Request) string {
+	if r.URL.Path == "/cgi-bin/magicBox.cgi" {
+		return "magicBox:" + r.URL.Query().Get("action")
+	}
+	if r.URL.Path == "/cgi-bin/configManager.cgi" {
+		return "config:" + r.URL.Query().Get("name")
+	}
+	return r.URL.Path
 }
