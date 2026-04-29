@@ -2,87 +2,15 @@ package app
 
 import (
 	"context"
-	"errors"
-	"reflect"
 	"strings"
 	"testing"
 	"time"
 
 	"RCooLeR/DahuaBridge/internal/config"
 	"RCooLeR/DahuaBridge/internal/dahua"
-	"RCooLeR/DahuaBridge/internal/ha"
 	"RCooLeR/DahuaBridge/internal/media"
-	"RCooLeR/DahuaBridge/internal/mqtt"
 	"RCooLeR/DahuaBridge/internal/store"
-	"github.com/rs/zerolog"
 )
-
-func TestSnapshotTargetsForProbeResult(t *testing.T) {
-	tests := []struct {
-		name   string
-		result *dahua.ProbeResult
-		want   []cameraSnapshotTarget
-	}{
-		{
-			name: "nvr channels",
-			result: &dahua.ProbeResult{
-				Root: dahua.Device{
-					ID:   "west20_nvr",
-					Kind: dahua.DeviceKindNVR,
-				},
-				Children: []dahua.Device{
-					{
-						ID:   "west20_nvr_channel_01",
-						Kind: dahua.DeviceKindNVRChannel,
-						Attributes: map[string]string{
-							"channel_index": "1",
-						},
-					},
-					{
-						ID:   "west20_nvr_disk_00",
-						Kind: dahua.DeviceKindNVRDisk,
-					},
-				},
-			},
-			want: []cameraSnapshotTarget{
-				{deviceID: "west20_nvr_channel_01", channel: 1},
-			},
-		},
-		{
-			name: "vto root",
-			result: &dahua.ProbeResult{
-				Root: dahua.Device{
-					ID:   "front_vto",
-					Kind: dahua.DeviceKindVTO,
-				},
-			},
-			want: []cameraSnapshotTarget{
-				{deviceID: "front_vto", channel: 0},
-			},
-		},
-		{
-			name: "ipc root",
-			result: &dahua.ProbeResult{
-				Root: dahua.Device{
-					ID:   "yard_ipc",
-					Kind: dahua.DeviceKindIPC,
-				},
-			},
-			want: []cameraSnapshotTarget{
-				{deviceID: "yard_ipc", channel: 1},
-			},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := snapshotTargetsForProbeResult(tt.result)
-			if !reflect.DeepEqual(got, tt.want) {
-				t.Fatalf("snapshotTargetsForProbeResult() mismatch:\nwant: %#v\ngot:  %#v", tt.want, got)
-			}
-		})
-	}
-}
 
 type stubRuntimeMedia struct {
 	status map[string]media.IntercomStatus
@@ -104,41 +32,6 @@ func (s *stubSnapshotProvider) Snapshot(_ context.Context, channel int) ([]byte,
 	}
 	return append([]byte(nil), s.body...), s.contentType, nil
 }
-
-type stubSnapshotDriver struct {
-	*stubSnapshotProvider
-}
-
-func (d *stubSnapshotDriver) ID() string { return "stub" }
-
-func (d *stubSnapshotDriver) Kind() dahua.DeviceKind { return dahua.DeviceKindIPC }
-
-func (d *stubSnapshotDriver) PollInterval() time.Duration { return 0 }
-
-func (d *stubSnapshotDriver) Probe(context.Context) (*dahua.ProbeResult, error) { return nil, nil }
-
-type appMockMQTTClient struct {
-	published []appPublishedMessage
-}
-
-type appPublishedMessage struct {
-	topic   string
-	payload []byte
-}
-
-func (m *appMockMQTTClient) Connect(context.Context) error { return nil }
-func (m *appMockMQTTClient) Subscribe(context.Context, string, byte, func(string, []byte)) error {
-	return nil
-}
-func (m *appMockMQTTClient) Close() {}
-func (m *appMockMQTTClient) Publish(_ context.Context, topic string, _ byte, _ bool, payload []byte) error {
-	cloned := append([]byte(nil), payload...)
-	m.published = append(m.published, appPublishedMessage{topic: topic, payload: cloned})
-	return nil
-}
-func (m *appMockMQTTClient) PublishJSON(context.Context, string, byte, bool, any) error { return nil }
-
-var _ mqtt.Client = (*appMockMQTTClient)(nil)
 
 func (s stubRuntimeMedia) IntercomStatus(streamID string) media.IntercomStatus {
 	if s.status != nil {
@@ -351,40 +244,5 @@ func TestRuntimeServicesSeekNVRPlaybackSessionReturnsNewSession(t *testing.T) {
 	}
 	if seeked.SeekTime != "2026-04-28T00:30:00Z" {
 		t.Fatalf("unexpected seek time %q", seeked.SeekTime)
-	}
-}
-
-func TestPublishProbeCameraSnapshotsUsesLogoWithoutFetchingDeviceSnapshot(t *testing.T) {
-	mqttClient := &appMockMQTTClient{}
-	discovery := ha.NewDiscoveryPublisher(config.Config{
-		MQTT: config.MQTTConfig{
-			TopicPrefix: "dahuabridge",
-			QoS:         1,
-		},
-		HomeAssistant: config.HomeAssistantConfig{
-			Enabled:              true,
-			NodeID:               "dahuabridge",
-			CameraSnapshotSource: "logo",
-		},
-	}, mqttClient, zerolog.Nop())
-
-	provider := &stubSnapshotDriver{stubSnapshotProvider: &stubSnapshotProvider{err: errors.New("snapshot should not be called")}}
-	result := &dahua.ProbeResult{
-		Root: dahua.Device{ID: "yard_ipc", Kind: dahua.DeviceKindIPC},
-	}
-
-	publishProbeCameraSnapshots(zerolog.Nop(), discovery, provider, result)
-
-	if provider.calls != 0 {
-		t.Fatalf("expected no snapshot provider calls, got %d", provider.calls)
-	}
-	if len(mqttClient.published) != 1 {
-		t.Fatalf("expected one placeholder snapshot publish, got %+v", mqttClient.published)
-	}
-	if mqttClient.published[0].topic != "dahuabridge/devices/yard_ipc/camera/snapshot" {
-		t.Fatalf("unexpected camera snapshot topic %q", mqttClient.published[0].topic)
-	}
-	if len(mqttClient.published[0].payload) == 0 {
-		t.Fatal("expected non-empty placeholder snapshot payload")
 	}
 }

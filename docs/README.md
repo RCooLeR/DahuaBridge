@@ -5,8 +5,7 @@ Start here if you want the short practical version.
 - [install.md](install.md): step-by-step install guide
 - [how-it-works.md](how-it-works.md): short architecture overview
 - [device-model.md](device-model.md): what devices, sensors, events, and names the project creates
-- [controls.md](controls.md): control APIs, archive/playback APIs, MQTT command entities, and native-integration controls
-- [migration.md](migration.md): move from mixed MQTT/ONVIF/generic-camera setups to clean native HA devices
+- [controls.md](controls.md): control APIs, archive/playback APIs, and native-integration controls
 
 Other useful files:
 

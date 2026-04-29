@@ -18,7 +18,6 @@ It does the real work:
 - probes device identity, inventory, and stream metadata
 - listens to supported Dahua event streams
 - normalizes device state and events into one internal model
-- publishes MQTT discovery, MQTT state, and MQTT triggers
 - exposes HTTP APIs for devices, events, snapshots, streams, and admin actions
 - serves bridge-hosted media paths such as `MJPEG`, `HLS`, and playback `WebRTC`
 - exposes a native Home Assistant catalog endpoint for unified device/entity creation
@@ -52,9 +51,9 @@ This is the important architectural point:
 - the bridge understands Dahua
 - the integration understands Home Assistant
 
-## The Future HA Cards
+## The HA Cards
 
-`ha-cards/` is reserved for future custom Home Assistant cards.
+`ha-cards/` contains the custom Home Assistant card workspace.
 
 The intended role of cards is:
 
@@ -71,10 +70,10 @@ That work belongs in the bridge and the integration.
 2. The bridge probes configured Dahua devices.
 3. The bridge stores normalized state in memory.
 4. The bridge listens for event updates and updates state.
-5. The bridge publishes MQTT and exposes HTTP endpoints.
+5. The bridge exposes HTTP endpoints and media helpers.
 6. The Home Assistant custom integration polls the native bridge catalog.
 7. Home Assistant creates or updates devices and entities.
-8. Future cards can render those Home Assistant devices and entities into a nicer dashboard.
+8. Cards can render those Home Assistant devices and entities into a nicer dashboard.
 
 ## Why The Native Integration Exists
 
@@ -89,29 +88,8 @@ Example:
 
 That is the main reason for the bridge-native integration.
 
-Without it, the system tends to split across:
-
-- MQTT entities
-- ONVIF-created devices
-- generic camera entities
-
-That split works, but it is messier in Home Assistant.
-
-## Optional Legacy Paths
-
-The project still has other paths that can be useful:
-
-- MQTT discovery/state
-- generated Home Assistant helper packages
-- ONVIF helper/provisioning
-
-Those are still valid, but the long-term clean UI path is:
+The supported Home Assistant path is:
 
 - bridge-native catalog
 - custom Home Assistant integration
-- future custom cards
-
-For cleanup of duplicate legacy Home Assistant devices, use:
-
-- `home_assistant.entity_mode: native`
-- `POST /api/v1/home-assistant/mqtt/discovery/remove`
+- optional custom cards

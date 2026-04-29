@@ -3,15 +3,11 @@ package app
 import (
 	"context"
 	"fmt"
-	"net/url"
-	"strconv"
 	"sync"
 	"time"
 
 	"RCooLeR/DahuaBridge/internal/config"
 	"RCooLeR/DahuaBridge/internal/dahua"
-	"RCooLeR/DahuaBridge/internal/ha"
-	"RCooLeR/DahuaBridge/internal/haapi"
 	"RCooLeR/DahuaBridge/internal/media"
 	"RCooLeR/DahuaBridge/internal/store"
 	"RCooLeR/DahuaBridge/internal/streams"
@@ -207,40 +203,6 @@ func (r *runtimeServices) IPCSnapshot(ctx context.Context, deviceID string) ([]b
 	return body, contentType, nil
 }
 
-func (r *runtimeServices) RenderHomeAssistantCameraPackage(options ha.CameraPackageOptions) (string, error) {
-	r.mu.RLock()
-	nvrConfigs := make(map[string]config.DeviceConfig, len(r.nvrConfigs))
-	for key, value := range r.nvrConfigs {
-		nvrConfigs[key] = value
-	}
-	vtoConfigs := make(map[string]config.DeviceConfig, len(r.vtoConfigs))
-	for key, value := range r.vtoConfigs {
-		vtoConfigs[key] = value
-	}
-	ipcConfigs := make(map[string]config.DeviceConfig, len(r.ipcConfigs))
-	for key, value := range r.ipcConfigs {
-		ipcConfigs[key] = value
-	}
-	r.mu.RUnlock()
-
-	return ha.RenderCameraPackage(ha.CameraPackageInput{
-		Config:       r.cfg,
-		ProbeResults: r.probes.List(),
-		NVRConfigs:   nvrConfigs,
-		VTOConfigs:   vtoConfigs,
-		IPCConfigs:   ipcConfigs,
-		Options:      options,
-	})
-}
-
-func (r *runtimeServices) RenderHomeAssistantDashboardPackage() (string, error) {
-	return ha.RenderDashboardCameraPackage(r.ListStreams(false))
-}
-
-func (r *runtimeServices) RenderHomeAssistantLovelaceDashboard() (string, error) {
-	return ha.RenderLovelaceDashboard(r.ListStreams(false))
-}
-
 func (r *runtimeServices) AdminSettings() map[string]any {
 	r.mu.RLock()
 	cfg := r.cfg
@@ -265,30 +227,10 @@ func (r *runtimeServices) AdminSettings() map[string]any {
 			"media_rate_limit_per_minute":    cfg.HTTP.MediaRateLimitPerMinute,
 			"media_rate_limit_burst":         cfg.HTTP.MediaRateLimitBurst,
 		},
-		"mqtt": map[string]any{
-			"enabled":          cfg.MQTT.Enabled,
-			"broker":           cfg.MQTT.Broker,
-			"client_id":        cfg.MQTT.ClientID,
-			"username":         cfg.MQTT.Username,
-			"password":         redactedSecret(cfg.MQTT.Password),
-			"topic_prefix":     cfg.MQTT.TopicPrefix,
-			"discovery_prefix": cfg.MQTT.DiscoveryPrefix,
-			"qos":              cfg.MQTT.QoS,
-			"retain":           cfg.MQTT.Retain,
-			"clean_session":    cfg.MQTT.CleanSession,
-			"keep_alive":       cfg.MQTT.KeepAlive.String(),
-			"connect_timeout":  cfg.MQTT.ConnectTimeout.String(),
-			"publish_timeout":  cfg.MQTT.PublishTimeout.String(),
-		},
 		"home_assistant": map[string]any{
-			"enabled":                cfg.HomeAssistant.Enabled,
-			"node_id":                cfg.HomeAssistant.NodeID,
-			"entity_mode":            cfg.HomeAssistant.EntityMode,
-			"camera_snapshot_source": cfg.HomeAssistant.CameraSnapshotSource,
-			"public_base_url":        cfg.HomeAssistant.PublicBaseURL,
-			"api_base_url":           cfg.HomeAssistant.APIBaseURL,
-			"access_token":           redactedSecret(cfg.HomeAssistant.AccessToken),
-			"request_timeout":        cfg.HomeAssistant.RequestTimeout.String(),
+			"enabled":         cfg.HomeAssistant.Enabled,
+			"node_id":         cfg.HomeAssistant.NodeID,
+			"public_base_url": cfg.HomeAssistant.PublicBaseURL,
 		},
 		"media": map[string]any{
 			"enabled":               cfg.Media.Enabled,
@@ -393,58 +335,6 @@ func (r *runtimeServices) GetStream(streamID string, profileName string, include
 	return streams.Entry{}, streams.Profile{}, false
 }
 
-func (r *runtimeServices) ListONVIFProvisionTargets(deviceIDs []string, force bool) []haapi.ONVIFProvisionTarget {
-	allowedIDs := make(map[string]struct{}, len(deviceIDs))
-	for _, deviceID := range deviceIDs {
-		if deviceID == "" {
-			continue
-		}
-		allowedIDs[deviceID] = struct{}{}
-	}
-
-	recommendations := make(map[string]bool)
-	reasons := make(map[string]string)
-	for _, entry := range r.ListStreams(false) {
-		rootID := entry.RootDeviceID
-		if rootID == "" {
-			rootID = entry.SourceDeviceID
-		}
-		if rootID == "" {
-			rootID = entry.ID
-		}
-		if rootID == "" {
-			continue
-		}
-		if _, ok := reasons[rootID]; !ok && entry.RecommendedHAReason != "" {
-			reasons[rootID] = entry.RecommendedHAReason
-		}
-		if entry.RecommendedHAIntegration == "onvif" || entry.ONVIFH264Available {
-			recommendations[rootID] = true
-			reasons[rootID] = "onvif_h264_profile_available"
-		}
-	}
-
-	r.mu.RLock()
-	nvrConfigs := cloneDeviceConfigMap(r.nvrConfigs)
-	vtoConfigs := cloneDeviceConfigMap(r.vtoConfigs)
-	ipcConfigs := cloneDeviceConfigMap(r.ipcConfigs)
-	r.mu.RUnlock()
-
-	targets := make([]haapi.ONVIFProvisionTarget, 0, len(nvrConfigs)+len(vtoConfigs)+len(ipcConfigs))
-	targets = append(targets, buildONVIFTargets(nvrConfigs, dahua.DeviceKindNVR, allowedIDs, force, recommendations, reasons)...)
-	targets = append(targets, buildONVIFTargets(vtoConfigs, dahua.DeviceKindVTO, allowedIDs, force, recommendations, reasons)...)
-	targets = append(targets, buildONVIFTargets(ipcConfigs, dahua.DeviceKindIPC, allowedIDs, force, recommendations, reasons)...)
-	return targets
-}
-
-func cloneDeviceConfigMap(src map[string]config.DeviceConfig) map[string]config.DeviceConfig {
-	cloned := make(map[string]config.DeviceConfig, len(src))
-	for key, value := range src {
-		cloned[key] = value
-	}
-	return cloned
-}
-
 func snapshotCacheKey(kind string, deviceID string, channel int) string {
 	return fmt.Sprintf("%s:%s:%d", kind, deviceID, channel)
 }
@@ -473,80 +363,6 @@ func (r *runtimeServices) storeSnapshot(cacheKey string, body []byte, contentTyp
 		contentType: contentType,
 		expiresAt:   time.Now().Add(snapshotCacheTTL),
 	}
-}
-
-func buildONVIFTargets(
-	items map[string]config.DeviceConfig,
-	kind dahua.DeviceKind,
-	allowedIDs map[string]struct{},
-	force bool,
-	recommendations map[string]bool,
-	reasons map[string]string,
-) []haapi.ONVIFProvisionTarget {
-	targets := make([]haapi.ONVIFProvisionTarget, 0, len(items))
-	for deviceID, deviceCfg := range items {
-		if len(allowedIDs) > 0 {
-			if _, ok := allowedIDs[deviceID]; !ok {
-				continue
-			}
-		}
-		if !deviceCfg.ONVIFEnabledValue() {
-			continue
-		}
-		if !force && !recommendations[deviceID] {
-			continue
-		}
-
-		host, port, err := onvifHostPort(deviceCfg)
-		if err != nil {
-			continue
-		}
-
-		target := haapi.ONVIFProvisionTarget{
-			DeviceID:   deviceID,
-			DeviceKind: kind,
-			Name:       deviceCfg.Name,
-			Host:       host,
-			Port:       port,
-			Username:   deviceCfg.ONVIFUsernameValue(),
-			Password:   deviceCfg.ONVIFPasswordValue(),
-			Reason:     reasons[deviceID],
-		}
-		targets = append(targets, target)
-	}
-	return targets
-}
-
-func onvifHostPort(deviceCfg config.DeviceConfig) (string, int, error) {
-	raw := deviceCfg.OnvifServiceURL
-	if raw == "" {
-		raw = deviceCfg.BaseURL
-	}
-
-	parsed, err := url.Parse(raw)
-	if err != nil {
-		return "", 0, err
-	}
-	if parsed.Hostname() == "" {
-		return "", 0, fmt.Errorf("missing host in %q", raw)
-	}
-
-	port := 0
-	if parsed.Port() != "" {
-		port, err = strconv.Atoi(parsed.Port())
-		if err != nil {
-			return "", 0, err
-		}
-	} else {
-		switch parsed.Scheme {
-		case "https":
-			port = 443
-		default:
-			port = 80
-		}
-	}
-
-	return parsed.Hostname(), port, nil
 }
 
 func redactDeviceConfigs(items []config.DeviceConfig) []map[string]any {

@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"strconv"
 	"sync"
 	"time"
 
@@ -17,13 +16,10 @@ import (
 	"RCooLeR/DahuaBridge/internal/dahua/nvr"
 	"RCooLeR/DahuaBridge/internal/dahua/vto"
 	"RCooLeR/DahuaBridge/internal/eventbuffer"
-	"RCooLeR/DahuaBridge/internal/ha"
-	"RCooLeR/DahuaBridge/internal/haapi"
 	"RCooLeR/DahuaBridge/internal/httpserver"
 	"RCooLeR/DahuaBridge/internal/logging"
 	"RCooLeR/DahuaBridge/internal/media"
 	"RCooLeR/DahuaBridge/internal/metrics"
-	"RCooLeR/DahuaBridge/internal/mqtt"
 	"RCooLeR/DahuaBridge/internal/store"
 	"github.com/rs/zerolog"
 )
@@ -36,26 +32,14 @@ func Run(ctx context.Context, cfg config.Config, info buildinfo.BuildInfo) error
 		Logger()
 
 	metricsRegistry := metrics.New(info)
-	mqttClient := mqtt.New(cfg.MQTT, logger, metricsRegistry)
-	discovery := ha.NewDiscoveryPublisher(cfg, mqttClient, logger)
 	probeStore := store.NewProbeStore()
 	recentEvents := eventbuffer.New(eventbuffer.DefaultCapacity)
 	services := newRuntimeServices(cfg, probeStore)
 	mediaManager := media.New(cfg.Media, services, logger, metricsRegistry)
 	services.AttachMedia(mediaManager)
-	haClient := haapi.New(cfg.HomeAssistant)
 
 	if err := loadPersistedState(cfg, logger, metricsRegistry, probeStore); err != nil {
 		return fmt.Errorf("load persisted state: %w", err)
-	}
-
-	if err := mqttClient.Connect(ctx); err != nil {
-		return fmt.Errorf("connect mqtt: %w", err)
-	}
-	defer mqttClient.Close()
-
-	if err := republishPersistedState(logger, discovery, probeStore); err != nil {
-		return fmt.Errorf("republish persisted state: %w", err)
 	}
 
 	var persistenceWG sync.WaitGroup
@@ -71,11 +55,8 @@ func Run(ctx context.Context, cfg config.Config, info buildinfo.BuildInfo) error
 	if len(drivers) == 0 {
 		return errors.New("no enabled drivers were created from config")
 	}
-	adminActions := newAdminActions(logger, metricsRegistry, discovery, probeStore, services, haClient, drivers)
+	adminActions := newAdminActions(logger, metricsRegistry, probeStore, services, drivers)
 	adminServer := httpserver.New(cfg.HTTP, logger, metricsRegistry, probeStore, services, mediaManager, adminActions, recentEvents)
-	if err := registerCommandHandlers(ctx, cfg, logger, mqttClient, probeStore, drivers, mediaManager); err != nil {
-		return fmt.Errorf("register command handlers: %w", err)
-	}
 
 	serverErrors := make(chan error, 1)
 	go func() {
@@ -87,14 +68,14 @@ func Run(ctx context.Context, cfg config.Config, info buildinfo.BuildInfo) error
 		wg.Add(1)
 		go func(driver dahua.Driver) {
 			defer wg.Done()
-			runProbeLoop(ctx, logger, metricsRegistry, discovery, probeStore, driver)
+			runProbeLoop(ctx, logger, metricsRegistry, probeStore, driver)
 		}(driver)
 
 		if eventSource, ok := driver.(dahua.EventSource); ok {
 			wg.Add(1)
 			go func(driver dahua.Driver, eventSource dahua.EventSource) {
 				defer wg.Done()
-				runEventLoop(ctx, logger, metricsRegistry, discovery, probeStore, recentEvents, driver, eventSource)
+				runEventLoop(ctx, logger, metricsRegistry, probeStore, recentEvents, driver, eventSource)
 			}(driver, eventSource)
 		}
 	}
@@ -188,26 +169,6 @@ func persistState(
 	return err
 }
 
-func republishPersistedState(
-	logger zerolog.Logger,
-	discovery *ha.DiscoveryPublisher,
-	probes *store.ProbeStore,
-) error {
-	results := probes.List()
-	if len(results) == 0 {
-		return nil
-	}
-
-	for _, result := range results {
-		if err := discovery.PublishProbe(context.Background(), result); err != nil {
-			return err
-		}
-	}
-
-	logger.Info().Int("device_count", len(results)).Msg("republished persisted probe state")
-	return nil
-}
-
 func buildDrivers(
 	cfg config.Config,
 	logger zerolog.Logger,
@@ -252,7 +213,6 @@ func runProbeLoop(
 	ctx context.Context,
 	logger zerolog.Logger,
 	metricsRegistry *metrics.Registry,
-	discovery *ha.DiscoveryPublisher,
 	probes *store.ProbeStore,
 	driver dahua.Driver,
 ) {
@@ -273,19 +233,11 @@ func runProbeLoop(
 		if err != nil {
 			metricsRegistry.DeviceAvailability.WithLabelValues(driver.ID(), string(driver.Kind())).Set(0)
 			log.Error().Err(err).Msg("device probe failed")
-			if publishErr := discovery.PublishUnavailable(context.Background(), driver.ID()); publishErr != nil {
-				log.Warn().Err(publishErr).Msg("publish unavailable state failed")
-			}
 			return
 		}
 
 		metricsRegistry.DeviceAvailability.WithLabelValues(driver.ID(), string(driver.Kind())).Set(1)
 		probes.Set(driver.ID(), result)
-		if err := discovery.PublishProbe(context.Background(), result); err != nil {
-			log.Error().Err(err).Msg("publish probe result failed")
-			return
-		}
-		publishProbeCameraSnapshots(log, discovery, driver, result)
 
 		log.Info().
 			Str("name", result.Root.Name).
@@ -313,7 +265,6 @@ func runEventLoop(
 	ctx context.Context,
 	logger zerolog.Logger,
 	metricsRegistry *metrics.Registry,
-	discovery *ha.DiscoveryPublisher,
 	probes *store.ProbeStore,
 	recentEvents *eventbuffer.Buffer,
 	driver dahua.Driver,
@@ -333,7 +284,7 @@ func runEventLoop(
 			case <-ctx.Done():
 				return
 			case event := <-events:
-				handleEvent(context.Background(), log, metricsRegistry, discovery, probes, recentEvents, event)
+				handleEvent(log, metricsRegistry, probes, recentEvents, event)
 			}
 		}
 	}()
@@ -345,10 +296,8 @@ func runEventLoop(
 }
 
 func handleEvent(
-	ctx context.Context,
 	log zerolog.Logger,
 	metricsRegistry *metrics.Registry,
-	discovery *ha.DiscoveryPublisher,
 	probes *store.ProbeStore,
 	recentEvents *eventbuffer.Buffer,
 	event dahua.Event,
@@ -365,34 +314,12 @@ func handleEvent(
 		fmt.Sprintf("%d", event.Channel),
 	)
 
-	payload := map[string]any{
-		"code":        event.Code,
-		"action":      event.Action,
-		"channel":     event.Channel,
-		"index":       event.Index,
-		"occurred_at": event.OccurredAt.Format(time.RFC3339Nano),
-		"device_id":   event.DeviceID,
-	}
-	for key, value := range event.Data {
-		payload[key] = value
-	}
-
 	if event.ChildID != "" {
-		if err := publishEventState(ctx, log, discovery, probes, event.DeviceID, event.ChildID, event); err != nil {
-			log.Warn().Err(err).Str("child_id", event.ChildID).Msg("publish child event state failed")
-		}
-		if err := discovery.PublishEvent(ctx, event.ChildID, eventTypeForEvent(event), payload); err != nil {
-			log.Warn().Err(err).Str("child_id", event.ChildID).Msg("publish activity event failed")
-		}
+		updateEventState(log, probes, event.DeviceID, event.ChildID, event)
 	}
 
 	if event.DeviceKind == dahua.DeviceKindVTO {
-		if err := publishEventState(ctx, log, discovery, probes, event.DeviceID, event.DeviceID, event); err != nil {
-			log.Warn().Err(err).Str("device_id", event.DeviceID).Msg("publish root vto event state failed")
-		}
-		if err := discovery.PublishEvent(ctx, event.DeviceID, eventTypeForEvent(event), payload); err != nil {
-			log.Warn().Err(err).Str("device_id", event.DeviceID).Msg("publish root vto activity event failed")
-		}
+		updateEventState(log, probes, event.DeviceID, event.DeviceID, event)
 	}
 
 	log.Debug().
@@ -402,25 +329,18 @@ func handleEvent(
 		Msg("processed device event")
 }
 
-func publishEventState(
-	ctx context.Context,
+func updateEventState(
 	log zerolog.Logger,
-	discovery *ha.DiscoveryPublisher,
 	probes *store.ProbeStore,
 	rootID string,
 	targetID string,
 	event dahua.Event,
-) error {
+) {
 	stateKey, active, ok := boolStateForEvent(event)
 	if !ok {
-		return nil
+		return
 	}
 
-	if err := discovery.PublishBinaryState(ctx, targetID, stateKey, active); err != nil {
-		return err
-	}
-
-	derivedStates := map[string]string{}
 	probes.Update(rootID, func(result *dahua.ProbeResult) {
 		state := result.States[targetID]
 		if state.Info == nil {
@@ -432,19 +352,13 @@ func publishEventState(
 		state.Info["last_event_at"] = event.OccurredAt.Format(time.RFC3339Nano)
 		if event.DeviceKind == dahua.DeviceKindVTO && targetID == rootID {
 			for key, value := range vto.SessionStateUpdatesForApp(state.Info, event) {
-				derivedStates[key] = value
+				state.Info[key] = value
 			}
 		}
 		result.States[targetID] = state
 	})
-	for field, value := range derivedStates {
-		if err := discovery.PublishState(ctx, targetID, field, value, true); err != nil {
-			return err
-		}
-	}
 
 	log.Debug().Str("target_id", targetID).Str("state_key", stateKey).Bool("active", active).Msg("updated event state")
-	return nil
 }
 
 func boolStateForEvent(event dahua.Event) (string, bool, bool) {
@@ -470,80 +384,5 @@ func eventTypeForEvent(event dahua.Event) string {
 		return vto.EventTypeForApp(event)
 	default:
 		return "unknown_state"
-	}
-}
-
-type cameraSnapshotTarget struct {
-	deviceID string
-	channel  int
-}
-
-func publishProbeCameraSnapshots(
-	log zerolog.Logger,
-	discovery *ha.DiscoveryPublisher,
-	driver dahua.Driver,
-	result *dahua.ProbeResult,
-) {
-	if discovery == nil || result == nil {
-		return
-	}
-
-	if discovery.LogoCameraSnapshots() {
-		payload := ha.CameraSnapshotPlaceholder()
-		for _, target := range snapshotTargetsForProbeResult(result) {
-			if err := discovery.PublishCameraSnapshot(context.Background(), target.deviceID, payload); err != nil {
-				log.Debug().Err(err).Str("snapshot_device_id", target.deviceID).Int("snapshot_channel", target.channel).Msg("camera snapshot mqtt publish failed")
-			}
-		}
-		return
-	}
-
-	provider, ok := driver.(dahua.SnapshotProvider)
-	if !ok {
-		return
-	}
-
-	for _, target := range snapshotTargetsForProbeResult(result) {
-		snapshotCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		body, _, err := provider.Snapshot(snapshotCtx, target.channel)
-		cancel()
-		if err != nil {
-			log.Debug().Err(err).Str("snapshot_device_id", target.deviceID).Int("snapshot_channel", target.channel).Msg("camera snapshot publish skipped")
-			continue
-		}
-		if err := discovery.PublishCameraSnapshot(context.Background(), target.deviceID, body); err != nil {
-			log.Debug().Err(err).Str("snapshot_device_id", target.deviceID).Int("snapshot_channel", target.channel).Msg("camera snapshot mqtt publish failed")
-		}
-	}
-}
-
-func snapshotTargetsForProbeResult(result *dahua.ProbeResult) []cameraSnapshotTarget {
-	if result == nil {
-		return nil
-	}
-
-	switch result.Root.Kind {
-	case dahua.DeviceKindNVR:
-		targets := make([]cameraSnapshotTarget, 0, len(result.Children))
-		for _, child := range result.Children {
-			if child.Kind != dahua.DeviceKindNVRChannel {
-				continue
-			}
-			channel, err := strconv.Atoi(child.Attributes["channel_index"])
-			if err != nil || channel <= 0 {
-				continue
-			}
-			targets = append(targets, cameraSnapshotTarget{
-				deviceID: child.ID,
-				channel:  channel,
-			})
-		}
-		return targets
-	case dahua.DeviceKindVTO:
-		return []cameraSnapshotTarget{{deviceID: result.Root.ID, channel: 0}}
-	case dahua.DeviceKindIPC:
-		return []cameraSnapshotTarget{{deviceID: result.Root.ID, channel: 1}}
-	default:
-		return nil
 	}
 }

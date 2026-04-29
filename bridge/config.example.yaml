@@ -32,10 +32,10 @@ http:
   # Burst size for media requests before rate limiting kicks in.
   media_rate_limit_burst: 12
 
-# Top-level MQTT settings used for MQTT discovery, entity state publishing, and event topics.
+# Optional MQTT transport settings. Leave this disabled for the supported bridge-native Home Assistant integration path.
 mqtt:
-  # Enable or disable all MQTT publishing. Set false if you use only the native Home Assistant custom integration.
-  enabled: true
+  # Enable only if you explicitly need raw bridge MQTT topics for an external consumer.
+  enabled: false
   # MQTT broker URL. Common schemes are tcp://host:1883, ssl://host:8883, or ws://host:port/path if your broker supports WebSockets.
   broker: tcp://127.0.0.1:1883
   # MQTT client ID used by the bridge when connecting to the broker. Must be unique per broker connection.
@@ -126,20 +126,20 @@ media:
   #   # Example shorthand host:port form.
   #   - 127.0.0.1:5006
 
-# Top-level Home Assistant integration settings used for MQTT discovery behavior and bridge-generated URLs.
+# Top-level Home Assistant integration settings for the native custom integration and bridge-generated URLs.
 home_assistant:
-  # Enable or disable Home Assistant-specific features such as discovery payloads and native catalog behavior.
+  # Enable or disable Home Assistant-specific features such as the native catalog behavior.
   enabled: true
   # Prefix used in unique IDs and naming for some Home Assistant integration paths.
   node_id: dahuabridge
-  # Entity publishing mode. "hybrid" = keep MQTT discovery. "native" = keep MQTT state/topics but stop publishing HA MQTT discovery.
-  entity_mode: hybrid
-  # Camera snapshot source for MQTT-discovered camera entities. "device" fetches real camera snapshots during probes.
-  # "logo" skips device snapshot HTTP requests and publishes a built-in placeholder image instead.
+  # Native bridge integration is the only supported Home Assistant entity mode.
+  entity_mode: native
+  # Camera snapshot source for bridge-provided camera metadata. "device" fetches real camera snapshots during probes.
+  # "logo" skips device snapshot HTTP requests and uses a built-in placeholder image instead.
   camera_snapshot_source: device
   # Browser- and HA-reachable base URL for this bridge. Must be the URL users and Home Assistant can actually open.
   public_base_url: http://127.0.0.1:9205
-  # Optional Home Assistant base URL for bridge -> Home Assistant API calls such as ONVIF provisioning.
+  # Optional Home Assistant base URL for bridge -> Home Assistant API calls.
   # api_base_url: http://homeassistant.local:8123
   # Optional Home Assistant long-lived access token paired with api_base_url.
   # access_token: your-home-assistant-long-lived-token

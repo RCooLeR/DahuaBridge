@@ -4,13 +4,12 @@ This is the simplest recommended setup:
 
 1. Run the Go bridge from `bridge/`.
 2. Install the Home Assistant custom integration from `integration/custom_components/dahuabridge`.
-3. Ignore `ha-cards/` for now.
+3. Add the integration in Home Assistant and point it at the bridge.
 
 ## Before You Start
 
 You need:
 
-- a running MQTT broker
 - network access from the bridge host to your Dahua devices
 - Docker or Go on the machine where the bridge will run
 - a Home Assistant instance that can reach the bridge over HTTP
@@ -35,7 +34,6 @@ cp config.example.yaml config.yaml
 
 3. Edit `config.yaml`.
 4. Set:
-   - `mqtt.broker`
    - your Dahua device `id`, `base_url`, `username`, and `password`
    - `home_assistant.public_base_url`
 
@@ -168,35 +166,24 @@ What you want to see:
 3. A streamable thing like `nvr_channel_01` appears as one Home Assistant device.
 4. That one device contains the camera plus the related sensors and buttons.
 
-## Step 6: Clean Up Duplicate Legacy Paths
+## Step 6: Native-Only Defaults
 
-If you want the cleanest Home Assistant device list:
-
-1. Set this in the bridge config:
+The bridge example config now defaults to the native integration path:
 
 ```yaml
+mqtt:
+  enabled: false
+
 home_assistant:
   entity_mode: native
 ```
 
-2. Restart the bridge.
-3. Call:
-
-```text
-POST /api/v1/home-assistant/mqtt/discovery/remove
-```
-
-4. Remove old ONVIF config entries or generic camera package entries if they duplicate the same devices.
-
-See [migration.md](migration.md) for the exact cleanup flow.
+If you are reusing an older config, keep `mqtt.enabled: false` and `home_assistant.entity_mode: native`.
 
 ## Step 7: Optional Things
 
 After the main setup works, you can also use:
 
-- bridge MQTT auto-discovery
-- bridge-generated Home Assistant helper packages
-- ONVIF provisioning helpers
 - browser preview and media pages from the bridge
 
 These are optional. Do not start with them if you are just trying to get the main system running.

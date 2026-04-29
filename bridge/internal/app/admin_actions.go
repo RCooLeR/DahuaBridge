@@ -10,8 +10,6 @@ import (
 
 	"RCooLeR/DahuaBridge/internal/config"
 	"RCooLeR/DahuaBridge/internal/dahua"
-	"RCooLeR/DahuaBridge/internal/ha"
-	"RCooLeR/DahuaBridge/internal/haapi"
 	"RCooLeR/DahuaBridge/internal/metrics"
 	"RCooLeR/DahuaBridge/internal/store"
 	"github.com/rs/zerolog"
@@ -20,10 +18,8 @@ import (
 type adminActions struct {
 	logger            zerolog.Logger
 	metrics           *metrics.Registry
-	discovery         *ha.DiscoveryPublisher
 	probes            *store.ProbeStore
 	configs           deviceConfigStore
-	haClient          homeAssistantProvisioner
 	drivers           map[string]dahua.Driver
 	lockControllers   map[string]dahua.VTOLockController
 	callControllers   map[string]dahua.VTOCallController
@@ -41,30 +37,20 @@ type adminActions struct {
 type deviceConfigStore interface {
 	GetDeviceConfig(string) (config.DeviceConfig, bool)
 	UpdateDeviceConfig(string, config.DeviceConfig) bool
-	ListONVIFProvisionTargets([]string, bool) []haapi.ONVIFProvisionTarget
-}
-
-type homeAssistantProvisioner interface {
-	Enabled() bool
-	ProvisionONVIF(context.Context, haapi.ONVIFProvisionTarget) (haapi.ONVIFProvisionResult, error)
 }
 
 func newAdminActions(
 	logger zerolog.Logger,
 	metricsRegistry *metrics.Registry,
-	discovery *ha.DiscoveryPublisher,
 	probes *store.ProbeStore,
 	configs deviceConfigStore,
-	haClient homeAssistantProvisioner,
 	drivers []dahua.Driver,
 ) *adminActions {
 	actions := &adminActions{
 		logger:            logger.With().Str("component", "admin_actions").Logger(),
 		metrics:           metricsRegistry,
-		discovery:         discovery,
 		probes:            probes,
 		configs:           configs,
-		haClient:          haClient,
 		drivers:           make(map[string]dahua.Driver, len(drivers)),
 		lockControllers:   make(map[string]dahua.VTOLockController),
 		callControllers:   make(map[string]dahua.VTOCallController),
@@ -136,19 +122,12 @@ func (a *adminActions) ProbeDevice(ctx context.Context, deviceID string) (*dahua
 	a.metrics.ObserveProbe(driver.ID(), string(driver.Kind()), started, err)
 	if err != nil {
 		a.metrics.DeviceAvailability.WithLabelValues(driver.ID(), string(driver.Kind())).Set(0)
-		if publishErr := a.discovery.PublishUnavailable(context.Background(), driver.ID()); publishErr != nil {
-			log.Warn().Err(publishErr).Msg("admin unavailable publish failed")
-		}
 		log.Error().Err(err).Msg("admin device probe failed")
 		return nil, err
 	}
 
 	a.metrics.DeviceAvailability.WithLabelValues(driver.ID(), string(driver.Kind())).Set(1)
 	a.probes.Set(driver.ID(), result)
-	if err := a.discovery.PublishProbe(ctx, result); err != nil {
-		log.Error().Err(err).Msg("admin probe publish failed")
-		return nil, err
-	}
 
 	log.Info().
 		Str("name", result.Root.Name).
@@ -334,67 +313,6 @@ func (a *adminActions) RotateDeviceCredentials(ctx context.Context, deviceID str
 	return a.ProbeDevice(ctx, deviceID)
 }
 
-func (a *adminActions) ProvisionHomeAssistantONVIF(ctx context.Context, request haapi.ONVIFProvisionRequest) ([]haapi.ONVIFProvisionResult, error) {
-	if a.haClient == nil || !a.haClient.Enabled() {
-		return nil, fmt.Errorf("home assistant api is not configured")
-	}
-	if a.configs == nil {
-		return nil, fmt.Errorf("device config store is not configured")
-	}
-
-	targets := a.configs.ListONVIFProvisionTargets(request.DeviceIDs, request.Force)
-	results := make([]haapi.ONVIFProvisionResult, 0, len(targets))
-	for _, target := range targets {
-		result, err := a.haClient.ProvisionONVIF(ctx, target)
-		if err != nil {
-			a.logger.Warn().
-				Err(err).
-				Str("device_id", target.DeviceID).
-				Str("device_type", string(target.DeviceKind)).
-				Str("host", target.Host).
-				Int("port", target.Port).
-				Msg("home assistant onvif provisioning failed")
-		} else {
-			a.logger.Info().
-				Str("device_id", target.DeviceID).
-				Str("device_type", string(target.DeviceKind)).
-				Str("host", target.Host).
-				Int("port", target.Port).
-				Str("status", result.Status).
-				Msg("home assistant onvif provisioning completed")
-		}
-		results = append(results, result)
-	}
-
-	return results, nil
-}
-
-func (a *adminActions) RemoveLegacyHomeAssistantMQTTDiscovery(ctx context.Context) (ha.LegacyDiscoveryCleanupResult, error) {
-	if a.discovery == nil {
-		return ha.LegacyDiscoveryCleanupResult{}, fmt.Errorf("mqtt discovery publisher is not configured")
-	}
-	if a.probes == nil {
-		return ha.LegacyDiscoveryCleanupResult{}, fmt.Errorf("probe store is not configured")
-	}
-
-	results := a.probes.List()
-	cleanup := ha.LegacyDiscoveryCleanupResult{
-		DeviceIDs: make([]string, 0),
-	}
-	for _, result := range results {
-		item, err := a.discovery.RemoveProbeDiscovery(ctx, result)
-		if err != nil {
-			return ha.LegacyDiscoveryCleanupResult{}, err
-		}
-		cleanup.RemovedTopics += item.RemovedTopics
-		cleanup.DeviceCount += item.DeviceCount
-		cleanup.DeviceIDs = append(cleanup.DeviceIDs, item.DeviceIDs...)
-	}
-
-	sort.Strings(cleanup.DeviceIDs)
-	return cleanup, nil
-}
-
 func applyDeviceConfigUpdate(current config.DeviceConfig, update dahua.DeviceConfigUpdate) (config.DeviceConfig, error) {
 	next := current
 
@@ -468,23 +386,7 @@ func (a *adminActions) publishVTOHangupState(ctx context.Context, deviceID strin
 		})
 	}
 
-	if a.discovery == nil {
-		return
-	}
-	if err := a.discovery.PublishBinaryState(ctx, deviceID, "call", false); err != nil {
-		a.logger.Warn().Err(err).Str("device_id", deviceID).Msg("publish call inactive state after hangup failed")
-	}
-	if err := a.discovery.PublishState(ctx, deviceID, "call_state", "idle", true); err != nil {
-		a.logger.Warn().Err(err).Str("device_id", deviceID).Msg("publish call state after hangup failed")
-	}
-	if err := a.discovery.PublishState(ctx, deviceID, "last_call_ended_at", timestamp, true); err != nil {
-		a.logger.Warn().Err(err).Str("device_id", deviceID).Msg("publish last call ended timestamp after hangup failed")
-	}
-	if duration != "" {
-		if err := a.discovery.PublishState(ctx, deviceID, "last_call_duration_seconds", duration, true); err != nil {
-			a.logger.Warn().Err(err).Str("device_id", deviceID).Msg("publish call duration after hangup failed")
-		}
-	}
+	_ = ctx
 }
 
 func stringStateValue(value any) string {
