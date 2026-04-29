@@ -15,7 +15,6 @@ import (
 	"RCooLeR/DahuaBridge/internal/config"
 	"RCooLeR/DahuaBridge/internal/dahua"
 	"RCooLeR/DahuaBridge/internal/ha"
-	"RCooLeR/DahuaBridge/internal/haapi"
 	mediaapi "RCooLeR/DahuaBridge/internal/media"
 	"RCooLeR/DahuaBridge/internal/metrics"
 	"RCooLeR/DahuaBridge/internal/store"
@@ -38,9 +37,6 @@ type SnapshotReader interface {
 	SeekNVRPlaybackSession(context.Context, string, time.Time) (dahua.NVRPlaybackSession, error)
 	VTOSnapshot(context.Context, string) ([]byte, string, error)
 	IPCSnapshot(context.Context, string) ([]byte, string, error)
-	RenderHomeAssistantCameraPackage(ha.CameraPackageOptions) (string, error)
-	RenderHomeAssistantDashboardPackage() (string, error)
-	RenderHomeAssistantLovelaceDashboard() (string, error)
 	ListStreams(bool) []streams.Entry
 	AdminSettings() map[string]any
 }
@@ -76,8 +72,6 @@ type ActionReader interface {
 	ProbeAllDevices(context.Context) []dahua.ProbeActionResult
 	RotateDeviceCredentials(context.Context, string, dahua.DeviceConfigUpdate) (*dahua.ProbeResult, error)
 	RefreshNVRInventory(context.Context, string) (*dahua.ProbeResult, error)
-	ProvisionHomeAssistantONVIF(context.Context, haapi.ONVIFProvisionRequest) ([]haapi.ONVIFProvisionResult, error)
-	RemoveLegacyHomeAssistantMQTTDiscovery(context.Context) (ha.LegacyDiscoveryCleanupResult, error)
 }
 
 type EventReader interface {
@@ -115,6 +109,7 @@ func New(
 	)
 
 	router := chi.NewRouter()
+	router.Use(corsMiddleware)
 	router.Get(cfg.HealthPath, func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		w.WriteHeader(http.StatusOK)
@@ -253,81 +248,6 @@ func New(
 		result, err := actions.RotateDeviceCredentials(actionCtx, chi.URLParam(r, "deviceID"), update)
 		if err != nil {
 			writeClassifiedActionError(w, err, http.StatusBadGateway)
-			return
-		}
-
-		writeJSON(w, http.StatusOK, map[string]any{
-			"status": "ok",
-			"result": result,
-		})
-	})
-	router.With(rateLimitMiddleware(adminLimiter)).Post("/api/v1/home-assistant/onvif/provision", func(w http.ResponseWriter, r *http.Request) {
-		if actions == nil {
-			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "action layer is not configured"})
-			return
-		}
-
-		request, err := parseONVIFProvisionRequest(r)
-		if err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
-			return
-		}
-
-		actionCtx, cancel := context.WithTimeout(r.Context(), 2*time.Minute)
-		defer cancel()
-
-		results, err := actions.ProvisionHomeAssistantONVIF(actionCtx, request)
-		if err != nil {
-			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": err.Error()})
-			return
-		}
-
-		statusCode := http.StatusOK
-		statusText := "ok"
-		createdCount := 0
-		alreadyConfiguredCount := 0
-		skippedCount := 0
-		errorCount := 0
-		for _, result := range results {
-			switch result.Status {
-			case "created":
-				createdCount++
-			case "already_configured":
-				alreadyConfiguredCount++
-			case "skipped":
-				skippedCount++
-			case "error":
-				errorCount++
-			}
-		}
-		if errorCount > 0 {
-			statusCode = http.StatusMultiStatus
-			statusText = "partial_error"
-		}
-
-		writeJSON(w, statusCode, map[string]any{
-			"status":                   statusText,
-			"requested_count":          len(request.DeviceIDs),
-			"result_count":             len(results),
-			"created_count":            createdCount,
-			"already_configured_count": alreadyConfiguredCount,
-			"skipped_count":            skippedCount,
-			"error_count":              errorCount,
-			"results":                  results,
-		})
-	})
-	router.With(rateLimitMiddleware(adminLimiter)).Post("/api/v1/home-assistant/mqtt/discovery/remove", func(w http.ResponseWriter, r *http.Request) {
-		if actions == nil {
-			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "action layer is not configured"})
-			return
-		}
-
-		actionCtx, cancel := context.WithTimeout(r.Context(), 2*time.Minute)
-		defer cancel()
-
-		result, err := actions.RemoveLegacyHomeAssistantMQTTDiscovery(actionCtx)
-		if err != nil {
-			writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
 			return
 		}
 
@@ -877,15 +797,6 @@ func New(
 		includeCredentials := r.URL.Query().Get("include_credentials") == "true"
 		writeJSON(w, http.StatusOK, ha.BuildNativeCatalog(probes.List(), snapshots.ListStreams(includeCredentials)))
 	})
-	router.Get("/api/v1/home-assistant/migration/plan", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusOK, ha.BuildHAMigrationPlan(probes.List(), snapshots.ListStreams(false)))
-	})
-	router.Get("/api/v1/home-assistant/migration/guide.md", func(w http.ResponseWriter, r *http.Request) {
-		body := ha.RenderHAMigrationGuideMarkdown(ha.BuildHAMigrationPlan(probes.List(), snapshots.ListStreams(false)))
-		w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(body))
-	})
 	router.Get("/api/v1/streams", func(w http.ResponseWriter, r *http.Request) {
 		includeCredentials := r.URL.Query().Get("include_credentials") == "true"
 		entries := snapshots.ListStreams(includeCredentials)
@@ -1165,50 +1076,6 @@ func New(
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write(body)
 	})
-	router.Get("/api/v1/home-assistant/package/cameras.yaml", func(w http.ResponseWriter, r *http.Request) {
-		options, err := parseCameraPackageOptions(r)
-		if err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
-			return
-		}
-		body, err := snapshots.RenderHomeAssistantCameraPackage(options)
-		if err != nil {
-			writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
-			return
-		}
-		w.Header().Set("Content-Type", "application/yaml")
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(body))
-	})
-	router.Get("/api/v1/home-assistant/package/cameras_stable.yaml", func(w http.ResponseWriter, r *http.Request) {
-		renderCameraPackage(w, r, snapshots, ha.CameraStreamProfileStable)
-	})
-	router.Get("/api/v1/home-assistant/package/cameras_quality.yaml", func(w http.ResponseWriter, r *http.Request) {
-		renderCameraPackage(w, r, snapshots, ha.CameraStreamProfileQuality)
-	})
-	router.Get("/api/v1/home-assistant/package/cameras_substream.yaml", func(w http.ResponseWriter, r *http.Request) {
-		renderCameraPackage(w, r, snapshots, ha.CameraStreamProfileSubstream)
-	})
-	router.Get("/api/v1/home-assistant/package/cameras_dashboard.yaml", func(w http.ResponseWriter, r *http.Request) {
-		body, err := snapshots.RenderHomeAssistantDashboardPackage()
-		if err != nil {
-			writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
-			return
-		}
-		w.Header().Set("Content-Type", "application/yaml")
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(body))
-	})
-	router.Get("/api/v1/home-assistant/dashboard/lovelace.yaml", func(w http.ResponseWriter, r *http.Request) {
-		body, err := snapshots.RenderHomeAssistantLovelaceDashboard()
-		if err != nil {
-			writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
-			return
-		}
-		w.Header().Set("Content-Type", "application/yaml")
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(body))
-	})
 
 	return &Server{
 		httpServer: &http.Server{
@@ -1301,72 +1168,6 @@ func toHTTPStatus(stats store.Stats) httpStatus {
 		DeviceCount:   stats.DeviceCount,
 		LastUpdatedAt: lastUpdatedAt,
 	}
-}
-
-func parseCameraPackageOptions(r *http.Request) (ha.CameraPackageOptions, error) {
-	options := ha.CameraPackageOptions{
-		IncludeCredentials: r.URL.Query().Get("include_credentials") == "true",
-	}
-
-	switch strings.ToLower(strings.TrimSpace(r.URL.Query().Get("profile"))) {
-	case "", "default":
-		options.Profile = ha.CameraStreamProfileDefault
-	case "stable":
-		options.Profile = ha.CameraStreamProfileStable
-	case "quality":
-		options.Profile = ha.CameraStreamProfileQuality
-	case "substream":
-		options.Profile = ha.CameraStreamProfileSubstream
-	default:
-		return ha.CameraPackageOptions{}, fmt.Errorf("invalid profile %q", r.URL.Query().Get("profile"))
-	}
-
-	if value := strings.TrimSpace(r.URL.Query().Get("rtsp_transport")); value != "" {
-		switch value {
-		case "tcp", "udp", "udp_multicast", "http":
-			options.RTSPTransport = value
-		default:
-			return ha.CameraPackageOptions{}, fmt.Errorf("invalid rtsp_transport %q", value)
-		}
-	}
-
-	if value := strings.TrimSpace(r.URL.Query().Get("frame_rate")); value != "" {
-		parsed, err := strconv.Atoi(value)
-		if err != nil || parsed < 0 {
-			return ha.CameraPackageOptions{}, fmt.Errorf("invalid frame_rate %q", value)
-		}
-		options.FrameRate = parsed
-	}
-
-	if value := strings.TrimSpace(r.URL.Query().Get("use_wallclock_as_timestamps")); value != "" {
-		switch strings.ToLower(value) {
-		case "true", "1", "yes":
-			v := true
-			options.UseWallclockAsTimestamps = &v
-		case "false", "0", "no":
-			v := false
-			options.UseWallclockAsTimestamps = &v
-		default:
-			return ha.CameraPackageOptions{}, fmt.Errorf("invalid use_wallclock_as_timestamps %q", value)
-		}
-	}
-
-	return options, nil
-}
-
-func parseONVIFProvisionRequest(r *http.Request) (haapi.ONVIFProvisionRequest, error) {
-	if r.Body == nil {
-		return haapi.ONVIFProvisionRequest{}, nil
-	}
-
-	var request haapi.ONVIFProvisionRequest
-	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
-		if errors.Is(err, io.EOF) {
-			return haapi.ONVIFProvisionRequest{}, nil
-		}
-		return haapi.ONVIFProvisionRequest{}, fmt.Errorf("invalid json body")
-	}
-	return request, nil
 }
 
 func parseOptionalPositiveInt(raw string) (int, error) {
@@ -1717,25 +1518,6 @@ func defaultPositiveInt(value int, fallback int) int {
 		return value
 	}
 	return fallback
-}
-
-func renderCameraPackage(w http.ResponseWriter, r *http.Request, snapshots SnapshotReader, defaultProfile ha.CameraStreamProfile) {
-	options, err := parseCameraPackageOptions(r)
-	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
-		return
-	}
-	if options.Profile == ha.CameraStreamProfileDefault {
-		options.Profile = defaultProfile
-	}
-	body, err := snapshots.RenderHomeAssistantCameraPackage(options)
-	if err != nil {
-		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
-		return
-	}
-	w.Header().Set("Content-Type", "application/yaml")
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write([]byte(body))
 }
 
 func findStreamEntry(entries []streams.Entry, streamID string) (streams.Entry, bool) {
@@ -2150,9 +1932,6 @@ func renderAdminPage(
           <p>These buttons call the same authenticated bridge endpoints the rest of the system uses. Responses are shown inline exactly as the API returns them.</p>
             <div class="action-row">
               <button type="button" class="btn btn-success" data-method="POST" data-url="/api/v1/devices/probe-all" data-success="Probe-all requested." %s>Probe All Devices</button>
-              <button type="button" class="btn btn-outline-light" data-method="POST" data-url="/api/v1/home-assistant/onvif/provision" data-success="Recommended ONVIF provisioning requested." %s>Provision Recommended ONVIF</button>
-              <button type="button" class="btn btn-warning" data-method="POST" data-url="/api/v1/home-assistant/onvif/provision" data-body='{"force":true}' data-success="Forced ONVIF provisioning requested." %s>Force ONVIF Provisioning</button>
-              <button type="button" class="btn btn-outline-secondary" data-method="POST" data-url="/api/v1/home-assistant/mqtt/discovery/remove" data-success="Legacy MQTT discovery cleanup requested." %s>Remove Legacy MQTT Discovery</button>
               <button type="button" class="btn btn-outline-danger" data-method="DELETE" data-url="/api/v1/events" data-success="Event buffer clear requested." %s>Clear Event Buffer</button>
             </div>
           <pre id="admin-action-result" class="result-box">No action has been run yet.</pre>
@@ -2250,9 +2029,6 @@ func renderAdminPage(
 		controlStats.ActionableEntries,
 		htmlEscape(controlStats.Summary()),
 		boolHTMLAttr(actionsAvailable),
-		boolHTMLAttr(actionsAvailable),
-		boolHTMLAttr(actionsAvailable),
-		boolHTMLAttr(actionsAvailable),
 		boolHTMLAttr(eventsAvailable),
 		endpointSections,
 		deviceCards,
@@ -2286,20 +2062,13 @@ func buildAdminEndpointSections(healthPath string, metricsPath string) string {
 			Items: []adminEndpoint{
 				{Method: "GET", Path: "/api/v1/events", Description: "Recent event buffer", Linkable: true},
 				{Method: "DELETE", Path: "/api/v1/events", Description: "Clear event buffer", Linkable: false},
-				{Method: "GET", Path: "/api/v1/home-assistant/package/cameras.yaml", Description: "Generated camera package", Linkable: true},
-				{Method: "GET", Path: "/api/v1/home-assistant/package/cameras_dashboard.yaml", Description: "Generated dashboard package", Linkable: true},
-				{Method: "GET", Path: "/api/v1/home-assistant/dashboard/lovelace.yaml", Description: "Generated Lovelace dashboard", Linkable: true},
 				{Method: "GET", Path: "/api/v1/home-assistant/native/catalog", Description: "Bridge-native Home Assistant catalog", Linkable: true},
-				{Method: "GET", Path: "/api/v1/home-assistant/migration/plan", Description: "Home Assistant migration plan", Linkable: true},
-				{Method: "GET", Path: "/api/v1/home-assistant/migration/guide.md", Description: "Home Assistant migration guide", Linkable: true},
 			},
 		},
 		{
 			Title: "Mutating Admin APIs",
 			Items: []adminEndpoint{
 				{Method: "POST", Path: "/api/v1/devices/probe-all", Description: "Probe every configured device", Linkable: false},
-				{Method: "POST", Path: "/api/v1/home-assistant/onvif/provision", Description: "Push ONVIF provisioning into Home Assistant", Linkable: false},
-				{Method: "POST", Path: "/api/v1/home-assistant/mqtt/discovery/remove", Description: "Remove retained legacy MQTT discovery configs from Home Assistant", Linkable: false},
 				{Method: "POST", Path: "/api/v1/devices/{deviceID}/probe", Description: "Probe one specific device", Linkable: false},
 				{Method: "POST", Path: "/api/v1/devices/{deviceID}/credentials", Description: "Rotate bridge-side device credentials", Linkable: false},
 				{Method: "POST", Path: "/api/v1/nvr/{deviceID}/inventory/refresh", Description: "Refresh NVR channel/disk inventory", Linkable: false},
@@ -4137,4 +3906,30 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func corsMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		headers := w.Header()
+		headers.Set("Access-Control-Allow-Origin", "*")
+		headers.Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
+		headers.Set("Access-Control-Expose-Headers", "Content-Length, Content-Type")
+		headers.Add("Vary", "Origin")
+		headers.Add("Vary", "Access-Control-Request-Method")
+		headers.Add("Vary", "Access-Control-Request-Headers")
+
+		requestHeaders := strings.TrimSpace(r.Header.Get("Access-Control-Request-Headers"))
+		if requestHeaders != "" {
+			headers.Set("Access-Control-Allow-Headers", requestHeaders)
+		} else {
+			headers.Set("Access-Control-Allow-Headers", "Accept, Authorization, Content-Type")
+		}
+
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+
+		next.ServeHTTP(w, r)
+	})
 }

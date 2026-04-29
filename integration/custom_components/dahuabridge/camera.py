@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
+from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from homeassistant.components.camera import Camera, CameraEntityFeature
@@ -12,8 +13,13 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from .bridge_api import DahuaBridgeAPIError
 from .catalog import (
     catalog_records,
+    controls_for_record,
+    device_for_record,
     device_id_for_record,
+    features_for_record,
+    intercom_for_record,
     mjpeg_url_for_record_with_preferences,
+    parent_id_for_record,
     snapshot_url_for_record,
     stream_for_record,
     stream_available_for_record,
@@ -90,10 +96,13 @@ class DahuaBridgeCamera(DahuaBridgeEntity, Camera):
         return self.record is not None
 
     @property
-    def extra_state_attributes(self) -> dict[str, str]:
+    def extra_state_attributes(self) -> dict[str, Any]:
         record = self.record
         stream = stream_for_record(record)
-        attrs: dict[str, str] = {}
+        device = device_for_record(record)
+        device_id = device_id_for_record(record)
+        parent_id = parent_id_for_record(record)
+        attrs: dict[str, Any] = {}
 
         recommended = str(stream.get("recommended_profile", "")).strip()
         if recommended:
@@ -106,6 +115,15 @@ class DahuaBridgeCamera(DahuaBridgeEntity, Camera):
         source = self._stream_source()
         if source:
             attrs["stream_source"] = self.coordinator.api.bridge_resource_url(source)
+        attrs["bridge_base_url"] = self.coordinator.api.base_url
+        attrs["bridge_events_url"] = self.coordinator.api.absolute_url("/api/v1/events")
+        attrs["bridge_device_id"] = device_id
+        attrs["bridge_root_device_id"] = parent_id or device_id
+        attrs["bridge_device_kind"] = str(device.get("kind", "")).strip()
+        attrs["bridge_device_name"] = str(device.get("name", "")).strip()
+        channel = stream.get("channel")
+        if isinstance(channel, int):
+            attrs["bridge_channel"] = channel
         attrs["stream_available"] = self._stream_available()
         attrs["preferred_video_profile"] = self.coordinator.preferred_video_profile
         attrs["preferred_video_source"] = self.coordinator.preferred_video_source
@@ -113,6 +131,24 @@ class DahuaBridgeCamera(DahuaBridgeEntity, Camera):
         preview_url = str(stream.get("local_preview_url", "")).strip()
         if preview_url:
             attrs["preview_url"] = self.coordinator.api.bridge_resource_url(preview_url)
+
+        controls = controls_for_record(record)
+        if controls:
+            attrs["bridge_controls"] = _resolve_bridge_urls(
+                self.coordinator.api, controls
+            )
+
+        features = features_for_record(record)
+        if features:
+            attrs["bridge_features"] = _resolve_bridge_urls(
+                self.coordinator.api, features
+            )
+
+        intercom = intercom_for_record(record)
+        if intercom:
+            attrs["bridge_intercom"] = _resolve_bridge_urls(
+                self.coordinator.api, intercom
+            )
 
         return attrs
 
@@ -204,4 +240,26 @@ def _with_requested_width(target: str, width: int | None) -> str:
             urlencode(query),
             parsed.fragment,
         )
+    )
+
+
+def _resolve_bridge_urls(api, value: Any) -> Any:
+    if isinstance(value, dict):
+        return {
+            str(key): _resolve_bridge_urls(api, nested_value)
+            for key, nested_value in value.items()
+        }
+    if isinstance(value, list):
+        return [_resolve_bridge_urls(api, item) for item in value]
+    if isinstance(value, str) and _looks_like_bridge_path(value):
+        return api.bridge_resource_url(value)
+    return value
+
+
+def _looks_like_bridge_path(value: str) -> bool:
+    text = value.strip()
+    if not text:
+        return False
+    return text.startswith("/") or text.startswith("http://") or text.startswith(
+        "https://"
     )

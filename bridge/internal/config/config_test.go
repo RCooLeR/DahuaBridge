@@ -118,7 +118,7 @@ func TestHomeAssistantAPIDefaultTimeout(t *testing.T) {
 	if cfg.HomeAssistant.RequestTimeout != 15*time.Second {
 		t.Fatalf("unexpected home assistant request timeout %s", cfg.HomeAssistant.RequestTimeout)
 	}
-	if cfg.HomeAssistant.EntityMode != "hybrid" {
+	if cfg.HomeAssistant.EntityMode != "native" {
 		t.Fatalf("unexpected home assistant entity mode %q", cfg.HomeAssistant.EntityMode)
 	}
 	if cfg.HomeAssistant.CameraSnapshotSource != "device" {

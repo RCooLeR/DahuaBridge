@@ -14,8 +14,6 @@ import (
 	"RCooLeR/DahuaBridge/internal/buildinfo"
 	"RCooLeR/DahuaBridge/internal/config"
 	"RCooLeR/DahuaBridge/internal/dahua"
-	"RCooLeR/DahuaBridge/internal/ha"
-	"RCooLeR/DahuaBridge/internal/haapi"
 	mediaapi "RCooLeR/DahuaBridge/internal/media"
 	"RCooLeR/DahuaBridge/internal/metrics"
 	"RCooLeR/DahuaBridge/internal/store"
@@ -92,15 +90,6 @@ func (stubSnapshotReader) VTOSnapshot(context.Context, string) ([]byte, string, 
 func (stubSnapshotReader) IPCSnapshot(context.Context, string) ([]byte, string, error) {
 	return nil, "", nil
 }
-func (stubSnapshotReader) RenderHomeAssistantCameraPackage(ha.CameraPackageOptions) (string, error) {
-	return "", nil
-}
-func (stubSnapshotReader) RenderHomeAssistantDashboardPackage() (string, error) {
-	return "", nil
-}
-func (stubSnapshotReader) RenderHomeAssistantLovelaceDashboard() (string, error) {
-	return "", nil
-}
 func (s stubSnapshotReader) ListStreams(includeCredentials bool) []streams.Entry {
 	if s.listStreams != nil {
 		return s.listStreams(includeCredentials)
@@ -146,8 +135,6 @@ type stubActionReader struct {
 	probeAll     func(context.Context) []dahua.ProbeActionResult
 	rotate       func(context.Context, string, dahua.DeviceConfigUpdate) (*dahua.ProbeResult, error)
 	refreshNVR   func(context.Context, string) (*dahua.ProbeResult, error)
-	provision    func(context.Context, haapi.ONVIFProvisionRequest) ([]haapi.ONVIFProvisionResult, error)
-	cleanup      func(context.Context) (ha.LegacyDiscoveryCleanupResult, error)
 }
 
 type stubEventReader struct {
@@ -358,20 +345,6 @@ func (s stubActionReader) RefreshNVRInventory(ctx context.Context, deviceID stri
 	return s.refreshNVR(ctx, deviceID)
 }
 
-func (s stubActionReader) ProvisionHomeAssistantONVIF(ctx context.Context, request haapi.ONVIFProvisionRequest) ([]haapi.ONVIFProvisionResult, error) {
-	if s.provision == nil {
-		return nil, nil
-	}
-	return s.provision(ctx, request)
-}
-
-func (s stubActionReader) RemoveLegacyHomeAssistantMQTTDiscovery(ctx context.Context) (ha.LegacyDiscoveryCleanupResult, error) {
-	if s.cleanup == nil {
-		return ha.LegacyDiscoveryCleanupResult{}, nil
-	}
-	return s.cleanup(ctx)
-}
-
 func (s stubEventReader) ListEvents(deviceID string, childID string, deviceKind dahua.DeviceKind, code string, action string, limit int) []dahua.Event {
 	if s.list == nil {
 		return nil
@@ -452,6 +425,51 @@ func TestUnlockVTOLockEndpoint(t *testing.T) {
 	}
 	if payload["lock_index"] != float64(0) {
 		t.Fatalf("unexpected lock_index payload: %+v", payload)
+	}
+}
+
+func TestAPICORSPrefightRequest(t *testing.T) {
+	server := newTestServer(stubActionReader{}, stubEventReader{})
+
+	req := httptest.NewRequest(http.MethodOptions, "/api/v1/nvr/west20_nvr/channels/11/ptz", nil)
+	req.Header.Set("Origin", "http://homeassistant.local:8123")
+	req.Header.Set("Access-Control-Request-Method", http.MethodPost)
+	req.Header.Set("Access-Control-Request-Headers", "content-type")
+	rec := httptest.NewRecorder()
+
+	server.httpServer.Handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("expected status 204, got %d", rec.Code)
+	}
+	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != "*" {
+		t.Fatalf("unexpected allow origin header %q", got)
+	}
+	if got := rec.Header().Get("Access-Control-Allow-Methods"); got != "GET, POST, DELETE, OPTIONS" {
+		t.Fatalf("unexpected allow methods header %q", got)
+	}
+	if got := rec.Header().Get("Access-Control-Allow-Headers"); got != "content-type" {
+		t.Fatalf("unexpected allow headers header %q", got)
+	}
+}
+
+func TestAPIResponsesIncludeCORSHeaders(t *testing.T) {
+	server := newTestServer(stubActionReader{}, stubEventReader{})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/status", nil)
+	req.Header.Set("Origin", "http://homeassistant.local:8123")
+	rec := httptest.NewRecorder()
+
+	server.httpServer.Handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != "*" {
+		t.Fatalf("unexpected allow origin header %q", got)
+	}
+	if got := rec.Header().Get("Access-Control-Expose-Headers"); got != "Content-Length, Content-Type" {
+		t.Fatalf("unexpected expose headers header %q", got)
 	}
 }
 
@@ -934,103 +952,6 @@ func TestRotateDeviceCredentialsEndpointDetectsTypedNotFound(t *testing.T) {
 
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("expected status 404, got %d: %s", rec.Code, rec.Body.String())
-	}
-}
-
-func TestProvisionHomeAssistantONVIFEndpoint(t *testing.T) {
-	server := newTestServer(stubActionReader{
-		provision: func(_ context.Context, request haapi.ONVIFProvisionRequest) ([]haapi.ONVIFProvisionResult, error) {
-			if !request.Force {
-				t.Fatalf("expected force request, got %+v", request)
-			}
-			if len(request.DeviceIDs) != 1 || request.DeviceIDs[0] != "yard_ipc" {
-				t.Fatalf("unexpected request %+v", request)
-			}
-			return []haapi.ONVIFProvisionResult{
-				{
-					DeviceID:   "yard_ipc",
-					DeviceKind: dahua.DeviceKindIPC,
-					Name:       "Yard Camera",
-					Host:       "192.168.1.20",
-					Port:       8999,
-					Status:     "created",
-					EntryID:    "entry-123",
-				},
-			}, nil
-		},
-	}, stubEventReader{})
-
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/home-assistant/onvif/provision", strings.NewReader(`{"device_ids":["yard_ipc"],"force":true}`))
-	req.Header.Set("Content-Type", "application/json")
-	rec := httptest.NewRecorder()
-
-	server.httpServer.Handler.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("expected status 200, got %d: %s", rec.Code, rec.Body.String())
-	}
-
-	var payload map[string]any
-	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
-		t.Fatalf("decode response: %v", err)
-	}
-	if payload["status"] != "ok" {
-		t.Fatalf("unexpected payload %+v", payload)
-	}
-	if payload["created_count"] != float64(1) {
-		t.Fatalf("unexpected payload %+v", payload)
-	}
-}
-
-func TestProvisionHomeAssistantONVIFEndpointPartialFailure(t *testing.T) {
-	server := newTestServer(stubActionReader{
-		provision: func(_ context.Context, _ haapi.ONVIFProvisionRequest) ([]haapi.ONVIFProvisionResult, error) {
-			return []haapi.ONVIFProvisionResult{
-				{
-					DeviceID:   "yard_ipc",
-					DeviceKind: dahua.DeviceKindIPC,
-					Name:       "Yard Camera",
-					Host:       "192.168.1.20",
-					Port:       8999,
-					Status:     "created",
-				},
-				{
-					DeviceID:   "west20_vto",
-					DeviceKind: dahua.DeviceKindVTO,
-					Name:       "Front Door",
-					Host:       "192.168.1.30",
-					Port:       80,
-					Status:     "error",
-					Error:      "auth_failed",
-				},
-			}, nil
-		},
-	}, stubEventReader{})
-
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/home-assistant/onvif/provision", nil)
-	rec := httptest.NewRecorder()
-
-	server.httpServer.Handler.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusMultiStatus {
-		t.Fatalf("expected status 207, got %d: %s", rec.Code, rec.Body.String())
-	}
-}
-
-func TestProvisionHomeAssistantONVIFEndpointReturnsUnavailableWhenActionFails(t *testing.T) {
-	server := newTestServer(stubActionReader{
-		provision: func(_ context.Context, _ haapi.ONVIFProvisionRequest) ([]haapi.ONVIFProvisionResult, error) {
-			return nil, errors.New("home assistant api is not configured")
-		},
-	}, stubEventReader{})
-
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/home-assistant/onvif/provision", nil)
-	rec := httptest.NewRecorder()
-
-	server.httpServer.Handler.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusServiceUnavailable {
-		t.Fatalf("expected status 503, got %d: %s", rec.Code, rec.Body.String())
 	}
 }
 
@@ -1529,10 +1450,7 @@ func TestAdminPageEndpoint(t *testing.T) {
 	if !strings.Contains(body, "DahuaBridge Admin") || !strings.Contains(body, "Operator Surface") {
 		t.Fatalf("missing admin page heading:\n%s", body)
 	}
-	if !strings.Contains(body, `/api/v1/home-assistant/onvif/provision`) || !strings.Contains(body, "Force ONVIF Provisioning") {
-		t.Fatalf("missing onvif provisioning controls:\n%s", body)
-	}
-	if !strings.Contains(body, `/api/v1/devices/probe-all`) || !strings.Contains(body, "Clear Event Buffer") || !strings.Contains(body, "Remove Legacy MQTT Discovery") {
+	if !strings.Contains(body, `/api/v1/devices/probe-all`) || !strings.Contains(body, "Clear Event Buffer") {
 		t.Fatalf("missing admin action controls:\n%s", body)
 	}
 	if !strings.Contains(body, `/api/v1/vto/front_vto/intercom?profile=stable`) || !strings.Contains(body, `/api/v1/media/webrtc/front_vto/stable`) {
@@ -1747,128 +1665,6 @@ func TestHomeAssistantNativeCatalogEndpoint(t *testing.T) {
 	}
 	if !strings.Contains(body, `"snapshot_url":"http://bridge.local/api/v1/nvr/west20_nvr/channels/1/snapshot"`) {
 		t.Fatalf("expected snapshot url in native catalog:\n%s", body)
-	}
-}
-
-func TestHomeAssistantMigrationPlanEndpoint(t *testing.T) {
-	server := newTestServerWithReaders(config.HTTPConfig{
-		ListenAddress: ":0",
-		MetricsPath:   "/metrics",
-		HealthPath:    "/healthz",
-	}, stubProbeReader{
-		list: func() []*dahua.ProbeResult {
-			return []*dahua.ProbeResult{{
-				Root: dahua.Device{
-					ID:   "yard_ipc",
-					Name: "Yard IPC",
-					Kind: dahua.DeviceKindIPC,
-				},
-				States: map[string]dahua.DeviceState{
-					"yard_ipc": {Available: true},
-				},
-			}}
-		},
-	}, stubSnapshotReader{
-		listStreams: func(includeCredentials bool) []streams.Entry {
-			return []streams.Entry{
-				{
-					ID:                 "yard_ipc",
-					RootDeviceID:       "yard_ipc",
-					Name:               "Yard IPC",
-					DeviceKind:         dahua.DeviceKindIPC,
-					ONVIFH264Available: true,
-				},
-			}
-		},
-	}, nil, nil, nil)
-
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/home-assistant/migration/plan", nil)
-	rec := httptest.NewRecorder()
-
-	server.httpServer.Handler.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("expected status 200, got %d: %s", rec.Code, rec.Body.String())
-	}
-	body := rec.Body.String()
-	if !strings.Contains(body, `"strategy":"native_integration_primary"`) {
-		t.Fatalf("expected native strategy in response:\n%s", body)
-	}
-	if !strings.Contains(body, `"duplicate_paths_if_present":["generic_camera_package","mqtt_discovery","onvif_config_entry"]`) {
-		t.Fatalf("expected duplicate path guidance in response:\n%s", body)
-	}
-}
-
-func TestHomeAssistantMigrationGuideEndpoint(t *testing.T) {
-	server := newTestServerWithReaders(config.HTTPConfig{
-		ListenAddress: ":0",
-		MetricsPath:   "/metrics",
-		HealthPath:    "/healthz",
-	}, stubProbeReader{
-		list: func() []*dahua.ProbeResult {
-			return []*dahua.ProbeResult{{
-				Root: dahua.Device{
-					ID:   "yard_ipc",
-					Name: "Yard IPC",
-					Kind: dahua.DeviceKindIPC,
-				},
-				States: map[string]dahua.DeviceState{
-					"yard_ipc": {Available: true},
-				},
-			}}
-		},
-	}, stubSnapshotReader{
-		listStreams: func(includeCredentials bool) []streams.Entry {
-			return []streams.Entry{
-				{
-					ID:           "yard_ipc",
-					RootDeviceID: "yard_ipc",
-					Name:         "Yard IPC",
-					DeviceKind:   dahua.DeviceKindIPC,
-				},
-			}
-		},
-	}, nil, nil, nil)
-
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/home-assistant/migration/guide.md", nil)
-	rec := httptest.NewRecorder()
-
-	server.httpServer.Handler.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("expected status 200, got %d: %s", rec.Code, rec.Body.String())
-	}
-	if !strings.Contains(rec.Header().Get("Content-Type"), "text/markdown") {
-		t.Fatalf("unexpected content type %q", rec.Header().Get("Content-Type"))
-	}
-	body := rec.Body.String()
-	if !strings.Contains(body, "POST /api/v1/home-assistant/mqtt/discovery/remove") {
-		t.Fatalf("expected cleanup endpoint in guide:\n%s", body)
-	}
-}
-
-func TestRemoveLegacyMQTTDiscoveryEndpoint(t *testing.T) {
-	server := newTestServer(stubActionReader{
-		cleanup: func(_ context.Context) (ha.LegacyDiscoveryCleanupResult, error) {
-			return ha.LegacyDiscoveryCleanupResult{
-				RemovedTopics: 12,
-				DeviceCount:   2,
-				DeviceIDs:     []string{"west20_nvr", "west20_nvr_channel_01"},
-			}, nil
-		},
-	}, stubEventReader{})
-
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/home-assistant/mqtt/discovery/remove", nil)
-	rec := httptest.NewRecorder()
-
-	server.httpServer.Handler.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("expected status 200, got %d: %s", rec.Code, rec.Body.String())
-	}
-	body := rec.Body.String()
-	if !strings.Contains(body, `"removed_topics":12`) || !strings.Contains(body, `"device_count":2`) {
-		t.Fatalf("expected cleanup result in response:\n%s", body)
 	}
 }
 

@@ -6,7 +6,6 @@ It describes:
 
 - which device-side controls DahuaBridge exposes
 - which HTTP APIs back those controls
-- which MQTT/Home Assistant surfaces exist
 - which bridge-native Home Assistant entities exist
 - which known device quirks affect control behavior
 
@@ -19,7 +18,6 @@ Current control coverage is centered on:
 - `nvr_channel` control surfaces behind a Dahua NVR
 - `vto` door-station control surfaces
 - NVR archive search and playback session control
-- Home Assistant MQTT discovery command entities
 - the bridge-native Home Assistant custom integration
 
 ## NVR Channel Controls
@@ -308,53 +306,9 @@ POST /api/v1/vto/{deviceID}/intercom/uplink/disable
 
 These are bridge media/session controls, not proof of a fully separate device-native Dahua talkback RPC family.
 
-## Home Assistant MQTT Discovery Controls
+## Legacy MQTT Notes
 
-### NVR Channel MQTT Entities
-
-The bridge publishes MQTT discovery command entities for supported NVR channel actions such as:
-
-- `siren`
-- `warning_light`
-- `wiper`
-- `recording_start`
-- `recording_stop`
-
-Typical command payload:
-
-- `PRESS`
-
-### VTO MQTT Entities
-
-The bridge now publishes MQTT discovery control entities for:
-
-- `button`
-  - `answer`
-  - `hangup`
-  - `intercom_reset`
-  - `uplink_enable`
-  - `uplink_disable`
-- `switch`
-  - `mute`
-  - `auto_record`
-- `number`
-  - `output_volume_control`
-  - `input_volume_control`
-
-MQTT command payloads:
-
-- `button`: `PRESS`
-- `switch`: `ON` / `OFF`
-- `number`: numeric text payload in the `0..100` range
-
-Examples:
-
-```text
-dahuabridge/devices/front_vto/command/mute          payload=ON
-dahuabridge/devices/front_vto/command/auto_record   payload=OFF
-dahuabridge/devices/front_vto/command/output_volume payload=75
-dahuabridge/devices/front_vto/command/input_volume  payload=65
-```
+The supported Home Assistant control path is the native custom integration. It uses bridge HTTP APIs directly, not MQTT.
 
 ## Bridge-Native Home Assistant Integration
 

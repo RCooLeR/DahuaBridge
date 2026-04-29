@@ -16,7 +16,6 @@ Main docs:
 - system overview: [../docs/how-it-works.md](../docs/how-it-works.md)
 - device and naming model: [../docs/device-model.md](../docs/device-model.md)
 - control surface: [../docs/controls.md](../docs/controls.md)
-- migration cleanup guide: [../docs/migration.md](../docs/migration.md)
 
 Short version:
 

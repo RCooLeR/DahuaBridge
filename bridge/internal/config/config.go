@@ -183,7 +183,7 @@ func defaultConfig() Config {
 			MediaRateLimitBurst:        12,
 		},
 		MQTT: MQTTConfig{
-			Enabled:         true,
+			Enabled:         false,
 			ClientID:        "dahuabridge",
 			TopicPrefix:     "dahuabridge",
 			DiscoveryPrefix: "homeassistant",
@@ -216,7 +216,7 @@ func defaultConfig() Config {
 		HomeAssistant: HomeAssistantConfig{
 			Enabled:              true,
 			NodeID:               "dahuabridge",
-			EntityMode:           "hybrid",
+			EntityMode:           "native",
 			CameraSnapshotSource: "device",
 			RequestTimeout:       15 * time.Second,
 		},
@@ -249,8 +249,8 @@ func (c *Config) normalize() error {
 	}
 	c.HomeAssistant.PublicBaseURL = strings.TrimRight(strings.TrimSpace(c.HomeAssistant.PublicBaseURL), "/")
 	c.HomeAssistant.EntityMode = strings.ToLower(strings.TrimSpace(c.HomeAssistant.EntityMode))
-	if c.HomeAssistant.EntityMode == "" {
-		c.HomeAssistant.EntityMode = "hybrid"
+	if c.HomeAssistant.EntityMode == "" || c.HomeAssistant.EntityMode == "hybrid" {
+		c.HomeAssistant.EntityMode = "native"
 	}
 	c.HomeAssistant.CameraSnapshotSource = strings.ToLower(strings.TrimSpace(c.HomeAssistant.CameraSnapshotSource))
 	if c.HomeAssistant.CameraSnapshotSource == "" {
@@ -384,9 +384,9 @@ func (c Config) validate() error {
 		return errors.New("home_assistant.api_base_url is required when home_assistant.access_token is set")
 	}
 	switch c.HomeAssistant.EntityMode {
-	case "hybrid", "native":
+	case "native":
 	default:
-		return fmt.Errorf("home_assistant.entity_mode must be one of: hybrid, native")
+		return fmt.Errorf("home_assistant.entity_mode must be native")
 	}
 	switch c.HomeAssistant.CameraSnapshotSource {
 	case "device", "logo":

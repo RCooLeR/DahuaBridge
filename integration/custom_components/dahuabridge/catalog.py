@@ -207,6 +207,11 @@ def intercom_for_record(record: dict[str, Any] | None) -> dict[str, Any]:
     return intercom if isinstance(intercom, dict) else {}
 
 
+def controls_for_record(record: dict[str, Any] | None) -> dict[str, Any]:
+    controls = stream_for_record(record).get("controls", {})
+    return controls if isinstance(controls, dict) else {}
+
+
 def features_for_record(record: dict[str, Any] | None) -> list[dict[str, Any]]:
     features = stream_for_record(record).get("features", [])
     if not isinstance(features, list):

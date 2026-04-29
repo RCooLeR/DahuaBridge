@@ -1,7 +1,7 @@
 # DahuaBridge
 
 `DahuaBridge` is a Go service that sits between Dahua devices and Home Assistant.
-It probes devices, reads event streams, publishes MQTT discovery/state, exposes an admin HTTP API, and serves bridge-hosted media paths for browsers and dashboards.
+It probes devices, reads event streams, exposes an admin HTTP API, serves bridge-hosted media paths for browsers and dashboards, and provides a native catalog for the Home Assistant custom integration.
 
 <p align="center" style="text-align: center;">
   <img src="./bridge/assets/overview.png" alt="DahuaBridge diagram" width="70%">
@@ -11,13 +11,13 @@ This repository is split into three main areas:
 
 - `bridge/`: standalone Go bridge module, Dockerfile, docs, and example config
 - `integration/`: Home Assistant custom integration code
-- `ha-cards/`: reserved for future custom Home Assistant cards
+- `ha-cards/`: custom Home Assistant card workspace
 
 ## What To Use
 
 - Use `bridge/` to build and run the actual bridge service.
 - Use `integration/custom_components/dahuabridge` to install the Home Assistant custom integration.
-- Ignore `ha-cards/` for now. It is just a reserved folder for future UI cards.
+- Use `ha-cards/` only if you are working on the optional custom card layer.
 
 ## Fastest Path
 
@@ -47,6 +47,5 @@ integration/custom_components/dahuabridge
 - Install: [docs/install.md](/D:/Work/Projects/Go/src/RCooLeR/DahuaBridge/docs/install.md:1)
 - How it works: [docs/how-it-works.md](/D:/Work/Projects/Go/src/RCooLeR/DahuaBridge/docs/how-it-works.md:1)
 - Device model and naming: [docs/device-model.md](/D:/Work/Projects/Go/src/RCooLeR/DahuaBridge/docs/device-model.md:1)
-- Migration to clean native HA devices: [docs/migration.md](/D:/Work/Projects/Go/src/RCooLeR/DahuaBridge/docs/migration.md:1)
 - Bridge technical details: [bridge/README.md](/D:/Work/Projects/Go/src/RCooLeR/DahuaBridge/bridge/README.md:1)
 - Integration details: [integration/README.md](/D:/Work/Projects/Go/src/RCooLeR/DahuaBridge/integration/README.md:1)
