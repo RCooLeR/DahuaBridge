@@ -43,7 +43,7 @@ type Request struct {
 }
 
 type Response struct {
-	Result  bool            `json:"result"`
+	Result  json.RawMessage `json:"result"`
 	Params  json.RawMessage `json:"params,omitempty"`
 	Error   *Error          `json:"error,omitempty"`
 	ID      int64           `json:"id"`
@@ -92,14 +92,34 @@ func (c *Client) Call(ctx context.Context, method string, params any, target any
 		return err
 	}
 
-	req := c.buildRequest(method, params)
+	req := c.buildRequest(method, params, nil)
 	if err := c.callOnce(ctx, rpcPath, req, target); err != nil {
 		if rpcErr, ok := err.(*Error); ok && isAuthError(rpcErr.Code) {
 			c.resetSession()
 			if loginErr := c.ensureLogin(ctx); loginErr != nil {
 				return loginErr
 			}
-			return c.callOnce(ctx, rpcPath, c.buildRequest(method, params), target)
+			return c.callOnce(ctx, rpcPath, c.buildRequest(method, params, nil), target)
+		}
+		return err
+	}
+
+	return nil
+}
+
+func (c *Client) CallObject(ctx context.Context, method string, params any, object any, target any) error {
+	if err := c.ensureLogin(ctx); err != nil {
+		return err
+	}
+
+	req := c.buildRequest(method, params, object)
+	if err := c.callOnce(ctx, rpcPath, req, target); err != nil {
+		if rpcErr, ok := err.(*Error); ok && isAuthError(rpcErr.Code) {
+			c.resetSession()
+			if loginErr := c.ensureLogin(ctx); loginErr != nil {
+				return loginErr
+			}
+			return c.callOnce(ctx, rpcPath, c.buildRequest(method, params, object), target)
 		}
 		return err
 	}
@@ -143,7 +163,7 @@ func (c *Client) ensureLogin(ctx context.Context) error {
 		}
 	}
 	if challenge.Realm == "" || challenge.Random == "" {
-		if firstResp.Result {
+		if firstResp.successful() {
 			return nil
 		}
 		if firstResp.Error != nil {
@@ -174,12 +194,13 @@ func (c *Client) ensureLogin(ctx context.Context) error {
 	return nil
 }
 
-func (c *Client) buildRequest(method string, params any) Request {
+func (c *Client) buildRequest(method string, params any, object any) Request {
 	return Request{
 		Method:  method,
 		Params:  params,
 		ID:      c.nextRequestID(),
 		Session: c.currentSession(),
+		Object:  object,
 	}
 }
 
@@ -189,7 +210,7 @@ func (c *Client) callOnce(ctx context.Context, path string, req Request, target 
 		return err
 	}
 
-	if !rpcResp.Result {
+	if !rpcResp.successful() {
 		if rpcResp.Error != nil {
 			return rpcResp.Error
 		}
@@ -206,6 +227,11 @@ func (c *Client) callOnce(ctx context.Context, path string, req Request, target 
 	}
 
 	if len(rpcResp.Params) == 0 {
+		if rpcResp.hasStructuredResultValue() {
+			if err := json.Unmarshal(rpcResp.Result, target); err != nil {
+				return fmt.Errorf("decode rpc result for %q: %w", req.Method, err)
+			}
+		}
 		return nil
 	}
 
@@ -324,4 +350,27 @@ func firstNonEmpty(values ...string) string {
 
 func isAuthError(code int) bool {
 	return code == 287637504 || code == 287637505
+}
+
+func (r Response) successful() bool {
+	if len(r.Result) == 0 {
+		return false
+	}
+
+	var flag bool
+	if err := json.Unmarshal(r.Result, &flag); err == nil {
+		return flag
+	}
+
+	raw := strings.TrimSpace(string(r.Result))
+	return raw != "" && raw != "false" && raw != "null"
+}
+
+func (r Response) hasStructuredResultValue() bool {
+	if len(r.Result) == 0 {
+		return false
+	}
+
+	raw := strings.TrimSpace(string(r.Result))
+	return raw != "" && raw != "true" && raw != "false" && raw != "null"
 }

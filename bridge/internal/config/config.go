@@ -19,6 +19,7 @@ type Config struct {
 	MQTT          MQTTConfig          `yaml:"mqtt"`
 	Media         MediaConfig         `yaml:"media"`
 	HomeAssistant HomeAssistantConfig `yaml:"home_assistant"`
+	Imou          ImouConfig          `yaml:"imou"`
 	StateStore    StateStoreConfig    `yaml:"state_store"`
 	Devices       DevicesConfig       `yaml:"devices"`
 }
@@ -76,6 +77,7 @@ type MediaConfig struct {
 	FFmpegLogLevel      string                  `yaml:"ffmpeg_log_level"`
 	VideoEncoder        string                  `yaml:"video_encoder"`
 	InputPreset         string                  `yaml:"input_preset"`
+	ClipPath            string                  `yaml:"clip_path"`
 	IdleTimeout         time.Duration           `yaml:"idle_timeout"`
 	StartTimeout        time.Duration           `yaml:"start_timeout"`
 	MaxWorkers          int                     `yaml:"max_workers"`
@@ -105,31 +107,71 @@ type StateStoreConfig struct {
 	FlushInterval time.Duration `yaml:"flush_interval"`
 }
 
+type ImouConfig struct {
+	Enabled           bool          `yaml:"enabled"`
+	AppID             string        `yaml:"app_id"`
+	AppSecret         string        `yaml:"app_secret"`
+	DataCenter        string        `yaml:"data_center"`
+	Endpoint          string        `yaml:"endpoint"`
+	RequestTimeout    time.Duration `yaml:"request_timeout"`
+	AlarmPollInterval time.Duration `yaml:"alarm_poll_interval"`
+	EventActiveWindow time.Duration `yaml:"event_active_window"`
+}
+
 type DevicesConfig struct {
 	NVR []DeviceConfig `yaml:"nvr"`
 	VTO []DeviceConfig `yaml:"vto"`
 	IPC []DeviceConfig `yaml:"ipc"`
 }
 
+type ChannelAuxControlOverride struct {
+	Channel  int      `yaml:"channel"`
+	Outputs  []string `yaml:"outputs"`
+	Features []string `yaml:"features"`
+}
+
+type ChannelPTZControlOverride struct {
+	Channel int   `yaml:"channel"`
+	Enabled *bool `yaml:"enabled"`
+}
+
+type ChannelRecordingControlOverride struct {
+	Channel   int    `yaml:"channel"`
+	Supported *bool  `yaml:"supported"`
+	Active    *bool  `yaml:"active"`
+	Mode      string `yaml:"mode"`
+}
+
+type ChannelImouOverride struct {
+	Channel   int      `yaml:"channel"`
+	DeviceID  string   `yaml:"device_id"`
+	ChannelID string   `yaml:"channel_id"`
+	Features  []string `yaml:"features"`
+}
+
 type DeviceConfig struct {
-	ID               string        `yaml:"id"`
-	Name             string        `yaml:"name"`
-	Manufacturer     string        `yaml:"manufacturer"`
-	Model            string        `yaml:"model"`
-	BaseURL          string        `yaml:"base_url"`
-	Username         string        `yaml:"username"`
-	Password         string        `yaml:"password"`
-	OnvifEnabled     *bool         `yaml:"onvif_enabled"`
-	OnvifUsername    string        `yaml:"onvif_username"`
-	OnvifPassword    string        `yaml:"onvif_password"`
-	OnvifServiceURL  string        `yaml:"onvif_service_url"`
-	ChannelAllowlist []int         `yaml:"channel_allowlist"`
-	LockAllowlist    []int         `yaml:"lock_allowlist"`
-	AlarmAllowlist   []int         `yaml:"alarm_allowlist"`
-	PollInterval     time.Duration `yaml:"poll_interval"`
-	RequestTimeout   time.Duration `yaml:"request_timeout"`
-	InsecureSkipTLS  bool          `yaml:"insecure_skip_tls"`
-	Enabled          *bool         `yaml:"enabled"`
+	ID                         string                            `yaml:"id"`
+	Name                       string                            `yaml:"name"`
+	Manufacturer               string                            `yaml:"manufacturer"`
+	Model                      string                            `yaml:"model"`
+	BaseURL                    string                            `yaml:"base_url"`
+	Username                   string                            `yaml:"username"`
+	Password                   string                            `yaml:"password"`
+	OnvifEnabled               *bool                             `yaml:"onvif_enabled"`
+	OnvifUsername              string                            `yaml:"onvif_username"`
+	OnvifPassword              string                            `yaml:"onvif_password"`
+	OnvifServiceURL            string                            `yaml:"onvif_service_url"`
+	ChannelAllowlist           []int                             `yaml:"channel_allowlist"`
+	ChannelAuxControlOverrides []ChannelAuxControlOverride       `yaml:"channel_aux_control_overrides"`
+	ChannelPTZControlOverrides []ChannelPTZControlOverride       `yaml:"channel_ptz_control_overrides"`
+	ChannelRecordingOverrides  []ChannelRecordingControlOverride `yaml:"channel_recording_control_overrides"`
+	ChannelImouOverrides       []ChannelImouOverride             `yaml:"channel_imou_overrides"`
+	LockAllowlist              []int                             `yaml:"lock_allowlist"`
+	AlarmAllowlist             []int                             `yaml:"alarm_allowlist"`
+	PollInterval               time.Duration                     `yaml:"poll_interval"`
+	RequestTimeout             time.Duration                     `yaml:"request_timeout"`
+	InsecureSkipTLS            bool                              `yaml:"insecure_skip_tls"`
+	Enabled                    *bool                             `yaml:"enabled"`
 }
 
 func Load(path string) (Config, error) {
@@ -173,7 +215,7 @@ func defaultConfig() Config {
 			MetricsPath:                "/metrics",
 			HealthPath:                 "/healthz",
 			ReadTimeout:                5 * time.Second,
-			WriteTimeout:               10 * time.Second,
+			WriteTimeout:               60 * time.Second,
 			IdleTimeout:                60 * time.Second,
 			AdminRateLimitPerMinute:    30,
 			AdminRateLimitBurst:        10,
@@ -200,6 +242,7 @@ func defaultConfig() Config {
 			FFmpegLogLevel:     "error",
 			VideoEncoder:       "software",
 			InputPreset:        "low_latency",
+			ClipPath:           "/data/clips",
 			IdleTimeout:        30 * time.Second,
 			StartTimeout:       15 * time.Second,
 			MaxWorkers:         14,
@@ -267,6 +310,29 @@ func (c *Config) normalize() error {
 	if c.HomeAssistant.RequestTimeout <= 0 {
 		c.HomeAssistant.RequestTimeout = 15 * time.Second
 	}
+	c.Imou.AppID = firstNonEmpty(strings.TrimSpace(c.Imou.AppID), strings.TrimSpace(os.Getenv("DAHUABRIDGE_IMOU_APP_ID")))
+	c.Imou.AppSecret = firstNonEmpty(strings.TrimSpace(c.Imou.AppSecret), strings.TrimSpace(os.Getenv("DAHUABRIDGE_IMOU_APP_SECRET")))
+	c.Imou.DataCenter = strings.ToLower(firstNonEmpty(strings.TrimSpace(c.Imou.DataCenter), strings.TrimSpace(os.Getenv("DAHUABRIDGE_IMOU_DATA_CENTER"))))
+	c.Imou.Endpoint = strings.TrimRight(strings.TrimSpace(c.Imou.Endpoint), "/")
+	if c.Imou.DataCenter == "" {
+		c.Imou.DataCenter = "fk"
+	}
+	if c.Imou.Endpoint != "" {
+		normalizedEndpoint, err := normalizeBaseURL(c.Imou.Endpoint)
+		if err != nil {
+			return fmt.Errorf("normalize imou.endpoint: %w", err)
+		}
+		c.Imou.Endpoint = normalizedEndpoint
+	}
+	if c.Imou.RequestTimeout <= 0 {
+		c.Imou.RequestTimeout = 15 * time.Second
+	}
+	if c.Imou.AlarmPollInterval <= 0 {
+		c.Imou.AlarmPollInterval = 15 * time.Second
+	}
+	if c.Imou.EventActiveWindow <= 0 {
+		c.Imou.EventActiveWindow = 20 * time.Second
+	}
 	c.Media.FFmpegPath = strings.TrimSpace(c.Media.FFmpegPath)
 	if c.Media.FFmpegPath == "" {
 		c.Media.FFmpegPath = "ffmpeg"
@@ -282,6 +348,10 @@ func (c *Config) normalize() error {
 	c.Media.InputPreset = strings.ToLower(strings.TrimSpace(c.Media.InputPreset))
 	if c.Media.InputPreset == "" {
 		c.Media.InputPreset = "low_latency"
+	}
+	c.Media.ClipPath = strings.TrimSpace(c.Media.ClipPath)
+	if c.Media.ClipPath == "" {
+		c.Media.ClipPath = "/data/clips"
 	}
 	if c.Media.IdleTimeout <= 0 {
 		c.Media.IdleTimeout = 30 * time.Second
@@ -366,6 +436,10 @@ func (c *Config) normalize() error {
 		}
 	}
 
+	if !c.Imou.Enabled && anyImouOverrides(c.Devices) && c.Imou.AppID != "" && c.Imou.AppSecret != "" {
+		c.Imou.Enabled = true
+	}
+
 	return nil
 }
 
@@ -403,6 +477,21 @@ func (c Config) validate() error {
 	default:
 		return fmt.Errorf("media.input_preset must be one of: low_latency, stable")
 	}
+	if c.Imou.Enabled {
+		if c.Imou.AppID == "" {
+			return errors.New("imou.app_id is required when imou.enabled=true")
+		}
+		if c.Imou.AppSecret == "" {
+			return errors.New("imou.app_secret is required when imou.enabled=true")
+		}
+		if c.Imou.Endpoint == "" {
+			switch c.Imou.DataCenter {
+			case "fk", "sg", "or":
+			default:
+				return fmt.Errorf("imou.data_center must be one of: fk, sg, or")
+			}
+		}
+	}
 
 	if len(c.Devices.NVR) == 0 && len(c.Devices.VTO) == 0 && len(c.Devices.IPC) == 0 {
 		return errors.New("at least one device must be configured")
@@ -431,6 +520,20 @@ func (c Config) validate() error {
 
 		if dev.Password == "" {
 			return fmt.Errorf("device %q must have a password", dev.ID)
+		}
+		for _, override := range dev.ChannelImouOverrides {
+			if !c.Imou.Enabled {
+				return fmt.Errorf("device %q channel %d requires imou.enabled=true", dev.ID, override.Channel)
+			}
+			if override.DeviceID == "" {
+				return fmt.Errorf("device %q channel %d imou override requires device_id", dev.ID, override.Channel)
+			}
+			if override.ChannelID == "" {
+				return fmt.Errorf("device %q channel %d imou override requires channel_id", dev.ID, override.Channel)
+			}
+			if len(override.Features) == 0 {
+				return fmt.Errorf("device %q channel %d imou override requires at least one feature", dev.ID, override.Channel)
+			}
 		}
 	}
 
@@ -471,6 +574,10 @@ func normalizeDevice(dev *DeviceConfig) error {
 	dev.OnvifUsername = strings.TrimSpace(dev.OnvifUsername)
 	dev.OnvifPassword = strings.TrimSpace(dev.OnvifPassword)
 	dev.ChannelAllowlist = normalizePositiveIntList(dev.ChannelAllowlist)
+	dev.ChannelAuxControlOverrides = normalizeChannelAuxControlOverrides(dev.ChannelAuxControlOverrides)
+	dev.ChannelPTZControlOverrides = normalizeChannelPTZControlOverrides(dev.ChannelPTZControlOverrides)
+	dev.ChannelRecordingOverrides = normalizeChannelRecordingControlOverrides(dev.ChannelRecordingOverrides)
+	dev.ChannelImouOverrides = normalizeChannelImouOverrides(dev.ChannelImouOverrides)
 	dev.LockAllowlist = normalizePositiveIntList(dev.LockAllowlist)
 	dev.AlarmAllowlist = normalizePositiveIntList(dev.AlarmAllowlist)
 	if dev.OnvifServiceURL != "" {
@@ -500,6 +607,54 @@ func (d DeviceConfig) AllowsChannel(channel int) bool {
 		return true
 	}
 	return slices.Contains(d.ChannelAllowlist, channel)
+}
+
+func (d DeviceConfig) AuxControlOverride(channel int) (ChannelAuxControlOverride, bool) {
+	if channel <= 0 {
+		return ChannelAuxControlOverride{}, false
+	}
+	for _, override := range d.ChannelAuxControlOverrides {
+		if override.Channel == channel {
+			return normalizeSingleChannelAuxControlOverride(override)
+		}
+	}
+	return ChannelAuxControlOverride{}, false
+}
+
+func (d DeviceConfig) ImouOverride(channel int) (ChannelImouOverride, bool) {
+	if channel <= 0 {
+		return ChannelImouOverride{}, false
+	}
+	for _, override := range d.ChannelImouOverrides {
+		if override.Channel == channel {
+			return override, true
+		}
+	}
+	return ChannelImouOverride{}, false
+}
+
+func (d DeviceConfig) PTZControlOverride(channel int) (ChannelPTZControlOverride, bool) {
+	if channel <= 0 {
+		return ChannelPTZControlOverride{}, false
+	}
+	for _, override := range d.ChannelPTZControlOverrides {
+		if override.Channel == channel {
+			return override, override.Enabled != nil
+		}
+	}
+	return ChannelPTZControlOverride{}, false
+}
+
+func (d DeviceConfig) RecordingControlOverride(channel int) (ChannelRecordingControlOverride, bool) {
+	if channel <= 0 {
+		return ChannelRecordingControlOverride{}, false
+	}
+	for _, override := range d.ChannelRecordingOverrides {
+		if override.Channel == channel {
+			return override, override.Supported != nil || override.Active != nil || strings.TrimSpace(override.Mode) != ""
+		}
+	}
+	return ChannelRecordingControlOverride{}, false
 }
 
 func (d DeviceConfig) AllowsLock(lock int) bool {
@@ -583,6 +738,285 @@ func normalizePath(value string, fallback string) string {
 	}
 
 	return "/" + value
+}
+
+func normalizeChannelAuxControlOverrides(overrides []ChannelAuxControlOverride) []ChannelAuxControlOverride {
+	if len(overrides) == 0 {
+		return nil
+	}
+
+	byChannel := make(map[int]ChannelAuxControlOverride, len(overrides))
+	channels := make([]int, 0, len(overrides))
+	for _, override := range overrides {
+		normalized, ok := normalizeSingleChannelAuxControlOverride(override)
+		if !ok {
+			continue
+		}
+
+		existing, ok := byChannel[normalized.Channel]
+		if ok {
+			existing.Outputs = uniqueLowerStrings(append(existing.Outputs, normalized.Outputs...))
+			existing.Features = uniqueLowerStrings(append(existing.Features, normalized.Features...))
+			byChannel[normalized.Channel] = existing
+			continue
+		}
+
+		byChannel[normalized.Channel] = normalized
+		channels = append(channels, normalized.Channel)
+	}
+
+	if len(channels) == 0 {
+		return nil
+	}
+	slices.Sort(channels)
+	normalized := make([]ChannelAuxControlOverride, 0, len(channels))
+	for _, channel := range channels {
+		normalized = append(normalized, byChannel[channel])
+	}
+	return normalized
+}
+
+func normalizeChannelImouOverrides(overrides []ChannelImouOverride) []ChannelImouOverride {
+	if len(overrides) == 0 {
+		return nil
+	}
+
+	byChannel := make(map[int]ChannelImouOverride, len(overrides))
+	channels := make([]int, 0, len(overrides))
+	for _, override := range overrides {
+		normalized, ok := normalizeSingleChannelImouOverride(override)
+		if !ok {
+			continue
+		}
+		if _, exists := byChannel[normalized.Channel]; !exists {
+			channels = append(channels, normalized.Channel)
+		}
+		byChannel[normalized.Channel] = normalized
+	}
+	if len(channels) == 0 {
+		return nil
+	}
+	slices.Sort(channels)
+	normalized := make([]ChannelImouOverride, 0, len(channels))
+	for _, channel := range channels {
+		normalized = append(normalized, byChannel[channel])
+	}
+	return normalized
+}
+
+func normalizeChannelPTZControlOverrides(overrides []ChannelPTZControlOverride) []ChannelPTZControlOverride {
+	if len(overrides) == 0 {
+		return nil
+	}
+	byChannel := make(map[int]ChannelPTZControlOverride, len(overrides))
+	channels := make([]int, 0, len(overrides))
+	for _, override := range overrides {
+		if override.Channel <= 0 || override.Enabled == nil {
+			continue
+		}
+		if _, exists := byChannel[override.Channel]; !exists {
+			channels = append(channels, override.Channel)
+		}
+		byChannel[override.Channel] = override
+	}
+	if len(channels) == 0 {
+		return nil
+	}
+	slices.Sort(channels)
+	normalized := make([]ChannelPTZControlOverride, 0, len(channels))
+	for _, channel := range channels {
+		normalized = append(normalized, byChannel[channel])
+	}
+	return normalized
+}
+
+func normalizeChannelRecordingControlOverrides(overrides []ChannelRecordingControlOverride) []ChannelRecordingControlOverride {
+	if len(overrides) == 0 {
+		return nil
+	}
+	byChannel := make(map[int]ChannelRecordingControlOverride, len(overrides))
+	channels := make([]int, 0, len(overrides))
+	for _, override := range overrides {
+		if override.Channel <= 0 {
+			continue
+		}
+		override.Mode = strings.ToLower(strings.TrimSpace(override.Mode))
+		if override.Supported == nil && override.Active == nil && override.Mode == "" {
+			continue
+		}
+		if _, exists := byChannel[override.Channel]; !exists {
+			channels = append(channels, override.Channel)
+		}
+		byChannel[override.Channel] = override
+	}
+	if len(channels) == 0 {
+		return nil
+	}
+	slices.Sort(channels)
+	normalized := make([]ChannelRecordingControlOverride, 0, len(channels))
+	for _, channel := range channels {
+		normalized = append(normalized, byChannel[channel])
+	}
+	return normalized
+}
+
+func normalizeSingleChannelImouOverride(override ChannelImouOverride) (ChannelImouOverride, bool) {
+	if override.Channel <= 0 {
+		return ChannelImouOverride{}, false
+	}
+	normalized := ChannelImouOverride{
+		Channel:   override.Channel,
+		DeviceID:  strings.TrimSpace(override.DeviceID),
+		ChannelID: strings.TrimSpace(override.ChannelID),
+		Features:  normalizeImouOverrideFeatures(override.Features),
+	}
+	if normalized.DeviceID == "" || normalized.ChannelID == "" || len(normalized.Features) == 0 {
+		return ChannelImouOverride{}, false
+	}
+	return normalized, true
+}
+
+func normalizeImouOverrideFeatures(values []string) []string {
+	features := make([]string, 0, len(values))
+	for _, value := range values {
+		switch strings.ToLower(strings.TrimSpace(value)) {
+		case "events":
+			features = append(features, "events")
+		case "light":
+			features = append(features, "light")
+		case "warning_light":
+			features = append(features, "warning_light")
+		case "siren", "aux":
+			features = append(features, "siren")
+		}
+	}
+	return uniqueLowerStrings(features)
+}
+
+func anyImouOverrides(devices DevicesConfig) bool {
+	for _, dev := range devices.NVR {
+		if len(dev.ChannelImouOverrides) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
+}
+
+func normalizeSingleChannelAuxControlOverride(override ChannelAuxControlOverride) (ChannelAuxControlOverride, bool) {
+	if override.Channel <= 0 {
+		return ChannelAuxControlOverride{}, false
+	}
+	normalized := ChannelAuxControlOverride{
+		Channel: override.Channel,
+		Outputs: normalizeAuxOverrideOutputs(override.Outputs),
+	}
+	normalized.Features = normalizeAuxOverrideFeatures(override.Features)
+	normalized.Outputs = appendMissingString(normalized.Outputs, outputsForAuxFeatures(normalized.Features)...)
+	normalized.Features = appendMissingString(normalized.Features, featuresForAuxOutputs(normalized.Outputs)...)
+	normalized.Outputs = uniqueLowerStrings(normalized.Outputs)
+	normalized.Features = uniqueLowerStrings(normalized.Features)
+	if len(normalized.Outputs) == 0 && len(normalized.Features) == 0 {
+		return ChannelAuxControlOverride{}, false
+	}
+	return normalized, true
+}
+
+func normalizeAuxOverrideOutputs(values []string) []string {
+	outputs := make([]string, 0, len(values))
+	for _, value := range values {
+		switch strings.ToLower(strings.TrimSpace(value)) {
+		case "aux", "siren":
+			outputs = append(outputs, "aux")
+		case "light", "warning_light":
+			outputs = append(outputs, "light")
+		case "wiper":
+			outputs = append(outputs, "wiper")
+		}
+	}
+	return uniqueLowerStrings(outputs)
+}
+
+func normalizeAuxOverrideFeatures(values []string) []string {
+	features := make([]string, 0, len(values))
+	for _, value := range values {
+		switch strings.ToLower(strings.TrimSpace(value)) {
+		case "aux", "siren":
+			features = append(features, "siren")
+		case "light":
+			features = append(features, "light")
+		case "warning_light":
+			features = append(features, "warning_light")
+		case "wiper":
+			features = append(features, "wiper")
+		}
+	}
+	return uniqueLowerStrings(features)
+}
+
+func outputsForAuxFeatures(features []string) []string {
+	outputs := make([]string, 0, len(features))
+	for _, feature := range features {
+		switch strings.ToLower(strings.TrimSpace(feature)) {
+		case "siren":
+			outputs = append(outputs, "aux")
+		case "light":
+			outputs = append(outputs, "light")
+		case "warning_light":
+			outputs = append(outputs, "light")
+		case "wiper":
+			outputs = append(outputs, "wiper")
+		}
+	}
+	return uniqueLowerStrings(outputs)
+}
+
+func featuresForAuxOutputs(outputs []string) []string {
+	features := make([]string, 0, len(outputs))
+	for _, output := range outputs {
+		switch strings.ToLower(strings.TrimSpace(output)) {
+		case "aux":
+			features = append(features, "siren")
+		case "light":
+			features = append(features, "warning_light")
+		case "wiper":
+			features = append(features, "wiper")
+		}
+	}
+	return uniqueLowerStrings(features)
+}
+
+func appendMissingString(values []string, additions ...string) []string {
+	return append(values, additions...)
+}
+
+func uniqueLowerStrings(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(values))
+	unique := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.ToLower(strings.TrimSpace(value))
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		unique = append(unique, value)
+	}
+	slices.Sort(unique)
+	return unique
 }
 
 func normalizeUDPTarget(raw string) (string, error) {

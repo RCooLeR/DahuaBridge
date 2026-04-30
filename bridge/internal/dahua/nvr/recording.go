@@ -57,7 +57,7 @@ func (d *Driver) recordingCapabilities(ctx context.Context, channel int) (dahua.
 	if err != nil {
 		return dahua.NVRRecordingCapabilities{}, err
 	}
-	return recordingCapabilitiesForChannel(channel, recordModes), nil
+	return d.applyRecordingOverride(channel, recordingCapabilitiesForChannel(channel, recordModes)), nil
 }
 
 func (d *Driver) loadRecordModes(ctx context.Context) (map[int]recordModeState, error) {
@@ -72,19 +72,40 @@ func (d *Driver) loadRecordModes(ctx context.Context) (map[int]recordModeState, 
 }
 
 func (d *Driver) setChannelRecordMode(ctx context.Context, channel int, mode int, current recordModeState) error {
-	body, err := d.client.GetText(ctx, "/cgi-bin/configManager.cgi", url.Values{
+	for _, tablePrefix := range []bool{false, true} {
+		body, err := d.client.GetText(ctx, "/cgi-bin/configManager.cgi", recordModeConfigQuery(channel, mode, current, tablePrefix))
+		if err != nil {
+			if isUnsupportedRecordConfigError(err) {
+				continue
+			}
+			return err
+		}
+		if !strings.EqualFold(strings.TrimSpace(body), "OK") {
+			return fmt.Errorf("recording action returned %q", strings.TrimSpace(body))
+		}
+		return nil
+	}
+	return dahua.ErrUnsupportedOperation
+}
+
+func recordModeConfigQuery(channel int, mode int, current recordModeState, tablePrefix bool) url.Values {
+	prefix := "RecordMode"
+	if tablePrefix {
+		prefix = "table.RecordMode"
+	}
+	return url.Values{
 		"action": []string{"setConfig"},
-		fmt.Sprintf("RecordMode[%d].Mode", channel-1):       []string{strconv.Itoa(mode)},
-		fmt.Sprintf("RecordMode[%d].ModeExtra1", channel-1): []string{firstNonEmpty(current.ModeExtra1, "2")},
-		fmt.Sprintf("RecordMode[%d].ModeExtra2", channel-1): []string{firstNonEmpty(current.ModeExtra2, "2")},
-	})
-	if err != nil {
-		return err
+		fmt.Sprintf("%s[%d].Mode", prefix, channel-1):       []string{strconv.Itoa(mode)},
+		fmt.Sprintf("%s[%d].ModeExtra1", prefix, channel-1): []string{firstNonEmpty(current.ModeExtra1, "2")},
+		fmt.Sprintf("%s[%d].ModeExtra2", prefix, channel-1): []string{firstNonEmpty(current.ModeExtra2, "2")},
 	}
-	if !strings.EqualFold(strings.TrimSpace(body), "OK") {
-		return fmt.Errorf("recording action returned %q", strings.TrimSpace(body))
+}
+
+func isUnsupportedRecordConfigError(err error) bool {
+	if err == nil {
+		return false
 	}
-	return nil
+	return strings.Contains(err.Error(), "Bad Request!") || strings.Contains(err.Error(), "Not Implemented!")
 }
 
 func parseRecordModes(values map[string]string) map[int]recordModeState {
@@ -137,6 +158,28 @@ func recordingCapabilitiesForChannel(channel int, modes map[int]recordModeState)
 		Active:    active,
 		Mode:      mode,
 	}
+}
+
+func (d *Driver) applyRecordingOverride(channel int, capabilities dahua.NVRRecordingCapabilities) dahua.NVRRecordingCapabilities {
+	override, ok := d.currentConfig().RecordingControlOverride(channel)
+	if !ok {
+		return capabilities
+	}
+	if override.Supported != nil {
+		capabilities.Supported = *override.Supported
+		if !*override.Supported {
+			capabilities.Active = false
+			capabilities.Mode = ""
+			return capabilities
+		}
+	}
+	if override.Active != nil {
+		capabilities.Active = *override.Active
+	}
+	if mode := strings.TrimSpace(override.Mode); mode != "" {
+		capabilities.Mode = mode
+	}
+	return capabilities
 }
 
 var _ dahua.NVRRecordingController = (*Driver)(nil)

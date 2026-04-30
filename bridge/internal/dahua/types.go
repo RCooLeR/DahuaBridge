@@ -3,6 +3,7 @@ package dahua
 import (
 	"context"
 	"errors"
+	"io"
 	"time"
 
 	"RCooLeR/DahuaBridge/internal/config"
@@ -110,6 +111,11 @@ type NVRRecordingQuery struct {
 }
 
 type NVRRecording struct {
+	Source         string   `json:"source,omitempty"`
+	Status         string   `json:"status,omitempty"`
+	ClipID         string   `json:"clip_id,omitempty"`
+	StreamID       string   `json:"stream_id,omitempty"`
+	DownloadURL    string   `json:"download_url,omitempty"`
 	Channel        int      `json:"channel"`
 	StartTime      string   `json:"start_time"`
 	EndTime        string   `json:"end_time"`
@@ -136,6 +142,17 @@ type NVRRecordingSearchResult struct {
 
 type NVRRecordingSearcher interface {
 	FindRecordings(context.Context, NVRRecordingQuery) (NVRRecordingSearchResult, error)
+}
+
+type NVRRecordingDownload struct {
+	Body          io.ReadCloser
+	ContentType   string
+	FileName      string
+	ContentLength int64
+}
+
+type NVRRecordingDownloader interface {
+	DownloadRecording(context.Context, string) (NVRRecordingDownload, error)
 }
 
 type NVRPlaybackSessionRequest struct {
@@ -183,6 +200,8 @@ type NVRChannelAudioCapabilities struct {
 	Mute                   bool                                `json:"mute"`
 	Volume                 bool                                `json:"volume"`
 	VolumePermissionDenied bool                                `json:"volume_permission_denied,omitempty"`
+	Muted                  bool                                `json:"muted,omitempty"`
+	StreamEnabled          bool                                `json:"stream_enabled,omitempty"`
 	Playback               NVRChannelAudioPlaybackCapabilities `json:"playback"`
 }
 
@@ -287,6 +306,11 @@ type NVRAuxRequest struct {
 	Duration time.Duration
 }
 
+type NVRAudioRequest struct {
+	Channel int
+	Muted   bool
+}
+
 type NVRRecordingAction string
 
 const (
@@ -309,6 +333,10 @@ type NVRPTZController interface {
 
 type NVRAuxController interface {
 	Aux(context.Context, NVRAuxRequest) error
+}
+
+type NVRAudioController interface {
+	SetAudioMute(context.Context, NVRAudioRequest) error
 }
 
 type NVRRecordingController interface {

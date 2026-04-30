@@ -3,6 +3,8 @@ package nvr
 import (
 	"context"
 	"errors"
+	"fmt"
+	"net/url"
 	"path"
 	"sort"
 	"strings"
@@ -49,6 +51,17 @@ func (d *Driver) audioCapabilities(ctx context.Context, channel int) (dahua.NVRC
 	capabilities := dahua.NVRChannelAudioCapabilities{}
 	notes := make([]string, 0, 4)
 
+	if enabled, known, codec := d.channelAudioStreamState(ctx, channel); known {
+		capabilities.Mute = true
+		capabilities.Muted = !enabled
+		capabilities.StreamEnabled = enabled
+		if strings.TrimSpace(codec) != "" {
+			capabilities.Supported = true
+			notes = append(notes, "channel_main_stream_audio_codec_detected")
+		}
+		notes = append(notes, "channel_main_stream_audio_toggle_available")
+	}
+
 	playback, playbackNotes := d.remoteSpeakCapabilities(ctx, channel)
 	capabilities.Playback = playback
 	capabilities.Supported = capabilities.Playback.Supported
@@ -62,6 +75,14 @@ func (d *Driver) audioCapabilities(ctx context.Context, channel int) (dahua.NVRC
 		} else if volumeProbeFailed {
 			notes = append(notes, "channel_audio_volume_probe_failed")
 		}
+	}
+
+	if _, ok := d.imouOverride(channel); ok {
+		capabilities.Mute = true
+		capabilities.Muted = false
+		capabilities.StreamEnabled = true
+		capabilities.Supported = true
+		notes = append(notes, "channel_imou_audio_encode_control_configured")
 	}
 
 	if !capabilities.Mute && !capabilities.Volume {
@@ -153,6 +174,21 @@ func (d *Driver) remoteSpeakVolumeProbe(ctx context.Context, channel int) (bool,
 	return false, true
 }
 
+func (d *Driver) SetAudioMute(ctx context.Context, request dahua.NVRAudioRequest) error {
+	cfg := d.currentConfig()
+	if request.Channel <= 0 {
+		return fmt.Errorf("channel must be >= 1")
+	}
+	if !cfg.AllowsChannel(request.Channel) {
+		return fmt.Errorf("%w: channel %d is not allowed", dahua.ErrUnsupportedOperation, request.Channel)
+	}
+	override, ok := d.imouOverride(request.Channel)
+	if ok {
+		return d.setImouAudioMuted(ctx, override, request.Muted)
+	}
+	return d.setChannelMainAudioEnabled(ctx, request.Channel, !request.Muted)
+}
+
 func extractAudioFormats(values []remoteSpeakFormat) []string {
 	result := make([]string, 0, len(values))
 	for _, value := range values {
@@ -171,4 +207,99 @@ func isAuthorityDeniedRPCError(err error) bool {
 func isUnknownRPCError(err error) bool {
 	var rpcErr *dahuarpc.Error
 	return errors.As(err, &rpcErr) && rpcErr != nil && rpcErr.Code == 268959743
+}
+
+func (d *Driver) channelAudioStreamState(ctx context.Context, channel int) (bool, bool, string) {
+	if d.client == nil {
+		return false, false, ""
+	}
+	inventory, err := d.loadInventory(ctx)
+	if err != nil {
+		return false, false, ""
+	}
+	for _, item := range inventory {
+		if item.Index+1 != channel {
+			continue
+		}
+		return item.AudioEnabled, item.AudioKnown, strings.TrimSpace(item.AudioCodec)
+	}
+	return false, false, ""
+}
+
+func (d *Driver) setChannelMainAudioEnabled(ctx context.Context, channel int, enabled bool) error {
+	if d.client == nil {
+		return fmt.Errorf("%w: audio mute control is not supported on channel %d", dahua.ErrUnsupportedOperation, channel)
+	}
+	values, err := d.client.GetKeyValues(ctx, "/cgi-bin/configManager.cgi", url.Values{
+		"action": []string{"getConfig"},
+		"name":   []string{"Encode"},
+	})
+	if err != nil {
+		return err
+	}
+
+	keys := channelAudioEnableKeys(channel, values)
+	if len(keys) == 0 {
+		return fmt.Errorf("%w: audio mute control is not supported on channel %d", dahua.ErrUnsupportedOperation, channel)
+	}
+
+	for _, tablePrefix := range []bool{true, false} {
+		body, err := d.client.GetText(ctx, "/cgi-bin/configManager.cgi", channelAudioEnableQuery(keys, enabled, tablePrefix))
+		if err != nil {
+			if isUnsupportedRecordConfigError(err) {
+				continue
+			}
+			return err
+		}
+		if !strings.EqualFold(strings.TrimSpace(body), "OK") {
+			return fmt.Errorf("audio action returned %q", strings.TrimSpace(body))
+		}
+		d.InvalidateInventoryCache()
+		return nil
+	}
+	return dahua.ErrUnsupportedOperation
+}
+
+func channelAudioEnableKeys(channel int, values map[string]string) []string {
+	channelIndex := channel - 1
+	keys := make([]string, 0, 3)
+	seen := make(map[string]struct{}, 3)
+	for key := range values {
+		matches := encodeAudioEnablePattern.FindStringSubmatch(key)
+		if len(matches) != 2 {
+			continue
+		}
+		index, ok := parseInt(matches[1])
+		if !ok || index != channelIndex {
+			continue
+		}
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		keys = append(keys, key)
+	}
+	if len(keys) == 0 {
+		keys = append(keys, fmt.Sprintf("table.Encode[%d].MainFormat[0].AudioEnable", channelIndex))
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+func channelAudioEnableQuery(keys []string, enabled bool, tablePrefix bool) url.Values {
+	query := url.Values{
+		"action": []string{"setConfig"},
+	}
+	value := "false"
+	if enabled {
+		value = "true"
+	}
+	for _, key := range keys {
+		normalizedKey := key
+		if !tablePrefix {
+			normalizedKey = strings.TrimPrefix(normalizedKey, "table.")
+		}
+		query[normalizedKey] = []string{value}
+	}
+	return query
 }

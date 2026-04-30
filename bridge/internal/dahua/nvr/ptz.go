@@ -2,6 +2,7 @@ package nvr
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/url"
 	"sort"
@@ -20,10 +21,18 @@ type ptzCommandSpec struct {
 }
 
 type auxOutputSpec struct {
-	code      string
-	canonical string
-	feature   string
+	code        string
+	canonical   string
+	feature     string
+	controlType auxControlType
 }
+
+type auxControlType string
+
+const (
+	auxControlTypePTZ       auxControlType = "ptz"
+	auxControlTypeLightMode auxControlType = "light_mode"
+)
 
 var ptzCommandSpecs = map[dahua.NVRPTZCommand]ptzCommandSpec{
 	dahua.NVRPTZCommandUp: {
@@ -145,11 +154,11 @@ var ptzCommandSpecs = map[dahua.NVRPTZCommand]ptzCommandSpec{
 }
 
 var auxOutputSpecs = map[string]auxOutputSpec{
-	"aux":           {code: "Aux", canonical: "aux", feature: "siren"},
-	"siren":         {code: "Aux", canonical: "aux", feature: "siren"},
-	"light":         {code: "Light", canonical: "light", feature: "warning_light"},
-	"warning_light": {code: "Light", canonical: "light", feature: "warning_light"},
-	"wiper":         {code: "Wiper", canonical: "wiper", feature: "wiper"},
+	"aux":           {code: "Aux", canonical: "aux", feature: "siren", controlType: auxControlTypePTZ},
+	"siren":         {code: "Aux", canonical: "aux", feature: "siren", controlType: auxControlTypePTZ},
+	"light":         {canonical: "light", feature: "light", controlType: auxControlTypeLightMode},
+	"warning_light": {code: "Light", canonical: "light", feature: "warning_light", controlType: auxControlTypePTZ},
+	"wiper":         {code: "Wiper", canonical: "wiper", feature: "wiper", controlType: auxControlTypePTZ},
 }
 
 func (d *Driver) ChannelControlCapabilities(ctx context.Context, channel int) (dahua.NVRChannelControlCapabilities, error) {
@@ -167,6 +176,7 @@ func (d *Driver) ChannelControlCapabilities(ctx context.Context, channel int) (d
 	}
 
 	ptz, _ := d.ptzCapabilities(ctx, channel)
+	ptz = d.applyPTZOverride(channel, ptz)
 	aux, auxErr := d.auxCapabilities(ctx, channel, ptz)
 	if auxErr != nil {
 		aux = dahua.NVRAuxCapabilities{}
@@ -183,12 +193,26 @@ func (d *Driver) ChannelControlCapabilities(ctx context.Context, channel int) (d
 	}, nil
 }
 
+func (d *Driver) applyPTZOverride(channel int, capabilities dahua.NVRPTZCapabilities) dahua.NVRPTZCapabilities {
+	override, ok := d.currentConfig().PTZControlOverride(channel)
+	if !ok || override.Enabled == nil {
+		return capabilities
+	}
+	if *override.Enabled {
+		return capabilities
+	}
+	return dahua.NVRPTZCapabilities{}
+}
+
 func (d *Driver) ptzCapabilities(ctx context.Context, channel int) (dahua.NVRPTZCapabilities, error) {
 	values, err := d.client.GetKeyValues(ctx, "/cgi-bin/ptz.cgi", url.Values{
 		"action":  []string{"getCurrentProtocolCaps"},
 		"channel": []string{strconv.Itoa(channel)},
 	})
 	if err != nil {
+		if isUnsupportedPTZSurfaceError(err) {
+			return dahua.NVRPTZCapabilities{}, fmt.Errorf("%w: ptz capabilities are not exposed on channel %d", dahua.ErrUnsupportedOperation, channel)
+		}
 		return dahua.NVRPTZCapabilities{}, err
 	}
 	return parsePTZCapabilities(values), nil
@@ -271,6 +295,9 @@ func (d *Driver) Aux(ctx context.Context, request dahua.NVRAuxRequest) error {
 	if !ok {
 		return fmt.Errorf("unsupported aux output %q", request.Output)
 	}
+	if handled, err := d.handleImouAux(ctx, request); handled {
+		return err
+	}
 
 	ptz, _ := d.ptzCapabilities(ctx, request.Channel)
 	auxCapabilities, err := d.auxCapabilities(ctx, request.Channel, ptz)
@@ -284,67 +311,81 @@ func (d *Driver) Aux(ctx context.Context, request dahua.NVRAuxRequest) error {
 		return fmt.Errorf("%w: aux output %q is not supported on channel %d", dahua.ErrUnsupportedOperation, request.Output, request.Channel)
 	}
 
-	switch request.Action {
-	case dahua.NVRAuxActionStart:
-		return d.sendAuxAction(ctx, request.Channel, "start", spec.code)
-	case dahua.NVRAuxActionStop:
-		return d.sendAuxAction(ctx, request.Channel, "stop", spec.code)
-	case dahua.NVRAuxActionPulse:
-		duration := request.Duration
-		if duration <= 0 {
-			duration = 300 * time.Millisecond
+	switch spec.controlType {
+	case auxControlTypeLightMode:
+		return d.setChannelLightingMode(ctx, request.Channel, request.Action)
+	case auxControlTypePTZ:
+		switch request.Action {
+		case dahua.NVRAuxActionStart:
+			return d.sendAuxAction(ctx, request.Channel, "start", spec.code)
+		case dahua.NVRAuxActionStop:
+			return d.sendAuxAction(ctx, request.Channel, "stop", spec.code)
+		case dahua.NVRAuxActionPulse:
+			duration := request.Duration
+			if duration <= 0 {
+				duration = 300 * time.Millisecond
+			}
+			if duration > 10*time.Second {
+				return fmt.Errorf("duration must be <= 10000ms")
+			}
+			if err := d.sendAuxAction(ctx, request.Channel, "start", spec.code); err != nil {
+				return err
+			}
+			timer := time.NewTimer(duration)
+			defer timer.Stop()
+			select {
+			case <-ctx.Done():
+				stopCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+				defer cancel()
+				_ = d.sendAuxAction(stopCtx, request.Channel, "stop", spec.code)
+				return ctx.Err()
+			case <-timer.C:
+			}
+			return d.sendAuxAction(ctx, request.Channel, "stop", spec.code)
+		default:
+			return fmt.Errorf("unsupported aux action %q", request.Action)
 		}
-		if duration > 10*time.Second {
-			return fmt.Errorf("duration must be <= 10000ms")
-		}
-		if err := d.sendAuxAction(ctx, request.Channel, "start", spec.code); err != nil {
-			return err
-		}
-		timer := time.NewTimer(duration)
-		defer timer.Stop()
-		select {
-		case <-ctx.Done():
-			stopCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-			defer cancel()
-			_ = d.sendAuxAction(stopCtx, request.Channel, "stop", spec.code)
-			return ctx.Err()
-		case <-timer.C:
-		}
-		return d.sendAuxAction(ctx, request.Channel, "stop", spec.code)
 	default:
-		return fmt.Errorf("unsupported aux action %q", request.Action)
+		return fmt.Errorf("unsupported aux control type %q", spec.controlType)
 	}
 }
 
-func (d *Driver) auxCapabilities(ctx context.Context, channel int, ptz dahua.NVRPTZCapabilities) (dahua.NVRAuxCapabilities, error) {
+func (d *Driver) auxCapabilities(_ context.Context, channel int, ptz dahua.NVRPTZCapabilities) (dahua.NVRAuxCapabilities, error) {
+	cfg := d.currentConfig()
+
+	var outputs []string
+	var features []string
 	if ptz.Aux {
-		outputs := normalizeAuxOutputs(ptz.AuxFunctions)
+		outputs = normalizeAuxOutputs(ptz.AuxFunctions)
 		if !hasAuxOutput(outputs, "aux") {
 			outputs = append(outputs, "aux")
 		}
-		return dahua.NVRAuxCapabilities{
-			Supported: true,
-			Outputs:   uniqueSortedStrings(outputs),
-			Features:  auxFeatureAliases(outputs),
-		}, nil
+		outputs = uniqueSortedStrings(outputs)
+		features = auxFeatureAliases(outputs)
 	}
 
-	outputs := make([]string, 0, 3)
-	for _, candidate := range []string{"aux", "light", "wiper"} {
-		spec := auxOutputSpecs[candidate]
-		if d.sendAuxAction(ctx, channel, "stop", spec.code) == nil {
-			outputs = append(outputs, spec.canonical)
+	if override, ok := cfg.AuxControlOverride(channel); ok {
+		outputs = uniqueSortedStrings(append(outputs, override.Outputs...))
+		features = uniqueSortedStrings(append(features, override.Features...))
+		if len(outputs) > 0 {
+			features = uniqueSortedStrings(append(features, auxFeatureAliases(outputs)...))
 		}
 	}
-	if len(outputs) == 0 {
+
+	if len(outputs) == 0 && len(features) == 0 {
+		capabilities := d.augmentAuxCapabilitiesWithImou(channel, dahua.NVRAuxCapabilities{})
+		if capabilities.Supported {
+			return capabilities, nil
+		}
 		return dahua.NVRAuxCapabilities{}, fmt.Errorf("%w: aux outputs are not supported on channel %d", dahua.ErrUnsupportedOperation, channel)
 	}
 
-	return dahua.NVRAuxCapabilities{
+	capabilities := dahua.NVRAuxCapabilities{
 		Supported: true,
-		Outputs:   uniqueSortedStrings(outputs),
-		Features:  auxFeatureAliases(outputs),
-	}, nil
+		Outputs:   outputs,
+		Features:  features,
+	}
+	return d.augmentAuxCapabilitiesWithImou(channel, capabilities), nil
 }
 
 func (d *Driver) sendPTZAction(ctx context.Context, channel int, action string, code string, speed int) error {
@@ -381,6 +422,16 @@ func (d *Driver) sendAuxAction(ctx context.Context, channel int, action string, 
 		return fmt.Errorf("aux action %s %s returned %q", action, code, strings.TrimSpace(body))
 	}
 	return nil
+}
+
+func isUnsupportedPTZSurfaceError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, dahua.ErrUnsupportedOperation) {
+		return true
+	}
+	return strings.Contains(err.Error(), "Bad Request!") || strings.Contains(err.Error(), "Not Implemented!")
 }
 
 func parsePTZCapabilities(values map[string]string) dahua.NVRPTZCapabilities {
@@ -456,6 +507,8 @@ func attachChannelControlState(state *dahua.DeviceState, capabilities dahua.NVRC
 	state.Info["control_audio_mute_supported"] = capabilities.Audio.Mute
 	state.Info["control_audio_volume_supported"] = capabilities.Audio.Volume
 	state.Info["control_audio_volume_permission_denied"] = capabilities.Audio.VolumePermissionDenied
+	state.Info["control_audio_muted"] = capabilities.Audio.Muted
+	state.Info["control_audio_stream_enabled"] = capabilities.Audio.StreamEnabled
 	state.Info["control_audio_playback_supported"] = capabilities.Audio.Playback.Supported
 	state.Info["control_audio_playback_siren"] = capabilities.Audio.Playback.Siren
 	state.Info["control_audio_playback_quick_reply"] = capabilities.Audio.Playback.QuickReply
@@ -565,6 +618,205 @@ func uniqueSortedStrings(values []string) []string {
 	}
 	sort.Strings(unique)
 	return unique
+}
+
+func (d *Driver) setChannelLightingMode(ctx context.Context, channel int, action dahua.NVRAuxAction) error {
+	if err := d.setChannelLightingModeViaConfig(ctx, channel, action); err == nil {
+		return nil
+	} else if !errors.Is(err, dahua.ErrUnsupportedOperation) {
+		d.logger.Debug().Err(err).Int("channel", channel).Msg("lighting config RPC update failed, falling back")
+	}
+
+	objectID, err := d.videoInputObjectID(ctx, channel-1)
+	if err != nil {
+		return err
+	}
+
+	switch action {
+	case dahua.NVRAuxActionStart:
+		return d.setVideoInputLightParam(ctx, objectID, channel-1, map[string]any{
+			"Channel":        channel - 1,
+			"LightType":      "WhiteLight",
+			"Mode":           "Manual",
+			"LightingScheme": "WhiteMode",
+		})
+	case dahua.NVRAuxActionStop:
+		return d.setVideoInputLightParam(ctx, objectID, channel-1, map[string]any{
+			"Channel":        channel - 1,
+			"LightType":      "AIMixLight",
+			"Mode":           "Auto",
+			"LightingScheme": "AIMode",
+		})
+	default:
+		return fmt.Errorf("%w: lighting mode only supports start and stop actions", dahua.ErrUnsupportedOperation)
+	}
+}
+
+func (d *Driver) setChannelLightingModeViaConfig(ctx context.Context, channel int, action dahua.NVRAuxAction) error {
+	if d.rpc == nil {
+		return fmt.Errorf("%w: rpc client is unavailable", dahua.ErrUnsupportedOperation)
+	}
+
+	zeroBasedChannel := channel - 1
+	lightingTable, err := d.getLightingConfigTable(ctx, "Lighting_V2", zeroBasedChannel)
+	if err != nil {
+		return err
+	}
+	schemeTable, err := d.getLightingConfigTable(ctx, "LightingScheme", zeroBasedChannel)
+	if err != nil {
+		return err
+	}
+
+	targetMode := ""
+	switch action {
+	case dahua.NVRAuxActionStart:
+		targetMode = "WhiteMode"
+	case dahua.NVRAuxActionStop:
+		targetMode = "AIMode"
+	default:
+		return fmt.Errorf("%w: lighting mode only supports start and stop actions", dahua.ErrUnsupportedOperation)
+	}
+
+	prepareLightingV2Table(lightingTable)
+	applyLightingSchemeMode(schemeTable, targetMode)
+
+	calls := []map[string]any{
+		{
+			"method": "configManager.setConfig",
+			"params": map[string]any{
+				"name":    "Lighting_V2",
+				"table":   lightingTable,
+				"options": []any{},
+				"channel": zeroBasedChannel,
+			},
+		},
+		{
+			"method": "configManager.setConfig",
+			"params": map[string]any{
+				"name":    "LightingScheme",
+				"table":   schemeTable,
+				"options": []any{},
+				"channel": zeroBasedChannel,
+			},
+		},
+	}
+
+	if err := d.rpc.Call(ctx, "system.multicall", calls, nil); err != nil {
+		if isUnknownRPCError(err) {
+			return fmt.Errorf("%w: lighting config RPC surface is not exposed on channel %d", dahua.ErrUnsupportedOperation, channel)
+		}
+		return fmt.Errorf("apply lighting config for channel %d: %w", channel, err)
+	}
+	return nil
+}
+
+func (d *Driver) getLightingConfigTable(ctx context.Context, name string, zeroBasedChannel int) (any, error) {
+	var response struct {
+		Table any `json:"table"`
+	}
+	if err := d.rpc.Call(ctx, "configManager.getConfig", map[string]any{
+		"name":    name,
+		"channel": zeroBasedChannel,
+	}, &response); err != nil {
+		if isUnknownRPCError(err) {
+			return nil, fmt.Errorf("%w: %s config is not exposed on channel %d", dahua.ErrUnsupportedOperation, name, zeroBasedChannel+1)
+		}
+		return nil, fmt.Errorf("get %s config for channel %d: %w", name, zeroBasedChannel+1, err)
+	}
+	if response.Table == nil {
+		return nil, fmt.Errorf("%w: %s config did not return a table for channel %d", dahua.ErrUnsupportedOperation, name, zeroBasedChannel+1)
+	}
+	return response.Table, nil
+}
+
+func prepareLightingV2Table(table any) {
+	rows, ok := table.([]any)
+	if !ok {
+		return
+	}
+	for _, rowValue := range rows {
+		profiles, ok := rowValue.([]any)
+		if !ok {
+			continue
+		}
+		for _, profileValue := range profiles {
+			profile, ok := profileValue.(map[string]any)
+			if !ok {
+				continue
+			}
+			lightType := strings.TrimSpace(fmt.Sprint(profile["LightType"]))
+			switch lightType {
+			case "WhiteLight", "AIMixLight":
+				profile["Mode"] = "Auto"
+				if _, ok := profile["PercentOfMaxBrightness"]; ok {
+					profile["PercentOfMaxBrightness"] = 100
+				}
+			}
+		}
+	}
+}
+
+func applyLightingSchemeMode(table any, targetMode string) {
+	items, ok := table.([]any)
+	if !ok {
+		return
+	}
+	for index, itemValue := range items {
+		item, ok := itemValue.(map[string]any)
+		if !ok {
+			continue
+		}
+		mode := "AIMode"
+		if index == 0 {
+			mode = targetMode
+		}
+		if targetMode == "AIMode" {
+			mode = "AIMode"
+		}
+		item["LightingMode"] = mode
+	}
+}
+
+func (d *Driver) videoInputObjectID(ctx context.Context, channel int) (int64, error) {
+	if d.rpc == nil {
+		return 0, fmt.Errorf("%w: rpc client is unavailable", dahua.ErrUnsupportedOperation)
+	}
+	if channel < 0 {
+		return 0, fmt.Errorf("channel must be >= 0")
+	}
+
+	var objectID int64
+	if err := d.rpc.Call(ctx, "devVideoInput.factory.instance", map[string]any{"channel": channel}, &objectID); err != nil {
+		if isUnknownRPCError(err) {
+			return 0, fmt.Errorf("%w: devVideoInput RPC surface is not exposed on channel %d", dahua.ErrUnsupportedOperation, channel+1)
+		}
+		return 0, fmt.Errorf("create devVideoInput instance for channel %d: %w", channel+1, err)
+	}
+	if objectID == 0 {
+		return 0, fmt.Errorf("%w: devVideoInput RPC instance did not return an object id for channel %d", dahua.ErrUnsupportedOperation, channel+1)
+	}
+	return objectID, nil
+}
+
+func (d *Driver) setVideoInputLightParam(ctx context.Context, objectID int64, zeroBasedChannel int, params map[string]any) error {
+	if d.rpc == nil {
+		return fmt.Errorf("%w: rpc client is unavailable", dahua.ErrUnsupportedOperation)
+	}
+
+	if params == nil {
+		params = make(map[string]any)
+	}
+	if _, ok := params["Channel"]; !ok {
+		params["Channel"] = zeroBasedChannel
+	}
+
+	if err := d.rpc.CallObject(ctx, "devVideoInput.setLightParam", params, objectID, nil); err != nil {
+		if isUnknownRPCError(err) {
+			return fmt.Errorf("%w: lighting control is not exposed on channel %d", dahua.ErrUnsupportedOperation, zeroBasedChannel+1)
+		}
+		return fmt.Errorf("set light param for channel %d: %w", zeroBasedChannel+1, err)
+	}
+	return nil
 }
 
 func normalizeSpeed(speed int, minSpeed int, maxSpeed int) (int, error) {

@@ -2,9 +2,11 @@ package nvr
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net"
 	"net/url"
+	"path"
 	"regexp"
 	"sort"
 	"strconv"
@@ -17,11 +19,15 @@ import (
 	"RCooLeR/DahuaBridge/internal/dahua/cgi"
 	dahuarpc "RCooLeR/DahuaBridge/internal/dahua/rpc"
 	dahuartsp "RCooLeR/DahuaBridge/internal/dahua/rtsp"
+	"RCooLeR/DahuaBridge/internal/imou"
 	"RCooLeR/DahuaBridge/internal/onvif"
 	"github.com/rs/zerolog"
 )
 
-const recordingTimeLayout = "2006-01-02 15:04:05"
+const (
+	recordingTimeLayout    = "2006-01-02 15:04:05"
+	recordingRPCTimeLayout = "2006-1-2 15:04:05"
+)
 
 var (
 	recordingItemPattern = regexp.MustCompile(`^items\[(\d+)\]\.(Channel|Cluster|CutLength|Disk|EndTime|FilePath|Length|Partition|StartTime|Type|VideoStream)$`)
@@ -29,13 +35,15 @@ var (
 )
 
 type Driver struct {
-	cfgMu  sync.RWMutex
-	cfg    config.DeviceConfig
-	client *cgi.Client
-	rpc    *dahuarpc.Client
-	rtsp   *dahuartsp.Checker
-	onvif  *onvif.Client
-	logger zerolog.Logger
+	cfgMu   sync.RWMutex
+	cfg     config.DeviceConfig
+	client  *cgi.Client
+	rpc     *dahuarpc.Client
+	rtsp    *dahuartsp.Checker
+	onvif   *onvif.Client
+	imou    imou.Service
+	imouCfg config.ImouConfig
+	logger  zerolog.Logger
 
 	mu               sync.RWMutex
 	cachedInventory  *inventorySnapshot
@@ -51,6 +59,9 @@ type channelInventory struct {
 	Name           string
 	MainResolution string
 	MainCodec      string
+	AudioCodec     string
+	AudioEnabled   bool
+	AudioKnown     bool
 	SubResolution  string
 	SubCodec       string
 }
@@ -78,6 +89,8 @@ var (
 	channelNamePattern            = regexp.MustCompile(`^table\.ChannelTitle\[(\d+)\]\.Name$`)
 	encodeResolutionPattern       = regexp.MustCompile(`^table\.Encode\[(\d+)\]\.(MainFormat|ExtraFormat)\[0\]\.Video\.resolution$`)
 	encodeCompressionPattern      = regexp.MustCompile(`^table\.Encode\[(\d+)\]\.(MainFormat|ExtraFormat)\[0\]\.Video\.Compression$`)
+	encodeAudioCompressionPattern = regexp.MustCompile(`^table\.Encode\[(\d+)\]\.MainFormat\[\d+\]\.Audio\.Compression$`)
+	encodeAudioEnablePattern      = regexp.MustCompile(`^table\.Encode\[(\d+)\]\.MainFormat\[\d+\]\.AudioEnable$`)
 	storageNamePattern            = regexp.MustCompile(`^list\.info\[(\d+)\]\.Name$`)
 	storageStatePattern           = regexp.MustCompile(`^list\.info\[(\d+)\]\.State$`)
 	storageDetailTotal            = regexp.MustCompile(`^list\.info\[(\d+)\]\.Detail\[(\d+)\]\.TotalBytes$`)
@@ -86,14 +99,16 @@ var (
 	placeholderChannelNamePattern = regexp.MustCompile(`(?i)^\s*(channel|канал)\s*0*(\d+)\s*$`)
 )
 
-func New(cfg config.DeviceConfig, logger zerolog.Logger, client *cgi.Client) *Driver {
+func New(cfg config.DeviceConfig, imouCfg config.ImouConfig, imouClient imou.Service, logger zerolog.Logger, client *cgi.Client) *Driver {
 	return &Driver{
-		cfg:    cfg,
-		client: client,
-		rpc:    dahuarpc.New(cfg),
-		rtsp:   dahuartsp.NewChecker(cfg),
-		onvif:  onvif.New(cfg),
-		logger: logger.With().Str("device_id", cfg.ID).Str("device_type", string(dahua.DeviceKindNVR)).Logger(),
+		cfg:     cfg,
+		client:  client,
+		rpc:     dahuarpc.New(cfg),
+		rtsp:    dahuartsp.NewChecker(cfg),
+		onvif:   onvif.New(cfg),
+		imou:    imouClient,
+		imouCfg: imouCfg,
+		logger:  logger.With().Str("device_id", cfg.ID).Str("device_type", string(dahua.DeviceKindNVR)).Logger(),
 	}
 }
 
@@ -226,6 +241,7 @@ func (d *Driver) Probe(ctx context.Context) (*dahua.ProbeResult, error) {
 				"channel_index":    strconv.Itoa(channel.Index + 1),
 				"main_resolution":  channel.MainResolution,
 				"main_codec":       channel.MainCodec,
+				"audio_codec":      channel.AudioCodec,
 				"sub_resolution":   channel.SubResolution,
 				"sub_codec":        channel.SubCodec,
 				"snapshot_path":    fmt.Sprintf("/api/v1/nvr/%s/channels/%d/snapshot", cfg.ID, channel.Index+1),
@@ -244,6 +260,7 @@ func (d *Driver) Probe(ctx context.Context) (*dahua.ProbeResult, error) {
 				"name":             channel.Name,
 				"main_resolution":  channel.MainResolution,
 				"main_codec":       channel.MainCodec,
+				"audio_codec":      channel.AudioCodec,
 				"sub_resolution":   channel.SubResolution,
 				"sub_codec":        channel.SubCodec,
 				"rtsp_main_url":    buildRTSPURL(cfg.BaseURL, channel.Index+1, 0),
@@ -252,18 +269,25 @@ func (d *Driver) Probe(ctx context.Context) (*dahua.ProbeResult, error) {
 				"stream_available": d.streamAvailable(ctx, cfg, channel.Index+1),
 			},
 		}
+		if channel.AudioKnown {
+			states[childID].Info["control_audio_stream_enabled"] = channel.AudioEnabled
+		}
 		state := states[childID]
 		recordingCapabilities := dahua.NVRRecordingCapabilities{}
 		if recordModeErr == nil {
 			recordingCapabilities = recordingCapabilitiesForChannel(channel.Index+1, recordModes)
+		}
+		recordingCapabilities = d.applyRecordingOverride(channel.Index+1, recordingCapabilities)
+		if recordingCapabilities.Supported || recordingCapabilities.Active || recordingCapabilities.Mode != "" {
 			attachChannelRecordingState(&state, recordingCapabilities)
 		}
 		ptzCapabilities, ptzErr := d.ptzCapabilities(ctx, channel.Index+1)
-		if ptzErr != nil {
+		ptzCapabilities = d.applyPTZOverride(channel.Index+1, ptzCapabilities)
+		if ptzErr != nil && !isUnsupportedPTZSurfaceError(ptzErr) {
 			d.logger.Debug().Err(ptzErr).Int("channel", channel.Index+1).Msg("channel ptz capability probe failed")
 		}
 		auxCapabilities, auxErr := d.auxCapabilities(ctx, channel.Index+1, ptzCapabilities)
-		if auxErr != nil {
+		if auxErr != nil && !isUnsupportedPTZSurfaceError(auxErr) {
 			d.logger.Debug().Err(auxErr).Int("channel", channel.Index+1).Msg("channel aux capability probe failed")
 		}
 		audioCapabilities, audioNotes := d.audioCapabilities(ctx, channel.Index+1)
@@ -284,6 +308,7 @@ func (d *Driver) Probe(ctx context.Context) (*dahua.ProbeResult, error) {
 		}
 		notes = append(notes, audioNotes...)
 		attachValidationNotes(&state, notes)
+		d.attachImouChannelState(ctx, channel.Index+1, &state)
 		states[childID] = state
 
 		if onvifDiscovery != nil {
@@ -418,6 +443,18 @@ func (d *Driver) FindRecordings(ctx context.Context, query dahua.NVRRecordingQue
 		query.Limit = 25
 	}
 
+	if d.rpc != nil {
+		result, err := d.findRecordingsViaRPC(ctx, query)
+		if err == nil {
+			return result, nil
+		}
+		d.logger.Debug().Err(err).Int("channel", query.Channel).Msg("rpc recording search failed, falling back to cgi")
+	}
+
+	return d.findRecordingsViaCGI(ctx, query)
+}
+
+func (d *Driver) findRecordingsViaCGI(ctx context.Context, query dahua.NVRRecordingQuery) (dahua.NVRRecordingSearchResult, error) {
 	handleKV, err := d.client.GetKeyValues(ctx, "/cgi-bin/mediaFileFind.cgi", url.Values{
 		"action": []string{"factory.create"},
 	})
@@ -463,10 +500,88 @@ func (d *Driver) FindRecordings(ctx context.Context, query dahua.NVRRecordingQue
 	result := parseRecordingSearchResult(itemsKV)
 	result.DeviceID = d.ID()
 	result.Channel = query.Channel
-	result.StartTime = query.StartTime.Format(recordingTimeLayout)
-	result.EndTime = query.EndTime.Format(recordingTimeLayout)
+	result.StartTime = query.StartTime.In(time.Local).Format(recordingTimeLayout)
+	result.EndTime = query.EndTime.In(time.Local).Format(recordingTimeLayout)
 	result.Limit = query.Limit
 	return result, nil
+}
+
+func (d *Driver) findRecordingsViaRPC(ctx context.Context, query dahua.NVRRecordingQuery) (dahua.NVRRecordingSearchResult, error) {
+	var handle int64
+	if err := d.rpc.Call(ctx, "mediaFileFind.factory.create", nil, &handle); err != nil {
+		return dahua.NVRRecordingSearchResult{}, fmt.Errorf("create recording search handle: %w", err)
+	}
+	if handle == 0 {
+		return dahua.NVRRecordingSearchResult{}, fmt.Errorf("recording search handle is empty")
+	}
+
+	defer d.closeRecordingSearchHandle(handle)
+
+	findParams := map[string]any{
+		"condition": map[string]any{
+			"StartTime":   formatRecordingRPCTime(query.StartTime),
+			"EndTime":     formatRecordingRPCTime(query.EndTime),
+			"Events":      []string{"*"},
+			"Flags":       nil,
+			"Types":       []string{"dav"},
+			"Channel":     query.Channel - 1,
+			"VideoStream": "Main",
+		},
+	}
+	if err := d.rpc.CallObject(ctx, "mediaFileFind.findFile", findParams, handle, nil); err != nil {
+		return dahua.NVRRecordingSearchResult{}, fmt.Errorf("start recording search: %w", err)
+	}
+
+	var rawResult map[string]any
+	if err := d.rpc.CallObject(ctx, "mediaFileFind.findNextFile", map[string]any{
+		"count": query.Limit,
+	}, handle, &rawResult); err != nil {
+		return dahua.NVRRecordingSearchResult{}, fmt.Errorf("fetch recording search results: %w", err)
+	}
+
+	result := parseRPCRecordingSearchResult(rawResult)
+	result.DeviceID = d.ID()
+	result.Channel = query.Channel
+	result.StartTime = query.StartTime.In(time.Local).Format(recordingTimeLayout)
+	result.EndTime = query.EndTime.In(time.Local).Format(recordingTimeLayout)
+	result.Limit = query.Limit
+	return result, nil
+}
+
+func (d *Driver) closeRecordingSearchHandle(handle int64) {
+	if d.rpc == nil || handle == 0 {
+		return
+	}
+
+	closeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_ = d.rpc.CallObject(closeCtx, "mediaFileFind.close", nil, handle, nil)
+	_ = d.rpc.CallObject(closeCtx, "mediaFileFind.destroy", nil, handle, nil)
+}
+
+func (d *Driver) DownloadRecording(ctx context.Context, filePath string) (dahua.NVRRecordingDownload, error) {
+	filePath = strings.TrimSpace(filePath)
+	if filePath == "" {
+		return dahua.NVRRecordingDownload{}, fmt.Errorf("file path is required")
+	}
+
+	resp, err := d.client.OpenStream(ctx, "/RPC_Loadfile"+escapeRecordingFilePath(filePath), nil)
+	if err != nil {
+		return dahua.NVRRecordingDownload{}, fmt.Errorf("download recording %q: %w", filePath, err)
+	}
+
+	contentType := strings.TrimSpace(resp.Header.Get("Content-Type"))
+	if contentType == "" {
+		contentType = "application/octet-stream"
+	}
+	contentLength, _ := strconv.ParseInt(strings.TrimSpace(resp.Header.Get("Content-Length")), 10, 64)
+
+	return dahua.NVRRecordingDownload{
+		Body:          resp.Body,
+		ContentType:   contentType,
+		FileName:      path.Base(filePath),
+		ContentLength: contentLength,
+	}, nil
 }
 
 func (d *Driver) UpdateConfig(cfg config.DeviceConfig) error {
@@ -571,6 +686,7 @@ func firstNonEmpty(values ...string) string {
 var _ dahua.Driver = (*Driver)(nil)
 var _ dahua.SnapshotProvider = (*Driver)(nil)
 var _ dahua.NVRRecordingSearcher = (*Driver)(nil)
+var _ dahua.NVRRecordingDownloader = (*Driver)(nil)
 var _ dahua.NVRInventoryRefresher = (*Driver)(nil)
 var _ dahua.ConfigurableDriver = (*Driver)(nil)
 
@@ -628,6 +744,35 @@ func parseChannelStreams(values map[string]string) map[int]channelInventory {
 				item.MainCodec = value
 			case "ExtraFormat":
 				item.SubCodec = value
+			}
+			result[index] = item
+			continue
+		}
+
+		if matches := encodeAudioCompressionPattern.FindStringSubmatch(key); len(matches) == 2 {
+			index, err := strconv.Atoi(matches[1])
+			if err != nil {
+				continue
+			}
+			item := result[index]
+			item.Index = index
+			if strings.TrimSpace(item.AudioCodec) == "" {
+				item.AudioCodec = value
+			}
+			result[index] = item
+			continue
+		}
+
+		if matches := encodeAudioEnablePattern.FindStringSubmatch(key); len(matches) == 2 {
+			index, err := strconv.Atoi(matches[1])
+			if err != nil {
+				continue
+			}
+			item := result[index]
+			item.Index = index
+			if !item.AudioKnown {
+				item.AudioEnabled = parseBool(value)
+				item.AudioKnown = true
 			}
 			result[index] = item
 		}
@@ -882,6 +1027,61 @@ func parseRecordingSearchResult(values map[string]string) dahua.NVRRecordingSear
 	return result
 }
 
+func parseRPCRecordingSearchResult(values map[string]any) dahua.NVRRecordingSearchResult {
+	result := dahua.NVRRecordingSearchResult{}
+	if count, ok := numberFromAny(values["found"]); ok && count >= 0 {
+		result.ReturnedCount = count
+	}
+
+	rawItems, _ := values["items"].([]any)
+	result.Items = make([]dahua.NVRRecording, 0, len(rawItems))
+	for _, rawItem := range rawItems {
+		itemMap, ok := rawItem.(map[string]any)
+		if !ok {
+			continue
+		}
+		item := dahua.NVRRecording{
+			StartTime:   stringFromAny(itemMap["StartTime"]),
+			EndTime:     stringFromAny(itemMap["EndTime"]),
+			FilePath:    stringFromAny(itemMap["FilePath"]),
+			Type:        stringFromAny(itemMap["Type"]),
+			VideoStream: stringFromAny(itemMap["VideoStream"]),
+		}
+		if channel, ok := numberFromAny(itemMap["Channel"]); ok {
+			item.Channel = channel + 1
+		}
+		if disk, ok := numberFromAny(itemMap["Disk"]); ok {
+			item.Disk = disk
+		}
+		if partition, ok := numberFromAny(itemMap["Partition"]); ok {
+			item.Partition = partition
+		}
+		if cluster, ok := numberFromAny(itemMap["Cluster"]); ok {
+			item.Cluster = cluster
+		}
+		if lengthBytes, ok := int64FromAny(itemMap["Length"]); ok {
+			item.LengthBytes = lengthBytes
+		}
+		if cutLengthBytes, ok := int64FromAny(itemMap["CutLength"]); ok {
+			item.CutLengthBytes = cutLengthBytes
+		}
+		if flags, ok := itemMap["Flags"].([]any); ok {
+			item.Flags = make([]string, 0, len(flags))
+			for _, rawFlag := range flags {
+				flag := strings.TrimSpace(stringFromAny(rawFlag))
+				if flag != "" {
+					item.Flags = append(item.Flags, flag)
+				}
+			}
+		}
+		result.Items = append(result.Items, item)
+	}
+	if result.ReturnedCount == 0 {
+		result.ReturnedCount = len(result.Items)
+	}
+	return result
+}
+
 func channelDeviceID(rootID string, index int) string {
 	return fmt.Sprintf("%s_channel_%02d", rootID, index+1)
 }
@@ -895,6 +1095,15 @@ func parseInt(value string) (int, bool) {
 	return parsed, err == nil
 }
 
+func parseBool(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "1", "true", "on", "yes":
+		return true
+	default:
+		return false
+	}
+}
+
 func parseInt64(value string) (int64, bool) {
 	parsed, err := strconv.ParseInt(strings.TrimSpace(value), 10, 64)
 	if err == nil {
@@ -905,6 +1114,83 @@ func parseInt64(value string) (int64, bool) {
 		return 0, false
 	}
 	return int64(floatValue), true
+}
+
+func escapeRecordingFilePath(filePath string) string {
+	if filePath == "" {
+		return ""
+	}
+	segments := strings.Split(filePath, "/")
+	for index, segment := range segments {
+		if index == 0 && segment == "" {
+			continue
+		}
+		segments[index] = url.PathEscape(segment)
+	}
+	escaped := strings.Join(segments, "/")
+	if strings.HasPrefix(filePath, "/") && !strings.HasPrefix(escaped, "/") {
+		return "/" + escaped
+	}
+	return escaped
+}
+
+func formatRecordingRPCTime(value time.Time) string {
+	return value.In(time.Local).Format(recordingRPCTimeLayout)
+}
+
+func stringFromAny(value any) string {
+	switch typed := value.(type) {
+	case string:
+		return strings.TrimSpace(typed)
+	default:
+		return ""
+	}
+}
+
+func numberFromAny(value any) (int, bool) {
+	switch typed := value.(type) {
+	case float64:
+		return int(typed), true
+	case float32:
+		return int(typed), true
+	case int:
+		return typed, true
+	case int64:
+		return int(typed), true
+	case json.Number:
+		parsed, err := typed.Int64()
+		if err != nil {
+			return 0, false
+		}
+		return int(parsed), true
+	case string:
+		return parseInt(typed)
+	default:
+		return 0, false
+	}
+}
+
+func int64FromAny(value any) (int64, bool) {
+	switch typed := value.(type) {
+	case float64:
+		return int64(typed), true
+	case float32:
+		return int64(typed), true
+	case int:
+		return int64(typed), true
+	case int64:
+		return typed, true
+	case json.Number:
+		parsed, err := typed.Int64()
+		if err != nil {
+			return 0, false
+		}
+		return parsed, true
+	case string:
+		return parseInt64(typed)
+	default:
+		return 0, false
+	}
 }
 
 func buildRTSPURL(baseURL string, channel int, subtype int) string {

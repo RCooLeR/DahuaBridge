@@ -1,10 +1,32 @@
-# HA Cards
+# DahuaBridge HA Cards
 
-Reserved for future custom Home Assistant cards.
+This directory contains the optional Lovelace card workspace.
 
-Planned role:
+The cards consume entities and metadata already created by the DahuaBridge Home Assistant integration.
 
-- use the devices and entities created by the bridge-native Home Assistant integration
-- build a better UI for cameras, motion state, call state, and actions
+## Start Here
 
-See [../docs/how-it-works.md](../docs/how-it-works.md) for the intended architecture.
+- [ha-cards/docs/README.md](docs/README.md)
+
+## Most Common Tasks
+
+- install and build: [docs/install.md](docs/install.md)
+- configure cards: [docs/configuration.md](docs/configuration.md)
+- review card features: [docs/features.md](docs/features.md)
+
+## Current Card Entry Points
+
+- `custom:dahuabridge-surveillance-panel`
+- `custom:dahuabridge-surveillance-tile`
+
+Both entry points are bundled into:
+
+```text
+dist/dahuabridge-surveillance-panel.js
+```
+
+## Related Docs
+
+- root docs: [../docs/README.md](../docs/README.md)
+- bridge docs: [../bridge/docs/README.md](../bridge/docs/README.md)
+- integration docs: [../integration/docs/README.md](../integration/docs/README.md)

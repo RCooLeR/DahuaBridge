@@ -55,8 +55,10 @@ func TestBuildCatalogForNVRChannel(t *testing.T) {
 							"control_aux_outputs":                []string{"aux", "light", "wiper"},
 							"control_aux_features":               []string{"siren", "warning_light", "wiper"},
 							"control_audio_supported":            false,
-							"control_audio_mute_supported":       false,
+							"control_audio_mute_supported":       true,
 							"control_audio_volume_supported":     false,
+							"control_audio_muted":                true,
+							"control_audio_stream_enabled":       false,
 							"control_audio_playback_supported":   true,
 							"control_audio_playback_siren":       true,
 							"control_audio_playback_quick_reply": false,
@@ -134,14 +136,17 @@ func TestBuildCatalogForNVRChannel(t *testing.T) {
 	if len(entry.Controls.Aux.Features) != 3 || entry.Controls.Aux.Features[0] != "siren" {
 		t.Fatalf("unexpected aux features %+v", entry.Controls.Aux.Features)
 	}
-	if entry.Controls.Audio.Supported || entry.Controls.Audio.Mute || entry.Controls.Audio.Volume {
+	if entry.Controls.Audio.Supported || !entry.Controls.Audio.Mute || entry.Controls.Audio.Volume {
 		t.Fatalf("unexpected audio summary %+v", entry.Controls.Audio)
+	}
+	if !entry.Controls.Audio.Muted || entry.Controls.Audio.StreamAudioEnabled {
+		t.Fatalf("unexpected audio mute state %+v", entry.Controls.Audio)
 	}
 	if !entry.Controls.Audio.PlaybackSupported || !entry.Controls.Audio.PlaybackSiren || entry.Controls.Audio.PlaybackFileCount != 1 {
 		t.Fatalf("unexpected playback audio summary %+v", entry.Controls.Audio)
 	}
-	if entry.Controls.Recording.URL != "http://bridge.local:8080/api/v1/nvr/west20_nvr/channels/1/recording" {
-		t.Fatalf("unexpected recording url %q", entry.Controls.Recording.URL)
+	if entry.Controls.Recording.Supported || entry.Controls.Recording.URL != "" {
+		t.Fatalf("expected manual device recording control to be hidden, got %+v", entry.Controls.Recording)
 	}
 	if !entry.Controls.Recording.Active || entry.Controls.Recording.Mode != "manual" {
 		t.Fatalf("unexpected recording summary %+v", entry.Controls.Recording)
@@ -149,12 +154,16 @@ func TestBuildCatalogForNVRChannel(t *testing.T) {
 	if len(entry.Controls.ValidationNotes) != 1 || entry.Controls.ValidationNotes[0] != "ptz_capability_query_failed_aux_fallback_used" {
 		t.Fatalf("unexpected control validation notes %+v", entry.Controls.ValidationNotes)
 	}
-	if len(entry.Features) != 7 {
+	if len(entry.Features) != 8 {
 		t.Fatalf("expected 7 normalized features, got %+v", entry.Features)
 	}
 	archiveSearch := findFeatureByKey(entry.Features, "archive_search")
 	if archiveSearch == nil || archiveSearch.Kind != "query" || archiveSearch.URL != "http://bridge.local:8080/api/v1/nvr/west20_nvr/recordings" {
 		t.Fatalf("unexpected archive search feature %+v", archiveSearch)
+	}
+	light := findFeatureByKey(entry.Features, "light")
+	if light == nil || light.ParameterKey != "output" || light.ParameterValue != "light" || light.Label != "White Light" {
+		t.Fatalf("unexpected light feature %+v", light)
 	}
 	ptz := findFeatureByKey(entry.Features, "ptz")
 	if ptz == nil || ptz.Kind != "command_set" || len(ptz.Commands) != 4 || len(ptz.Actions) != 3 {
@@ -164,9 +173,13 @@ func TestBuildCatalogForNVRChannel(t *testing.T) {
 	if siren == nil || siren.ParameterKey != "output" || siren.ParameterValue != "siren" || siren.URL != "http://bridge.local:8080/api/v1/nvr/west20_nvr/channels/1/aux" {
 		t.Fatalf("unexpected siren feature %+v", siren)
 	}
+	mute := findFeatureByKey(entry.Features, "mute")
+	if mute == nil || mute.Kind != "toggle" || mute.URL != "http://bridge.local:8080/api/v1/nvr/west20_nvr/channels/1/audio/mute" || mute.Active == nil || !*mute.Active {
+		t.Fatalf("unexpected mute feature %+v", mute)
+	}
 	recording := findFeatureByKey(entry.Features, "recording")
-	if recording == nil || recording.Kind != "multi_action" || recording.Active == nil || !*recording.Active || recording.CurrentText != "manual" {
-		t.Fatalf("unexpected recording feature %+v", recording)
+	if recording != nil {
+		t.Fatalf("expected no manual recording feature, got %+v", recording)
 	}
 }
 

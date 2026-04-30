@@ -56,6 +56,9 @@ func TestMediaDefaults(t *testing.T) {
 	if cfg.Media.InputPreset != "low_latency" {
 		t.Fatalf("unexpected default media input_preset %q", cfg.Media.InputPreset)
 	}
+	if cfg.Media.ClipPath != "/data/clips" {
+		t.Fatalf("unexpected default media clip_path %q", cfg.Media.ClipPath)
+	}
 	if cfg.Media.StableFrameRate != 5 {
 		t.Fatalf("unexpected default media stable_frame_rate %d", cfg.Media.StableFrameRate)
 	}
@@ -84,6 +87,9 @@ func TestMediaDefaults(t *testing.T) {
 
 func TestHTTPRateLimitDefaults(t *testing.T) {
 	cfg := defaultConfig()
+	if cfg.HTTP.WriteTimeout != 60*time.Second {
+		t.Fatalf("unexpected http write timeout default %s", cfg.HTTP.WriteTimeout)
+	}
 	if cfg.HTTP.AdminRateLimitPerMinute != 30 || cfg.HTTP.AdminRateLimitBurst != 10 {
 		t.Fatalf("unexpected admin rate limit defaults: %+v", cfg.HTTP)
 	}
@@ -330,6 +336,160 @@ func TestNormalizeDeviceChannelAllowlist(t *testing.T) {
 		if cfg.ChannelAllowlist[i] != value {
 			t.Fatalf("unexpected normalized allowlist %+v", cfg.ChannelAllowlist)
 		}
+	}
+}
+
+func TestNormalizeImouConfigFromEnvAndOverrides(t *testing.T) {
+	t.Setenv("DAHUABRIDGE_IMOU_APP_ID", " env-app ")
+	t.Setenv("DAHUABRIDGE_IMOU_APP_SECRET", " env-secret ")
+	t.Setenv("DAHUABRIDGE_IMOU_DATA_CENTER", " FK ")
+
+	cfg := defaultConfig()
+	cfg.Devices.NVR = []DeviceConfig{{
+		ID:       "nvr",
+		BaseURL:  "http://127.0.0.1",
+		Username: "admin",
+		Password: "secret",
+		Enabled:  boolPtr(true),
+		ChannelImouOverrides: []ChannelImouOverride{
+			{Channel: 6, DeviceID: " serial ", ChannelID: " 1 ", Features: []string{" warning_light ", "events", "siren", "bad"}},
+			{Channel: 5, DeviceID: " serial ", ChannelID: " 0 ", Features: []string{"light"}},
+		},
+	}}
+
+	if err := cfg.normalize(); err != nil {
+		t.Fatalf("normalize returned error: %v", err)
+	}
+
+	if !cfg.Imou.Enabled {
+		t.Fatal("expected imou to auto-enable when overrides and env credentials are present")
+	}
+	if cfg.Imou.AppID != "env-app" || cfg.Imou.AppSecret != "env-secret" || cfg.Imou.DataCenter != "fk" {
+		t.Fatalf("unexpected normalized imou config %+v", cfg.Imou)
+	}
+	if len(cfg.Devices.NVR[0].ChannelImouOverrides) != 2 {
+		t.Fatalf("unexpected imou overrides %+v", cfg.Devices.NVR[0].ChannelImouOverrides)
+	}
+	first := cfg.Devices.NVR[0].ChannelImouOverrides[0]
+	if first.Channel != 5 || first.DeviceID != "serial" || first.ChannelID != "0" {
+		t.Fatalf("unexpected first imou override %+v", first)
+	}
+	second := cfg.Devices.NVR[0].ChannelImouOverrides[1]
+	if len(second.Features) != 3 || second.Features[0] != "events" || second.Features[1] != "siren" || second.Features[2] != "warning_light" {
+		t.Fatalf("unexpected normalized second features %+v", second.Features)
+	}
+}
+
+func TestValidateRequiresImouCredentialsWhenOverrideConfigured(t *testing.T) {
+	cfg := defaultConfig()
+	cfg.MQTT.Enabled = false
+	cfg.Imou.Enabled = true
+	cfg.Devices.NVR = []DeviceConfig{{
+		ID:       "nvr",
+		BaseURL:  "http://127.0.0.1",
+		Username: "admin",
+		Password: "secret",
+		Enabled:  boolPtr(true),
+		ChannelImouOverrides: []ChannelImouOverride{
+			{Channel: 5, DeviceID: "serial", ChannelID: "0", Features: []string{"events"}},
+		},
+	}}
+
+	if err := cfg.normalize(); err != nil {
+		t.Fatalf("normalize returned error: %v", err)
+	}
+	err := cfg.validate()
+	if err == nil || !strings.Contains(err.Error(), "imou.app_id") {
+		t.Fatalf("expected imou.app_id validation error, got %v", err)
+	}
+}
+
+func TestValidateRejectsUnsupportedImouDataCenter(t *testing.T) {
+	cfg := defaultConfig()
+	cfg.MQTT.Enabled = false
+	cfg.Imou.Enabled = true
+	cfg.Imou.AppID = "app"
+	cfg.Imou.AppSecret = "secret"
+	cfg.Imou.DataCenter = "broken"
+	cfg.Devices.NVR = []DeviceConfig{{
+		ID:       "nvr",
+		BaseURL:  "http://127.0.0.1",
+		Username: "admin",
+		Password: "secret",
+		Enabled:  boolPtr(true),
+	}}
+
+	err := cfg.validate()
+	if err == nil || !strings.Contains(err.Error(), "imou.data_center") {
+		t.Fatalf("expected imou.data_center validation error, got %v", err)
+	}
+}
+
+func TestNormalizeChannelPTZAndRecordingOverrides(t *testing.T) {
+	cfg := DeviceConfig{
+		ID:      "nvr",
+		BaseURL: "http://127.0.0.1",
+		ChannelPTZControlOverrides: []ChannelPTZControlOverride{
+			{Channel: 9, Enabled: boolPtr(false)},
+			{Channel: -1, Enabled: boolPtr(false)},
+		},
+		ChannelRecordingOverrides: []ChannelRecordingControlOverride{
+			{Channel: 2, Supported: boolPtr(true), Active: boolPtr(true), Mode: " Auto "},
+			{Channel: 0, Supported: boolPtr(true)},
+		},
+	}
+
+	if err := normalizeDevice(&cfg); err != nil {
+		t.Fatalf("normalizeDevice returned error: %v", err)
+	}
+	if len(cfg.ChannelPTZControlOverrides) != 1 || cfg.ChannelPTZControlOverrides[0].Channel != 9 || cfg.ChannelPTZControlOverrides[0].Enabled == nil || *cfg.ChannelPTZControlOverrides[0].Enabled {
+		t.Fatalf("unexpected ptz overrides %+v", cfg.ChannelPTZControlOverrides)
+	}
+	if len(cfg.ChannelRecordingOverrides) != 1 || cfg.ChannelRecordingOverrides[0].Channel != 2 || cfg.ChannelRecordingOverrides[0].Mode != "auto" {
+		t.Fatalf("unexpected recording overrides %+v", cfg.ChannelRecordingOverrides)
+	}
+}
+
+func TestNormalizeDeviceChannelAuxControlOverrides(t *testing.T) {
+	cfg := DeviceConfig{
+		ID:      "nvr",
+		BaseURL: "http://127.0.0.1",
+		ChannelAuxControlOverrides: []ChannelAuxControlOverride{
+			{Channel: 11, Features: []string{" Siren ", "wiper"}},
+			{Channel: 9, Outputs: []string{" warning_light "}},
+			{Channel: 11, Outputs: []string{"aux", "light"}},
+			{Channel: -1, Outputs: []string{"aux"}},
+		},
+	}
+
+	if err := normalizeDevice(&cfg); err != nil {
+		t.Fatalf("normalizeDevice returned error: %v", err)
+	}
+
+	if len(cfg.ChannelAuxControlOverrides) != 2 {
+		t.Fatalf("unexpected override count %+v", cfg.ChannelAuxControlOverrides)
+	}
+
+	override9, ok := cfg.AuxControlOverride(9)
+	if !ok {
+		t.Fatal("expected channel 9 override")
+	}
+	if len(override9.Outputs) != 1 || override9.Outputs[0] != "light" {
+		t.Fatalf("unexpected channel 9 outputs %+v", override9.Outputs)
+	}
+	if len(override9.Features) != 1 || override9.Features[0] != "warning_light" {
+		t.Fatalf("unexpected channel 9 features %+v", override9.Features)
+	}
+
+	override11, ok := cfg.AuxControlOverride(11)
+	if !ok {
+		t.Fatal("expected channel 11 override")
+	}
+	if len(override11.Outputs) != 3 || override11.Outputs[0] != "aux" || override11.Outputs[1] != "light" || override11.Outputs[2] != "wiper" {
+		t.Fatalf("unexpected channel 11 outputs %+v", override11.Outputs)
+	}
+	if len(override11.Features) != 3 || override11.Features[0] != "siren" || override11.Features[1] != "warning_light" || override11.Features[2] != "wiper" {
+		t.Fatalf("unexpected channel 11 features %+v", override11.Features)
 	}
 }
 

@@ -1,40 +1,22 @@
-# Home Assistant Integration
+# DahuaBridge Home Assistant Integration
 
-This directory contains the bridge-native Home Assistant custom integration.
+This directory contains the Home Assistant custom integration.
 
-Install source:
+It consumes the bridge-native catalog and creates Home Assistant devices and entities.
 
-- `custom_components/dahuabridge`
+## Start Here
 
-This subtree is intended to be copyable on its own. You do not need the Go bridge source code inside `bridge/` to install the Home Assistant component, only a running DahuaBridge instance that exposes:
+- [integration/docs/README.md](docs/README.md)
 
-- `/api/v1/home-assistant/native/catalog`
+## Most Common Tasks
 
-Main docs:
+- install: [docs/install.md](docs/install.md)
+- configuration and options: [docs/configuration.md](docs/configuration.md)
+- features: [docs/features.md](docs/features.md)
+- entities and controls: [docs/entities-and-controls.md](docs/entities-and-controls.md)
+- camera recording behavior: [docs/camera-recording.md](docs/camera-recording.md)
 
-- install guide: [../docs/install.md](../docs/install.md)
-- system overview: [../docs/how-it-works.md](../docs/how-it-works.md)
-- device and naming model: [../docs/device-model.md](../docs/device-model.md)
-- control surface: [../docs/controls.md](../docs/controls.md)
+## Related Docs
 
-Short version:
-
-1. Make sure the bridge is running first.
-2. Copy `custom_components/dahuabridge` into your Home Assistant config.
-3. Restart Home Assistant.
-4. Add the `DahuaBridge` integration from the UI.
-5. Enter the bridge base URL, for example `http://bridge-host:9205`.
-6. Adjust the poll interval later from integration options if needed.
-
-Install target:
-
-```text
-<your-home-assistant-config>/custom_components/dahuabridge
-```
-
-Current characteristics:
-
-- unified device grouping for bridge-native camera, sensor, binary sensor, button, switch, and number entities
-- runtime-configurable poll interval through the Home Assistant options dialog
-- defaults now favor `quality` profile and bridge-hosted `HLS` for more responsive live playback
-- diagnostics download support for support/debugging, with bridge URLs and stream/action URLs redacted
+- root docs: [../docs/README.md](../docs/README.md)
+- bridge docs: [../bridge/docs/README.md](../bridge/docs/README.md)

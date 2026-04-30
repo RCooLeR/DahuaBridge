@@ -358,7 +358,7 @@ func buildPlaybackRTSPURL(deviceCfg config.DeviceConfig, channel int, subtype in
 	rtspURL := &url.URL{
 		Scheme: "rtsp",
 		Host:   host,
-		Path:   "/cam/playback",
+		Path:   "/cam/realmonitor",
 		RawQuery: url.Values{
 			"channel":   []string{strconv.Itoa(channel)},
 			"subtype":   []string{strconv.Itoa(subtype)},

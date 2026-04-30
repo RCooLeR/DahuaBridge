@@ -1,11 +1,13 @@
 package streams
 
 import (
+	"fmt"
 	"net"
 	"net/url"
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"RCooLeR/DahuaBridge/internal/config"
 	"RCooLeR/DahuaBridge/internal/dahua"
@@ -45,6 +47,7 @@ type Entry struct {
 	LocalPreviewURL          string                 `json:"local_preview_url,omitempty"`
 	LocalIntercomURL         string                 `json:"local_intercom_url,omitempty"`
 	Intercom                 *IntercomSummary       `json:"intercom,omitempty"`
+	Capture                  *CaptureSummary        `json:"capture,omitempty"`
 	MainCodec                string                 `json:"main_codec,omitempty"`
 	MainResolution           string                 `json:"main_resolution,omitempty"`
 	SubCodec                 string                 `json:"sub_codec,omitempty"`
@@ -98,6 +101,8 @@ type AudioControlSummary struct {
 	Mute                   bool     `json:"mute"`
 	Volume                 bool     `json:"volume"`
 	VolumePermissionDenied bool     `json:"volume_permission_denied,omitempty"`
+	Muted                  bool     `json:"muted,omitempty"`
+	StreamAudioEnabled     bool     `json:"stream_audio_enabled,omitempty"`
 	PlaybackSupported      bool     `json:"playback_supported"`
 	PlaybackSiren          bool     `json:"playback_siren"`
 	PlaybackQuickReply     bool     `json:"playback_quick_reply"`
@@ -190,6 +195,18 @@ type IntercomSummary struct {
 	ValidationNotes                     []string `json:"validation_notes,omitempty"`
 }
 
+type CaptureSummary struct {
+	SnapshotURL           string `json:"snapshot_url,omitempty"`
+	StartRecordingURL     string `json:"start_recording_url,omitempty"`
+	StopRecordingURL      string `json:"stop_recording_url,omitempty"`
+	RecordingsURL         string `json:"recordings_url,omitempty"`
+	Active                bool   `json:"active"`
+	ActiveClipID          string `json:"active_clip_id,omitempty"`
+	ActiveClipProfile     string `json:"active_clip_profile,omitempty"`
+	ActiveClipStartedAt   string `json:"active_clip_started_at,omitempty"`
+	ActiveClipDownloadURL string `json:"active_clip_download_url,omitempty"`
+}
+
 type Profile struct {
 	Name                     string `json:"name"`
 	StreamURL                string `json:"stream_url"`
@@ -254,7 +271,13 @@ func BuildCatalog(input CatalogInput) []Entry {
 					RecommendedProfile: recommended,
 					Profiles:           buildProfiles(deviceCfg, channel, input.IncludeCredentials, recommended, input.Config.HomeAssistant.PublicBaseURL, child.ID, input.Config.Media, mainResolution, subResolution),
 				}
-				entry.Features = buildNVRChannelFeatures(input.Config.HomeAssistant.PublicBaseURL, result.Root.ID, channel, entry.Controls)
+				entry.Features = buildNVRChannelFeatures(
+					input.Config.HomeAssistant.PublicBaseURL,
+					result.Root.ID,
+					channel,
+					entry.Controls,
+					result.States[child.ID],
+				)
 				applyHASelection(&entry, result.States[child.ID])
 				entries = append(entries, entry)
 			}
@@ -801,7 +824,7 @@ func buildVTOIntercomSummary(publicBaseURL string, deviceID string, state dahua.
 	}
 }
 
-func buildNVRChannelFeatures(publicBaseURL string, deviceID string, channel int, controls *ChannelControlSummary) []FeatureSummary {
+func buildNVRChannelFeatures(publicBaseURL string, deviceID string, channel int, controls *ChannelControlSummary, state dahua.DeviceState) []FeatureSummary {
 	features := []FeatureSummary{
 		{
 			Key:       "archive_search",
@@ -838,33 +861,36 @@ func buildNVRChannelFeatures(publicBaseURL string, deviceID string, channel int,
 	}
 	if controls.Aux != nil && controls.Aux.Supported {
 		for _, descriptor := range auxFeatureDescriptors(controls.Aux) {
+			kind := "action"
+			if descriptor.Toggle {
+				kind = "toggle"
+			}
 			features = append(features, FeatureSummary{
 				Key:            descriptor.Key,
 				Label:          descriptor.Label,
 				Group:          "deterrence",
-				Kind:           "action",
+				Kind:           kind,
 				URL:            controls.Aux.URL,
 				Supported:      true,
 				ParameterKey:   "output",
 				ParameterValue: descriptor.ParameterValue,
-				Actions:        []string{"start", "stop", "pulse"},
+				Actions:        append([]string(nil), descriptor.Actions...),
+				Active:         auxFeatureActiveState(state, descriptor.Key),
+				CurrentText:    auxFeatureCurrentText(state, descriptor.Key),
 			})
 		}
 	}
-	if controls.Recording != nil && controls.Recording.Supported {
+	if controls.Audio != nil && controls.Audio.Mute {
 		features = append(features, FeatureSummary{
-			Key:         "recording",
-			Label:       "Recording",
-			Group:       "recording",
-			Kind:        "multi_action",
-			URL:         controls.Recording.URL,
-			Supported:   true,
-			Actions:     []string{"start", "stop"},
-			Active:      boolPtr(controls.Recording.Active),
-			CurrentText: strings.TrimSpace(controls.Recording.Mode),
+			Key:       "mute",
+			Label:     "Mute Audio",
+			Group:     "audio",
+			Kind:      "toggle",
+			URL:       buildNVRChannelAudioMuteURL(publicBaseURL, deviceID, channel),
+			Supported: true,
+			Active:    boolPtr(controls.Audio.Muted),
 		})
 	}
-
 	return features
 }
 
@@ -958,6 +984,8 @@ type auxFeatureDescriptor struct {
 	Key            string
 	Label          string
 	ParameterValue string
+	Actions        []string
+	Toggle         bool
 }
 
 func auxFeatureDescriptors(aux *AuxControlSummary) []auxFeatureDescriptor {
@@ -967,7 +995,7 @@ func auxFeatureDescriptors(aux *AuxControlSummary) []auxFeatureDescriptor {
 
 	descriptors := make([]auxFeatureDescriptor, 0, len(aux.Features)+len(aux.Outputs))
 	representedOutputs := make(map[string]struct{})
-	appendDescriptor := func(key string, label string, parameterValue string, rawOutput string) {
+	appendDescriptor := func(key string, label string, parameterValue string, rawOutput string, actions []string, toggle bool) {
 		if key == "" || parameterValue == "" {
 			return
 		}
@@ -980,6 +1008,8 @@ func auxFeatureDescriptors(aux *AuxControlSummary) []auxFeatureDescriptor {
 			Key:            key,
 			Label:          label,
 			ParameterValue: parameterValue,
+			Actions:        append([]string(nil), actions...),
+			Toggle:         toggle,
 		})
 		if rawOutput != "" {
 			representedOutputs[rawOutput] = struct{}{}
@@ -989,13 +1019,15 @@ func auxFeatureDescriptors(aux *AuxControlSummary) []auxFeatureDescriptor {
 	for _, feature := range aux.Features {
 		switch strings.TrimSpace(feature) {
 		case "siren":
-			appendDescriptor("siren", "Siren", "siren", "aux")
+			appendDescriptor("siren", "Siren", "siren", "aux", []string{"start", "stop"}, true)
+		case "light":
+			appendDescriptor("light", "White Light", "light", "", []string{"start", "stop"}, true)
 		case "warning_light":
-			appendDescriptor("warning_light", "Warning Light", "warning_light", "light")
+			appendDescriptor("warning_light", "Warning Light", "warning_light", "", []string{"start", "stop"}, true)
 		case "wiper":
-			appendDescriptor("wiper", "Wiper", "wiper", "wiper")
+			appendDescriptor("wiper", "Wiper", "wiper", "wiper", []string{"start", "stop", "pulse"}, true)
 		default:
-			appendDescriptor(feature, humanizeFeatureLabel(feature), feature, "")
+			appendDescriptor(feature, humanizeFeatureLabel(feature), feature, "", []string{"start", "stop", "pulse"}, false)
 		}
 	}
 	for _, output := range aux.Outputs {
@@ -1008,17 +1040,41 @@ func auxFeatureDescriptors(aux *AuxControlSummary) []auxFeatureDescriptor {
 		}
 		switch rawOutput {
 		case "aux":
-			appendDescriptor("aux", "Aux Output", "aux", "aux")
+			appendDescriptor("aux", "Aux Output", "aux", "aux", []string{"start", "stop", "pulse"}, true)
 		case "light":
-			appendDescriptor("light", "Light", "light", "light")
+			appendDescriptor("light", "White Light", "light", "light", []string{"start", "stop"}, true)
 		case "wiper":
-			appendDescriptor("wiper", "Wiper", "wiper", "wiper")
+			appendDescriptor("wiper", "Wiper", "wiper", "wiper", []string{"start", "stop", "pulse"}, true)
 		default:
-			appendDescriptor(rawOutput, humanizeFeatureLabel(rawOutput), rawOutput, rawOutput)
+			appendDescriptor(rawOutput, humanizeFeatureLabel(rawOutput), rawOutput, rawOutput, []string{"start", "stop", "pulse"}, false)
 		}
 	}
 
 	return descriptors
+}
+
+func auxFeatureActiveState(state dahua.DeviceState, key string) *bool {
+	rawKey := strings.TrimSpace(key)
+	if rawKey == "" {
+		return nil
+	}
+
+	until := anyString(state.Info, "control_aux_active_until_"+rawKey)
+	if until != "" {
+		if parsed, err := time.Parse(time.RFC3339Nano, until); err == nil {
+			active := parsed.After(time.Now().UTC())
+			return boolPtr(active)
+		}
+	}
+
+	if _, ok := state.Info["control_aux_active_"+rawKey]; !ok {
+		return nil
+	}
+	return boolPtr(anyBool(state.Info, "control_aux_active_"+rawKey))
+}
+
+func auxFeatureCurrentText(state dahua.DeviceState, key string) string {
+	return anyString(state.Info, "control_aux_current_text_"+strings.TrimSpace(key))
 }
 
 func buildVTONumberFeature(key string, label string, url string, level int, allowed []int) FeatureSummary {
@@ -1078,6 +1134,8 @@ func buildNVRChannelControlSummary(publicBaseURL string, deviceID string, channe
 			Mute:                   anyBool(state.Info, "control_audio_mute_supported"),
 			Volume:                 anyBool(state.Info, "control_audio_volume_supported"),
 			VolumePermissionDenied: anyBool(state.Info, "control_audio_volume_permission_denied"),
+			Muted:                  anyBool(state.Info, "control_audio_muted"),
+			StreamAudioEnabled:     anyBool(state.Info, "control_audio_stream_enabled"),
 			PlaybackSupported:      anyBool(state.Info, "control_audio_playback_supported"),
 			PlaybackSiren:          anyBool(state.Info, "control_audio_playback_siren"),
 			PlaybackQuickReply:     anyBool(state.Info, "control_audio_playback_quick_reply"),
@@ -1086,15 +1144,24 @@ func buildNVRChannelControlSummary(publicBaseURL string, deviceID string, channe
 		}
 	}
 	if recordingSupported {
+		recordingMode := anyString(state.Info, "control_recording_mode")
+		exposeRecordingControl := !strings.EqualFold(recordingMode, "manual")
 		summary.Recording = &RecordingControlSummary{
-			URL:       buildNVRChannelRecordingURL(publicBaseURL, deviceID, channel),
-			Supported: true,
+			URL:       conditionalString(exposeRecordingControl, buildNVRChannelRecordingURL(publicBaseURL, deviceID, channel)),
+			Supported: exposeRecordingControl,
 			Active:    anyBool(state.Info, "control_recording_active"),
-			Mode:      anyString(state.Info, "control_recording_mode"),
+			Mode:      recordingMode,
 		}
 	}
 	summary.ValidationNotes = anyStringSlice(state.Info, "validation_notes")
 	return summary
+}
+
+func conditionalString(enabled bool, value string) string {
+	if enabled {
+		return value
+	}
+	return ""
 }
 
 func intPtr(value int) *int {
@@ -1130,6 +1197,14 @@ func buildNVRChannelAuxURL(publicBaseURL string, deviceID string, channel int) s
 		return path
 	}
 	return publicBaseURL + path
+}
+
+func buildNVRChannelAudioMuteURL(publicBaseURL string, deviceID string, channel int) string {
+	base := strings.TrimRight(strings.TrimSpace(publicBaseURL), "/")
+	if base == "" || strings.TrimSpace(deviceID) == "" || channel <= 0 {
+		return ""
+	}
+	return fmt.Sprintf("%s/api/v1/nvr/%s/channels/%d/audio/mute", base, url.PathEscape(deviceID), channel)
 }
 
 func buildNVRChannelRecordingURL(publicBaseURL string, deviceID string, channel int) string {

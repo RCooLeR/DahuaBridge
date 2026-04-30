@@ -588,10 +588,12 @@ func (d *Driver) SetAudioOutputVolume(ctx context.Context, slot int, level int) 
 	if level < 0 || level > 100 {
 		return fmt.Errorf("invalid audio output level %d", level)
 	}
-	if err := d.setConfigValues(ctx, url.Values{
-		"action": []string{"setConfig"},
-		fmt.Sprintf("AudioOutputVolume[%d]", slot): []string{strconv.Itoa(level)},
-	}); err != nil {
+	if err := d.setConfigValueCompat(
+		ctx,
+		fmt.Sprintf("AudioOutputVolume[%d]", slot),
+		fmt.Sprintf("table.AudioOutputVolume[%d]", slot),
+		strconv.Itoa(level),
+	); err != nil {
 		return fmt.Errorf("set audio output volume: %w", err)
 	}
 	d.updateCachedConfigValue(func(metadata *cachedProbeMetadata) {
@@ -610,10 +612,12 @@ func (d *Driver) SetAudioInputVolume(ctx context.Context, slot int, level int) e
 	if level < 0 || level > 100 {
 		return fmt.Errorf("invalid audio input level %d", level)
 	}
-	if err := d.setConfigValues(ctx, url.Values{
-		"action": []string{"setConfig"},
-		fmt.Sprintf("AudioInputVolume[%d]", slot): []string{strconv.Itoa(level)},
-	}); err != nil {
+	if err := d.setConfigValueCompat(
+		ctx,
+		fmt.Sprintf("AudioInputVolume[%d]", slot),
+		fmt.Sprintf("table.AudioInputVolume[%d]", slot),
+		strconv.Itoa(level),
+	); err != nil {
 		return fmt.Errorf("set audio input volume: %w", err)
 	}
 	d.updateCachedConfigValue(func(metadata *cachedProbeMetadata) {
@@ -626,10 +630,7 @@ func (d *Driver) SetAudioInputVolume(ctx context.Context, slot int, level int) e
 }
 
 func (d *Driver) SetAudioMute(ctx context.Context, muted bool) error {
-	if err := d.setConfigValues(ctx, url.Values{
-		"action":           []string{"setConfig"},
-		"Sound.SilentMode": []string{strconv.FormatBool(muted)},
-	}); err != nil {
+	if err := d.setConfigValueCompat(ctx, "table.Sound.SilentMode", "Sound.SilentMode", strconv.FormatBool(muted)); err != nil {
 		return fmt.Errorf("set audio mute: %w", err)
 	}
 	d.updateCachedConfigValue(func(metadata *cachedProbeMetadata) {
@@ -642,10 +643,12 @@ func (d *Driver) SetAudioMute(ctx context.Context, muted bool) error {
 }
 
 func (d *Driver) SetRecordingEnabled(ctx context.Context, enabled bool) error {
-	if err := d.setConfigValues(ctx, url.Values{
-		"action":                                 []string{"setConfig"},
-		"VideoTalkPhoneGeneral.AutoRecordEnable": []string{strconv.FormatBool(enabled)},
-	}); err != nil {
+	if err := d.setConfigValueCompat(
+		ctx,
+		"VideoTalkPhoneGeneral.AutoRecordEnable",
+		"table.VideoTalkPhoneGeneral.AutoRecordEnable",
+		strconv.FormatBool(enabled),
+	); err != nil {
 		return fmt.Errorf("set recording enabled: %w", err)
 	}
 	d.updateCachedConfigValue(func(metadata *cachedProbeMetadata) {
@@ -1217,12 +1220,35 @@ func (d *Driver) supportsConfigSurface(ctx context.Context, name string) (bool, 
 		"name":   []string{name},
 	})
 	if err != nil {
-		if strings.Contains(err.Error(), "Bad Request!") || strings.Contains(err.Error(), "Not Implemented!") {
+		if isUnsupportedConfigSurfaceError(err) {
 			return false, nil
 		}
 		return false, err
 	}
 	return len(values) > 0, nil
+}
+
+func isUnsupportedConfigSurfaceError(err error) bool {
+	if err == nil {
+		return false
+	}
+	return strings.Contains(err.Error(), "Bad Request!") || strings.Contains(err.Error(), "Not Implemented!")
+}
+
+func (d *Driver) setConfigValueCompat(ctx context.Context, primaryKey string, fallbackKey string, value string) error {
+	for _, key := range []string{primaryKey, fallbackKey} {
+		err := d.setConfigValues(ctx, url.Values{
+			"action": []string{"setConfig"},
+			key:      []string{value},
+		})
+		if err == nil {
+			return nil
+		}
+		if !isUnsupportedConfigSurfaceError(err) {
+			return err
+		}
+	}
+	return dahua.ErrUnsupportedOperation
 }
 
 func (d *Driver) setConfigValues(ctx context.Context, query url.Values) error {

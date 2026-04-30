@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"RCooLeR/DahuaBridge/internal/dahua"
+	"RCooLeR/DahuaBridge/internal/imou"
 )
 
 type ProbeStore struct {
@@ -24,9 +25,10 @@ type probeEntry struct {
 }
 
 type Snapshot struct {
-	Version int                   `json:"version"`
-	SavedAt time.Time             `json:"saved_at"`
-	Results map[string]probeEntry `json:"results"`
+	Version  int                   `json:"version"`
+	SavedAt  time.Time             `json:"saved_at"`
+	Results  map[string]probeEntry `json:"results"`
+	IMOUAuth *imou.AuthState       `json:"imou_auth,omitempty"`
 }
 
 type Stats struct {
@@ -109,11 +111,19 @@ func (s *ProbeStore) Stats() Stats {
 }
 
 func (s *ProbeStore) SaveFile(path string) error {
-	snapshot, revision, dirty := s.snapshot()
+	snapshot, revision, dirty := s.snapshot(nil)
 	if !dirty {
 		return nil
 	}
+	return s.writeFile(path, snapshot, revision)
+}
 
+func (s *ProbeStore) SaveFileWithMetadata(path string, imouAuth *imou.AuthState) error {
+	snapshot, revision, _ := s.snapshot(imouAuth)
+	return s.writeFile(path, snapshot, revision)
+}
+
+func (s *ProbeStore) writeFile(path string, snapshot Snapshot, revision uint64) error {
 	data, err := json.MarshalIndent(snapshot, "", "  ")
 	if err != nil {
 		return err
@@ -141,17 +151,22 @@ func (s *ProbeStore) SaveFile(path string) error {
 }
 
 func (s *ProbeStore) LoadFile(path string) (bool, error) {
+	ok, _, err := s.LoadFileWithMetadata(path)
+	return ok, err
+}
+
+func (s *ProbeStore) LoadFileWithMetadata(path string) (bool, *imou.AuthState, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return false, nil
+			return false, nil, nil
 		}
-		return false, err
+		return false, nil, err
 	}
 
 	var snapshot Snapshot
 	if err := json.Unmarshal(data, &snapshot); err != nil {
-		return false, err
+		return false, nil, err
 	}
 
 	s.mu.Lock()
@@ -165,10 +180,10 @@ func (s *ProbeStore) LoadFile(path string) (bool, error) {
 		}
 	}
 	s.dirty = false
-	return true, nil
+	return true, cloneIMOUAuthState(snapshot.IMOUAuth), nil
 }
 
-func (s *ProbeStore) snapshot() (Snapshot, uint64, bool) {
+func (s *ProbeStore) snapshot(imouAuth *imou.AuthState) (Snapshot, uint64, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -181,9 +196,10 @@ func (s *ProbeStore) snapshot() (Snapshot, uint64, bool) {
 	}
 
 	return Snapshot{
-		Version: 1,
-		SavedAt: time.Now().UTC(),
-		Results: results,
+		Version:  2,
+		SavedAt:  time.Now().UTC(),
+		Results:  results,
+		IMOUAuth: cloneIMOUAuthState(imouAuth),
 	}, s.revision, s.dirty
 }
 
@@ -267,4 +283,12 @@ func cloneAnyValue(value any) any {
 	default:
 		return v
 	}
+}
+
+func cloneIMOUAuthState(input *imou.AuthState) *imou.AuthState {
+	if input == nil {
+		return nil
+	}
+	output := *input
+	return &output
 }
