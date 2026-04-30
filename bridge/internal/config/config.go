@@ -149,6 +149,14 @@ type ChannelImouOverride struct {
 	Features  []string `yaml:"features"`
 }
 
+type ChannelDirectIPCCredential struct {
+	NVRChannel        int    `yaml:"nvr_channel"`
+	DirectIPCIP       string `yaml:"direct_ipc_ip"`
+	DirectIPCBaseURL  string `yaml:"direct_ipc_base_url"`
+	DirectIPCUser     string `yaml:"direct_ipc_user"`
+	DirectIPCPassword string `yaml:"direct_ipc_password"`
+}
+
 type DeviceConfig struct {
 	ID                         string                            `yaml:"id"`
 	Name                       string                            `yaml:"name"`
@@ -166,6 +174,7 @@ type DeviceConfig struct {
 	ChannelPTZControlOverrides []ChannelPTZControlOverride       `yaml:"channel_ptz_control_overrides"`
 	ChannelRecordingOverrides  []ChannelRecordingControlOverride `yaml:"channel_recording_control_overrides"`
 	ChannelImouOverrides       []ChannelImouOverride             `yaml:"channel_imou_overrides"`
+	DirectIPCCredentials       []ChannelDirectIPCCredential      `yaml:"direct_ipc_credentials"`
 	LockAllowlist              []int                             `yaml:"lock_allowlist"`
 	AlarmAllowlist             []int                             `yaml:"alarm_allowlist"`
 	PollInterval               time.Duration                     `yaml:"poll_interval"`
@@ -578,6 +587,7 @@ func normalizeDevice(dev *DeviceConfig) error {
 	dev.ChannelPTZControlOverrides = normalizeChannelPTZControlOverrides(dev.ChannelPTZControlOverrides)
 	dev.ChannelRecordingOverrides = normalizeChannelRecordingControlOverrides(dev.ChannelRecordingOverrides)
 	dev.ChannelImouOverrides = normalizeChannelImouOverrides(dev.ChannelImouOverrides)
+	dev.DirectIPCCredentials = normalizeChannelDirectIPCCredentials(dev.DirectIPCCredentials)
 	dev.LockAllowlist = normalizePositiveIntList(dev.LockAllowlist)
 	dev.AlarmAllowlist = normalizePositiveIntList(dev.AlarmAllowlist)
 	if dev.OnvifServiceURL != "" {
@@ -631,6 +641,18 @@ func (d DeviceConfig) ImouOverride(channel int) (ChannelImouOverride, bool) {
 		}
 	}
 	return ChannelImouOverride{}, false
+}
+
+func (d DeviceConfig) DirectIPCCredential(channel int) (ChannelDirectIPCCredential, bool) {
+	if channel <= 0 {
+		return ChannelDirectIPCCredential{}, false
+	}
+	for _, credential := range d.DirectIPCCredentials {
+		if credential.NVRChannel == channel {
+			return credential, true
+		}
+	}
+	return ChannelDirectIPCCredential{}, false
 }
 
 func (d DeviceConfig) PTZControlOverride(channel int) (ChannelPTZControlOverride, bool) {
@@ -804,6 +826,34 @@ func normalizeChannelImouOverrides(overrides []ChannelImouOverride) []ChannelImo
 	return normalized
 }
 
+func normalizeChannelDirectIPCCredentials(credentials []ChannelDirectIPCCredential) []ChannelDirectIPCCredential {
+	if len(credentials) == 0 {
+		return nil
+	}
+
+	byChannel := make(map[int]ChannelDirectIPCCredential, len(credentials))
+	channels := make([]int, 0, len(credentials))
+	for _, credential := range credentials {
+		normalized, ok := normalizeSingleChannelDirectIPCCredential(credential)
+		if !ok {
+			continue
+		}
+		if _, exists := byChannel[normalized.NVRChannel]; !exists {
+			channels = append(channels, normalized.NVRChannel)
+		}
+		byChannel[normalized.NVRChannel] = normalized
+	}
+	if len(channels) == 0 {
+		return nil
+	}
+	slices.Sort(channels)
+	normalized := make([]ChannelDirectIPCCredential, 0, len(channels))
+	for _, channel := range channels {
+		normalized = append(normalized, byChannel[channel])
+	}
+	return normalized
+}
+
 func normalizeChannelPTZControlOverrides(overrides []ChannelPTZControlOverride) []ChannelPTZControlOverride {
 	if len(overrides) == 0 {
 		return nil
@@ -872,6 +922,27 @@ func normalizeSingleChannelImouOverride(override ChannelImouOverride) (ChannelIm
 	}
 	if normalized.DeviceID == "" || normalized.ChannelID == "" || len(normalized.Features) == 0 {
 		return ChannelImouOverride{}, false
+	}
+	return normalized, true
+}
+
+func normalizeSingleChannelDirectIPCCredential(credential ChannelDirectIPCCredential) (ChannelDirectIPCCredential, bool) {
+	normalized := ChannelDirectIPCCredential{
+		NVRChannel:        credential.NVRChannel,
+		DirectIPCIP:       strings.TrimSpace(credential.DirectIPCIP),
+		DirectIPCBaseURL:  strings.TrimSpace(credential.DirectIPCBaseURL),
+		DirectIPCUser:     strings.TrimSpace(credential.DirectIPCUser),
+		DirectIPCPassword: strings.TrimSpace(credential.DirectIPCPassword),
+	}
+	if normalized.DirectIPCBaseURL != "" {
+		baseURL, err := normalizeBaseURL(normalized.DirectIPCBaseURL)
+		if err != nil {
+			return ChannelDirectIPCCredential{}, false
+		}
+		normalized.DirectIPCBaseURL = baseURL
+	}
+	if normalized.NVRChannel <= 0 || normalized.DirectIPCIP == "" || normalized.DirectIPCUser == "" || normalized.DirectIPCPassword == "" {
+		return ChannelDirectIPCCredential{}, false
 	}
 	return normalized, true
 }

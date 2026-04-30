@@ -690,7 +690,9 @@ export class DahuaBridgeSurveillancePanelCard
                           },
                         )}
                         ${this.renderControlButton(
-                          this._selectedCameraAudioMuted ? "Unmute Audio" : "Mute Audio",
+                          this._selectedCameraAudioMuted
+                            ? "Enable Stream Audio"
+                            : "Disable Stream Audio",
                           this._selectedCameraAudioMuted ? "mdi:volume-high" : "mdi:volume-off",
                           () => void this.toggleSelectedCameraAudio(camera),
                           {

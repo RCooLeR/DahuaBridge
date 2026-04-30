@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
 	"time"
 
@@ -55,6 +56,26 @@ func TestParsePTZCapabilities(t *testing.T) {
 	}
 }
 
+func TestParsePTZCapabilitiesAuxOnlySurfaceIsNotPTZSupported(t *testing.T) {
+	capabilities := parsePTZCapabilities(map[string]string{
+		"caps.Pan":      "false",
+		"caps.Tile":     "false",
+		"caps.Zoom":     "false",
+		"caps.Focus":    "false",
+		"caps.Aux":      "true",
+		"caps.Auxs[0]":  "Light",
+		"caps.Auxs[1]":  "Wiper",
+		"caps.AutoScan": "false",
+	})
+
+	if capabilities.Supported {
+		t.Fatalf("expected aux-only ptz surface to stay unsupported, got %+v", capabilities)
+	}
+	if !capabilities.Aux || len(capabilities.AuxFunctions) != 2 {
+		t.Fatalf("expected aux metadata to be preserved, got %+v", capabilities)
+	}
+}
+
 func TestAttachChannelControlState(t *testing.T) {
 	state := dahua.DeviceState{Available: true, Info: map[string]any{}}
 	attachChannelControlState(&state, dahua.NVRChannelControlCapabilities{
@@ -89,6 +110,51 @@ func TestAttachChannelControlState(t *testing.T) {
 	}
 }
 
+func TestAuxCapabilitiesPreferDirectLightOverAuxOnlyPTZSurface(t *testing.T) {
+	driver := &Driver{
+		cfg: config.DeviceConfig{
+			ID: "west20_nvr",
+			DirectIPCCredentials: []config.ChannelDirectIPCCredential{
+				{
+					NVRChannel:        9,
+					DirectIPCIP:       "192.168.150.110",
+					DirectIPCUser:     "admin",
+					DirectIPCPassword: "secret",
+				},
+			},
+		},
+		cachedInventory: &inventorySnapshot{
+			Channels: []channelInventory{
+				{
+					Index: 8,
+					RemoteDevice: remoteDeviceInventory{
+						Address:    "192.168.150.110",
+						DeviceType: "DH-IPC-HFW2849S-S-IL-BE",
+					},
+				},
+			},
+		},
+		inventoryExpires: time.Now().Add(time.Minute),
+	}
+
+	capabilities, err := driver.auxCapabilities(context.Background(), 9, dahua.NVRPTZCapabilities{
+		Aux:          true,
+		AuxFunctions: []string{"Light", "Wiper"},
+	})
+	if err != nil {
+		t.Fatalf("auxCapabilities returned error: %v", err)
+	}
+	if !capabilities.Supported {
+		t.Fatalf("expected aux support, got %+v", capabilities)
+	}
+	if len(capabilities.Outputs) != 1 || capabilities.Outputs[0] != "light" {
+		t.Fatalf("expected direct light only, got %+v", capabilities.Outputs)
+	}
+	if len(capabilities.Features) != 1 || capabilities.Features[0] != "light" {
+		t.Fatalf("expected direct light feature only, got %+v", capabilities.Features)
+	}
+}
+
 func TestParseChannelStreamsIncludesAudioConfig(t *testing.T) {
 	streams := parseChannelStreams(map[string]string{
 		"table.Encode[4].MainFormat[0].Video.resolution":   "2560x1440",
@@ -105,6 +171,101 @@ func TestParseChannelStreamsIncludesAudioConfig(t *testing.T) {
 	}
 	if channel.AudioCodec != "AAC" || !channel.AudioKnown || !channel.AudioEnabled {
 		t.Fatalf("expected audio config to be parsed, got %+v", channel)
+	}
+}
+
+func TestAudioCapabilitiesHideReadOnlyNVRMuteControl(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Query().Get("action") {
+		case "getConfig":
+			switch r.URL.Query().Get("name") {
+			case "RecordMode":
+				_, _ = w.Write([]byte("table.RecordMode[4].Mode=0\ntable.RecordMode[4].ModeExtra1=2\ntable.RecordMode[4].ModeExtra2=2\n"))
+			default:
+				http.Error(w, "unexpected config", http.StatusBadRequest)
+			}
+		case "setConfig":
+			http.Error(w, "Authority:check failure.", http.StatusForbidden)
+		default:
+			http.Error(w, "unexpected action", http.StatusBadRequest)
+		}
+	}))
+	defer server.Close()
+
+	cfg := config.DeviceConfig{
+		ID:               "west20_nvr",
+		BaseURL:          server.URL,
+		Username:         "assistant",
+		Password:         "secret",
+		ChannelAllowlist: []int{5},
+		RequestTimeout:   5 * time.Second,
+	}
+	metricsRegistry := metrics.New(buildinfo.Info())
+	driver := New(cfg, config.ImouConfig{}, nil, nil, zerolog.Nop(), metricsRegistry, cgi.New(cfg, metricsRegistry))
+	driver.cachedInventory = &inventorySnapshot{
+		Channels: []channelInventory{
+			{
+				Index:        4,
+				AudioCodec:   "G.711A",
+				AudioEnabled: true,
+				AudioKnown:   true,
+			},
+		},
+	}
+	driver.inventoryExpires = time.Now().Add(time.Minute)
+	driver.rpc = nil
+
+	capabilities, notes := driver.audioCapabilities(context.Background(), 5)
+	if capabilities.Mute {
+		t.Fatalf("expected mute control to stay hidden, got %+v", capabilities)
+	}
+	if authority := driver.audioControlAuthority(context.Background(), 5); authority != "nvr_read_only" {
+		t.Fatalf("expected nvr_read_only authority, got %q", authority)
+	}
+	if !strings.Contains(strings.Join(notes, ","), "channel_nvr_audio_config_write_permission_denied") {
+		t.Fatalf("expected permission note, got %+v", notes)
+	}
+}
+
+func TestRecordingCapabilitiesHideReadOnlyNVRWrites(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Query().Get("action") {
+		case "getConfig":
+			switch r.URL.Query().Get("name") {
+			case "RecordMode":
+				_, _ = w.Write([]byte("table.RecordMode[4].Mode=0\ntable.RecordMode[4].ModeExtra1=2\ntable.RecordMode[4].ModeExtra2=2\n"))
+			default:
+				http.Error(w, "unexpected config", http.StatusBadRequest)
+			}
+		case "setConfig":
+			http.Error(w, "Authority:check failure.", http.StatusForbidden)
+		default:
+			http.Error(w, "unexpected action", http.StatusBadRequest)
+		}
+	}))
+	defer server.Close()
+
+	cfg := config.DeviceConfig{
+		ID:               "west20_nvr",
+		BaseURL:          server.URL,
+		Username:         "assistant",
+		Password:         "secret",
+		ChannelAllowlist: []int{5},
+		RequestTimeout:   5 * time.Second,
+	}
+	metricsRegistry := metrics.New(buildinfo.Info())
+	driver := New(cfg, config.ImouConfig{}, nil, nil, zerolog.Nop(), metricsRegistry, cgi.New(cfg, metricsRegistry))
+	driver.rpc = nil
+
+	capabilities, err := driver.recordingCapabilities(context.Background(), 5)
+	if err != nil {
+		t.Fatalf("recordingCapabilities returned error: %v", err)
+	}
+	if capabilities.Supported {
+		t.Fatalf("expected read-only recording control to stay hidden, got %+v", capabilities)
+	}
+	if capabilities.Mode != "auto" {
+		t.Fatalf("expected recording mode to remain readable, got %+v", capabilities)
 	}
 }
 
@@ -133,7 +294,8 @@ func TestDriverPTZSendsExpectedQueries(t *testing.T) {
 		ChannelAllowlist: []int{5},
 		RequestTimeout:   5 * time.Second,
 	}
-	driver := New(cfg, config.ImouConfig{}, nil, zerolog.Nop(), cgi.New(cfg, metrics.New(buildinfo.Info())))
+	metricsRegistry := metrics.New(buildinfo.Info())
+	driver := New(cfg, config.ImouConfig{}, nil, nil, zerolog.Nop(), metricsRegistry, cgi.New(cfg, metricsRegistry))
 	driver.rpc = nil
 
 	err := driver.PTZ(context.Background(), dahua.NVRPTZRequest{
@@ -183,7 +345,8 @@ func TestDriverAuxSendsExpectedQueries(t *testing.T) {
 		ChannelAllowlist: []int{11},
 		RequestTimeout:   5 * time.Second,
 	}
-	driver := New(cfg, config.ImouConfig{}, nil, zerolog.Nop(), cgi.New(cfg, metrics.New(buildinfo.Info())))
+	metricsRegistry := metrics.New(buildinfo.Info())
+	driver := New(cfg, config.ImouConfig{}, nil, nil, zerolog.Nop(), metricsRegistry, cgi.New(cfg, metricsRegistry))
 	driver.rpc = nil
 
 	err := driver.Aux(context.Background(), dahua.NVRAuxRequest{
@@ -215,6 +378,19 @@ func TestDriverAuxLightUsesRPCModeSwitch(t *testing.T) {
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
+		case "/cgi-bin/configManager.cgi":
+			switch r.URL.Query().Get("action") {
+			case "getConfig":
+				if r.URL.Query().Get("name") == "RecordMode" {
+					_, _ = w.Write([]byte("table.RecordMode[10].Mode=0\ntable.RecordMode[10].ModeExtra1=2\ntable.RecordMode[10].ModeExtra2=2\n"))
+					return
+				}
+				http.Error(w, "unexpected config", http.StatusBadRequest)
+			case "setConfig":
+				_, _ = w.Write([]byte("OK"))
+			default:
+				http.Error(w, "unexpected action", http.StatusBadRequest)
+			}
 		case "/cgi-bin/ptz.cgi":
 			ptzRequests = append(ptzRequests, r.URL.Query())
 			switch r.URL.Query().Get("action") {
@@ -274,7 +450,8 @@ func TestDriverAuxLightUsesRPCModeSwitch(t *testing.T) {
 		ChannelAllowlist: []int{11},
 		RequestTimeout:   5 * time.Second,
 	}
-	driver := New(cfg, config.ImouConfig{}, nil, zerolog.Nop(), cgi.New(cfg, metrics.New(buildinfo.Info())))
+	metricsRegistry := metrics.New(buildinfo.Info())
+	driver := New(cfg, config.ImouConfig{}, nil, nil, zerolog.Nop(), metricsRegistry, cgi.New(cfg, metricsRegistry))
 
 	err := driver.Aux(context.Background(), dahua.NVRAuxRequest{
 		Channel: 11,
@@ -400,7 +577,8 @@ func TestDriverRecordingSendsExpectedQueries(t *testing.T) {
 		ChannelAllowlist: []int{5},
 		RequestTimeout:   5 * time.Second,
 	}
-	driver := New(cfg, config.ImouConfig{}, nil, zerolog.Nop(), cgi.New(cfg, metrics.New(buildinfo.Info())))
+	metricsRegistry := metrics.New(buildinfo.Info())
+	driver := New(cfg, config.ImouConfig{}, nil, nil, zerolog.Nop(), metricsRegistry, cgi.New(cfg, metricsRegistry))
 	driver.rpc = nil
 
 	err := driver.Recording(context.Background(), dahua.NVRRecordingRequest{
@@ -411,11 +589,11 @@ func TestDriverRecordingSendsExpectedQueries(t *testing.T) {
 		t.Fatalf("Recording returned error: %v", err)
 	}
 
-	if len(requests) != 2 {
-		t.Fatalf("expected 2 requests, got %d", len(requests))
+	if len(requests) != 4 {
+		t.Fatalf("expected 4 requests, got %d", len(requests))
 	}
-	if requests[1].Get("RecordMode[4].Mode") != "1" || requests[1].Get("RecordMode[4].ModeExtra1") != "2" || requests[1].Get("RecordMode[4].ModeExtra2") != "2" {
-		t.Fatalf("unexpected setConfig request: %+v", requests[1])
+	if requests[3].Get("RecordMode[4].Mode") != "1" || requests[3].Get("RecordMode[4].ModeExtra1") != "2" || requests[3].Get("RecordMode[4].ModeExtra2") != "2" {
+		t.Fatalf("unexpected setConfig request: %+v", requests[3])
 	}
 }
 
@@ -446,7 +624,8 @@ func TestDriverRecordingFallsBackToTablePrefixedQueries(t *testing.T) {
 		ChannelAllowlist: []int{5},
 		RequestTimeout:   5 * time.Second,
 	}
-	driver := New(cfg, config.ImouConfig{}, nil, zerolog.Nop(), cgi.New(cfg, metrics.New(buildinfo.Info())))
+	metricsRegistry := metrics.New(buildinfo.Info())
+	driver := New(cfg, config.ImouConfig{}, nil, nil, zerolog.Nop(), metricsRegistry, cgi.New(cfg, metricsRegistry))
 	driver.rpc = nil
 
 	err := driver.Recording(context.Background(), dahua.NVRRecordingRequest{
@@ -457,11 +636,11 @@ func TestDriverRecordingFallsBackToTablePrefixedQueries(t *testing.T) {
 		t.Fatalf("Recording returned error: %v", err)
 	}
 
-	if len(requests) != 3 {
-		t.Fatalf("expected 3 requests, got %d", len(requests))
+	if len(requests) != 6 {
+		t.Fatalf("expected 6 requests, got %d", len(requests))
 	}
-	if requests[2].Get("table.RecordMode[4].Mode") != "1" || requests[2].Get("table.RecordMode[4].ModeExtra1") != "2" || requests[2].Get("table.RecordMode[4].ModeExtra2") != "2" {
-		t.Fatalf("unexpected fallback setConfig request: %+v", requests[2])
+	if requests[5].Get("table.RecordMode[4].Mode") != "1" || requests[5].Get("table.RecordMode[4].ModeExtra1") != "2" || requests[5].Get("table.RecordMode[4].ModeExtra2") != "2" {
+		t.Fatalf("unexpected fallback setConfig request: %+v", requests[5])
 	}
 }
 
@@ -471,7 +650,14 @@ func TestDriverSetAudioMuteUsesEncodeAudioEnable(t *testing.T) {
 		requests = append(requests, r.URL.Query())
 		switch r.URL.Query().Get("action") {
 		case "getConfig":
-			_, _ = w.Write([]byte("table.Encode[4].MainFormat[0].Video.resolution=2560x1440\ntable.Encode[4].MainFormat[0].Audio.Compression=AAC\ntable.Encode[4].MainFormat[0].AudioEnable=true\n"))
+			switch r.URL.Query().Get("name") {
+			case "Encode":
+				_, _ = w.Write([]byte("table.Encode[4].MainFormat[0].Video.resolution=2560x1440\ntable.Encode[4].MainFormat[0].Audio.Compression=AAC\ntable.Encode[4].MainFormat[0].AudioEnable=true\n"))
+			case "RecordMode":
+				_, _ = w.Write([]byte("table.RecordMode[4].Mode=0\ntable.RecordMode[4].ModeExtra1=2\ntable.RecordMode[4].ModeExtra2=2\n"))
+			default:
+				http.Error(w, "unexpected config", http.StatusBadRequest)
+			}
 		case "setConfig":
 			_, _ = w.Write([]byte("OK"))
 		default:
@@ -488,7 +674,19 @@ func TestDriverSetAudioMuteUsesEncodeAudioEnable(t *testing.T) {
 		ChannelAllowlist: []int{5},
 		RequestTimeout:   5 * time.Second,
 	}
-	driver := New(cfg, config.ImouConfig{}, nil, zerolog.Nop(), cgi.New(cfg, metrics.New(buildinfo.Info())))
+	metricsRegistry := metrics.New(buildinfo.Info())
+	driver := New(cfg, config.ImouConfig{}, nil, nil, zerolog.Nop(), metricsRegistry, cgi.New(cfg, metricsRegistry))
+	driver.cachedInventory = &inventorySnapshot{
+		Channels: []channelInventory{
+			{
+				Index:        4,
+				AudioCodec:   "AAC",
+				AudioEnabled: true,
+				AudioKnown:   true,
+			},
+		},
+	}
+	driver.inventoryExpires = time.Now().Add(time.Minute)
 	driver.rpc = nil
 
 	capabilities, notes := driver.audioCapabilities(context.Background(), 5)
@@ -506,12 +704,90 @@ func TestDriverSetAudioMuteUsesEncodeAudioEnable(t *testing.T) {
 		t.Fatalf("SetAudioMute returned error: %v", err)
 	}
 
-	if len(requests) < 2 {
-		t.Fatalf("expected at least 2 requests, got %d", len(requests))
+	if len(requests) < 3 {
+		t.Fatalf("expected at least 3 requests, got %d", len(requests))
 	}
 	lastRequest := requests[len(requests)-1]
 	if lastRequest.Get("table.Encode[4].MainFormat[0].AudioEnable") != "false" {
 		t.Fatalf("unexpected setConfig request: %+v", lastRequest)
+	}
+}
+
+func TestDriverSetAudioMuteUsesDirectIPCWhenConfigured(t *testing.T) {
+	var nvrRequests []url.Values
+	var directRequests []url.Values
+
+	directServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		directRequests = append(directRequests, r.URL.Query())
+		switch r.URL.Query().Get("action") {
+		case "getConfig":
+			_, _ = w.Write([]byte("table.Encode[0].MainFormat[0].Video.resolution=2560x1440\ntable.Encode[0].MainFormat[0].Audio.Compression=AAC\ntable.Encode[0].MainFormat[0].AudioEnable=true\n"))
+		case "setConfig":
+			_, _ = w.Write([]byte("OK"))
+		default:
+			http.Error(w, "unexpected direct action", http.StatusBadRequest)
+		}
+	}))
+	defer directServer.Close()
+
+	directHost := strings.TrimPrefix(directServer.URL, "http://")
+	nvrServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		nvrRequests = append(nvrRequests, r.URL.Query())
+		switch r.URL.Query().Get("name") {
+		case "ChannelTitle":
+			_, _ = w.Write([]byte("table.ChannelTitle[4].Name=Boiler Room\n"))
+		case "Encode":
+			_, _ = w.Write([]byte("table.Encode[4].MainFormat[0].Video.resolution=2560x1440\ntable.Encode[4].MainFormat[0].Audio.Compression=AAC\ntable.Encode[4].MainFormat[0].AudioEnable=true\n"))
+		case "RemoteDevice":
+			_, _ = w.Write([]byte(
+				"table.RemoteDevice.uuid:System_CONFIG_NETCAMERA_INFO_4.Address=" + directHost + "\n" +
+					"table.RemoteDevice.uuid:System_CONFIG_NETCAMERA_INFO_4.DeviceType=DH-T4A-PV\n" +
+					"table.RemoteDevice.uuid:System_CONFIG_NETCAMERA_INFO_4.HttpPort=80\n",
+			))
+		default:
+			http.Error(w, "unexpected nvr config query", http.StatusBadRequest)
+		}
+	}))
+	defer nvrServer.Close()
+
+	cfg := config.DeviceConfig{
+		ID:               "west20_nvr",
+		BaseURL:          nvrServer.URL,
+		Username:         "assistant",
+		Password:         "secret",
+		ChannelAllowlist: []int{5},
+		RequestTimeout:   5 * time.Second,
+		DirectIPCCredentials: []config.ChannelDirectIPCCredential{
+			{
+				NVRChannel:        5,
+				DirectIPCIP:       directHost,
+				DirectIPCUser:     "admin",
+				DirectIPCPassword: "secret",
+			},
+		},
+	}
+	metricsRegistry := metrics.New(buildinfo.Info())
+	driver := New(cfg, config.ImouConfig{}, nil, nil, zerolog.Nop(), metricsRegistry, cgi.New(cfg, metricsRegistry))
+	driver.rpc = nil
+
+	if err := driver.SetAudioMute(context.Background(), dahua.NVRAudioRequest{
+		Channel: 5,
+		Muted:   true,
+	}); err != nil {
+		t.Fatalf("SetAudioMute returned error: %v", err)
+	}
+
+	for _, request := range nvrRequests {
+		if request.Get("action") == "setConfig" {
+			t.Fatalf("expected direct ipc routing, got nvr setConfig request %+v", request)
+		}
+	}
+	if len(directRequests) < 2 {
+		t.Fatalf("expected direct ipc get/set requests, got %d", len(directRequests))
+	}
+	lastDirectRequest := directRequests[len(directRequests)-1]
+	if lastDirectRequest.Get("table.Encode[0].MainFormat[0].AudioEnable") != "false" {
+		t.Fatalf("unexpected direct ipc setConfig request: %+v", lastDirectRequest)
 	}
 }
 
@@ -541,7 +817,8 @@ func TestChannelControlCapabilitiesUsesConfiguredAuxOverride(t *testing.T) {
 		},
 		RequestTimeout: 5 * time.Second,
 	}
-	driver := New(cfg, config.ImouConfig{}, nil, zerolog.Nop(), cgi.New(cfg, metrics.New(buildinfo.Info())))
+	metricsRegistry := metrics.New(buildinfo.Info())
+	driver := New(cfg, config.ImouConfig{}, nil, nil, zerolog.Nop(), metricsRegistry, cgi.New(cfg, metricsRegistry))
 	driver.rpc = nil
 
 	capabilities, err := driver.ChannelControlCapabilities(context.Background(), 8)
@@ -585,7 +862,8 @@ func TestChannelControlCapabilitiesDoesNotInferAuxFromBlindProbe(t *testing.T) {
 		ChannelAllowlist: []int{8},
 		RequestTimeout:   5 * time.Second,
 	}
-	driver := New(cfg, config.ImouConfig{}, nil, zerolog.Nop(), cgi.New(cfg, metrics.New(buildinfo.Info())))
+	metricsRegistry := metrics.New(buildinfo.Info())
+	driver := New(cfg, config.ImouConfig{}, nil, nil, zerolog.Nop(), metricsRegistry, cgi.New(cfg, metricsRegistry))
 	driver.rpc = nil
 
 	capabilities, err := driver.ChannelControlCapabilities(context.Background(), 8)
@@ -610,7 +888,8 @@ func TestPTZCapabilitiesClassifiesBadRequestAsUnsupported(t *testing.T) {
 		Password:       "secret",
 		RequestTimeout: 5 * time.Second,
 	}
-	driver := New(cfg, config.ImouConfig{}, nil, zerolog.Nop(), cgi.New(cfg, metrics.New(buildinfo.Info())))
+	metricsRegistry := metrics.New(buildinfo.Info())
+	driver := New(cfg, config.ImouConfig{}, nil, nil, zerolog.Nop(), metricsRegistry, cgi.New(cfg, metricsRegistry))
 
 	_, err := driver.ptzCapabilities(context.Background(), 8)
 	if !errors.Is(err, dahua.ErrUnsupportedOperation) {
@@ -677,7 +956,8 @@ func TestChannelControlCapabilitiesIncludesRemoteSpeakPlayback(t *testing.T) {
 		ChannelAllowlist: []int{7},
 		RequestTimeout:   5 * time.Second,
 	}
-	driver := New(cfg, config.ImouConfig{}, nil, zerolog.Nop(), cgi.New(cfg, metrics.New(buildinfo.Info())))
+	metricsRegistry := metrics.New(buildinfo.Info())
+	driver := New(cfg, config.ImouConfig{}, nil, nil, zerolog.Nop(), metricsRegistry, cgi.New(cfg, metricsRegistry))
 
 	capabilities, err := driver.ChannelControlCapabilities(context.Background(), 7)
 	if err != nil {

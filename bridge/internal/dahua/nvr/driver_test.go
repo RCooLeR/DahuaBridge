@@ -209,6 +209,36 @@ func TestParseRPCRecordingSearchResult(t *testing.T) {
 	}
 }
 
+func TestParseRPCRecordingSearchResultSupportsInfos(t *testing.T) {
+	got := parseRPCRecordingSearchResult(map[string]any{
+		"found": float64(1),
+		"infos": []any{
+			map[string]any{
+				"Channel":     float64(7),
+				"StartTime":   "2026-04-30 00:00:00",
+				"EndTime":     "2026-04-30 00:10:00",
+				"FilePath":    "/mnt/dvr/2026-04-30/7/dav/00.00.00-00.10.00.dav",
+				"Type":        "dav",
+				"VideoStream": "Main",
+				"Flags":       []any{"Timing"},
+			},
+		},
+	})
+
+	if got.ReturnedCount != 1 {
+		t.Fatalf("unexpected returned count %d", got.ReturnedCount)
+	}
+	if len(got.Items) != 1 {
+		t.Fatalf("expected 1 recording item, got %d", len(got.Items))
+	}
+	if got.Items[0].Channel != 8 {
+		t.Fatalf("expected channel 8, got %d", got.Items[0].Channel)
+	}
+	if got.Items[0].FilePath == "" || got.Items[0].StartTime == "" {
+		t.Fatalf("unexpected item %+v", got.Items[0])
+	}
+}
+
 func TestDriverFindRecordingsUsesRPCMediaFileFind(t *testing.T) {
 	loginRequests := 0
 	var rpcCalls []string
@@ -264,7 +294,8 @@ func TestDriverFindRecordingsUsesRPCMediaFileFind(t *testing.T) {
 		ChannelAllowlist: []int{1},
 		RequestTimeout:   5 * time.Second,
 	}
-	driver := New(cfg, config.ImouConfig{}, nil, zerolog.Nop(), cgi.New(cfg, metrics.New(buildinfo.Info())))
+	metricsRegistry := metrics.New(buildinfo.Info())
+	driver := New(cfg, config.ImouConfig{}, nil, nil, zerolog.Nop(), metricsRegistry, cgi.New(cfg, metricsRegistry))
 
 	got, err := driver.FindRecordings(context.Background(), dahua.NVRRecordingQuery{
 		Channel:   1,
@@ -513,5 +544,134 @@ func TestChannelInventoryWanted(t *testing.T) {
 		SubCodec:       "H.265",
 	}) {
 		t.Fatal("expected real channel to be accepted")
+	}
+}
+
+func TestParseRemoteDevices(t *testing.T) {
+	got := parseRemoteDevices(map[string]string{
+		"table.RemoteDevice.uuid:System_CONFIG_NETCAMERA_INFO_7.Address":             "192.168.150.120",
+		"table.RemoteDevice.uuid:System_CONFIG_NETCAMERA_INFO_7.DeviceType":          "DH-T4A-PV",
+		"table.RemoteDevice.uuid:System_CONFIG_NETCAMERA_INFO_7.HttpPort":            "80",
+		"table.RemoteDevice.uuid:System_CONFIG_NETCAMERA_INFO_7.HttpsPort":           "443",
+		"table.RemoteDevice.uuid:System_CONFIG_NETCAMERA_INFO_7.Port":                "37777",
+		"table.RemoteDevice.uuid:System_CONFIG_NETCAMERA_INFO_7.RtspPort":            "554",
+		"table.RemoteDevice.uuid:System_CONFIG_NETCAMERA_INFO_7.UserName":            "admin",
+		"table.RemoteDevice.uuid:System_CONFIG_NETCAMERA_INFO_7.VideoInputs[0].Name": "Boiler Room",
+	})
+
+	item, ok := got[7]
+	if !ok {
+		t.Fatalf("expected remote device 7 in %+v", got)
+	}
+	if item.Address != "192.168.150.120" || item.DeviceType != "DH-T4A-PV" {
+		t.Fatalf("unexpected remote device identity %+v", item)
+	}
+	if item.HTTPPort != 80 || item.HTTPSPort != 443 || item.SDKPort != 37777 || item.RTSPPort != 554 {
+		t.Fatalf("unexpected remote device ports %+v", item)
+	}
+	if item.UserName != "admin" || item.Name != "Boiler Room" {
+		t.Fatalf("unexpected remote device metadata %+v", item)
+	}
+}
+
+func TestDirectIPCTargetForChannelUsesMatchingIPCConfig(t *testing.T) {
+	driver := &Driver{
+		cfg: config.DeviceConfig{
+			ID: "west20_nvr",
+			DirectIPCCredentials: []config.ChannelDirectIPCCredential{
+				{
+					NVRChannel:        11,
+					DirectIPCIP:       "192.168.150.20",
+					DirectIPCUser:     "admin",
+					DirectIPCPassword: "secret",
+				},
+			},
+			RequestTimeout: 5 * time.Second,
+		},
+		ipcCfgs: []config.DeviceConfig{
+			{
+				ID:              "hut_ipc",
+				BaseURL:         "https://192.168.150.20",
+				Username:        "admin",
+				Password:        "secret",
+				InsecureSkipTLS: true,
+				RequestTimeout:  5 * time.Second,
+			},
+		},
+		cachedInventory: &inventorySnapshot{
+			Channels: []channelInventory{
+				{
+					Index: 10,
+					Name:  "Hut",
+					RemoteDevice: remoteDeviceInventory{
+						Address:    "192.168.150.20",
+						DeviceType: "DH-H4C-GE",
+						HTTPSPort:  443,
+					},
+				},
+			},
+		},
+		inventoryExpires: time.Now().Add(time.Minute),
+	}
+
+	target, err := driver.directIPCTargetForChannel(context.Background(), 11)
+	if err != nil {
+		t.Fatalf("directIPCTargetForChannel returned error: %v", err)
+	}
+	if target == nil {
+		t.Fatal("expected direct ipc target")
+	}
+	if target.BaseURL != "https://192.168.150.20" {
+		t.Fatalf("unexpected direct ipc base url %q", target.BaseURL)
+	}
+	if !target.InsecureTLS {
+		t.Fatal("expected direct ipc target to inherit insecure tls setting")
+	}
+	if target.DeviceType != "DH-H4C-GE" {
+		t.Fatalf("unexpected direct ipc device type %+v", target)
+	}
+}
+
+func TestDirectIPCTargetForChannelUsesCredentialBaseURL(t *testing.T) {
+	driver := &Driver{
+		cfg: config.DeviceConfig{
+			ID: "west20_nvr",
+			DirectIPCCredentials: []config.ChannelDirectIPCCredential{
+				{
+					NVRChannel:        11,
+					DirectIPCIP:       "192.168.150.20",
+					DirectIPCBaseURL:  "https://192.168.150.20",
+					DirectIPCUser:     "admin",
+					DirectIPCPassword: "secret",
+				},
+			},
+			RequestTimeout: 5 * time.Second,
+		},
+		cachedInventory: &inventorySnapshot{
+			Channels: []channelInventory{
+				{
+					Index: 10,
+					Name:  "Hut",
+					RemoteDevice: remoteDeviceInventory{
+						Address:    "192.168.150.20",
+						DeviceType: "DH-H4C-GE",
+						HTTPPort:   80,
+						HTTPSPort:  37777,
+					},
+				},
+			},
+		},
+		inventoryExpires: time.Now().Add(time.Minute),
+	}
+
+	target, err := driver.directIPCTargetForChannel(context.Background(), 11)
+	if err != nil {
+		t.Fatalf("directIPCTargetForChannel returned error: %v", err)
+	}
+	if target == nil {
+		t.Fatal("expected direct ipc target")
+	}
+	if target.BaseURL != "https://192.168.150.20" {
+		t.Fatalf("unexpected direct ipc base url %q", target.BaseURL)
 	}
 }

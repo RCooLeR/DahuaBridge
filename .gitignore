@@ -3,6 +3,7 @@
 .gotmp-ha-native/
 __pycache__/
 *.py[cod]
+.tmp-*
 .pytest_cache/
 .venv/
 .coverage

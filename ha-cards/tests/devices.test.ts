@@ -220,6 +220,55 @@ describe("discoverBridgeTopology", () => {
           last_changed: now,
           last_updated: now,
         },
+        "sensor.entry_gate_control_audio_authority_actual": {
+          entity_id: "sensor.entry_gate_control_audio_authority_actual",
+          state: "direct_ipc",
+          attributes: {},
+          last_changed: now,
+          last_updated: now,
+        },
+        "sensor.entry_gate_control_audio_semantic_actual": {
+          entity_id: "sensor.entry_gate_control_audio_semantic_actual",
+          state: "stream_audio_enable",
+          attributes: {},
+          last_changed: now,
+          last_updated: now,
+        },
+        "binary_sensor.entry_gate_nvr_config_writable_actual": {
+          entity_id: "binary_sensor.entry_gate_nvr_config_writable_actual",
+          state: "on",
+          attributes: {},
+          last_changed: now,
+          last_updated: now,
+        },
+        "sensor.entry_gate_nvr_config_reason_actual": {
+          entity_id: "sensor.entry_gate_nvr_config_reason_actual",
+          state: "ok",
+          attributes: {},
+          last_changed: now,
+          last_updated: now,
+        },
+        "binary_sensor.entry_gate_direct_ipc_configured_actual": {
+          entity_id: "binary_sensor.entry_gate_direct_ipc_configured_actual",
+          state: "on",
+          attributes: {},
+          last_changed: now,
+          last_updated: now,
+        },
+        "sensor.entry_gate_direct_ipc_ip_actual": {
+          entity_id: "sensor.entry_gate_direct_ipc_ip_actual",
+          state: "192.168.150.60",
+          attributes: {},
+          last_changed: now,
+          last_updated: now,
+        },
+        "sensor.entry_gate_direct_ipc_model_actual": {
+          entity_id: "sensor.entry_gate_direct_ipc_model_actual",
+          state: "DH-IPC-HFW2849S-S-IL",
+          attributes: {},
+          last_changed: now,
+          last_updated: now,
+        },
         "binary_sensor.entry_gate_onvif_h264_actual": {
           entity_id: "binary_sensor.entry_gate_onvif_h264_actual",
           state: "on",
@@ -258,6 +307,20 @@ describe("discoverBridgeTopology", () => {
         "sensor.west20_nvr_disk_count": {
           entity_id: "sensor.west20_nvr_disk_count",
           state: "2",
+          attributes: {},
+          last_changed: now,
+          last_updated: now,
+        },
+        "binary_sensor.west20_nvr_nvr_config_writable": {
+          entity_id: "binary_sensor.west20_nvr_nvr_config_writable",
+          state: "on",
+          attributes: {},
+          last_changed: now,
+          last_updated: now,
+        },
+        "sensor.west20_nvr_nvr_config_reason": {
+          entity_id: "sensor.west20_nvr_nvr_config_reason",
+          state: "ok",
           attributes: {},
           last_changed: now,
           last_updated: now,
@@ -564,9 +627,54 @@ describe("discoverBridgeTopology", () => {
           unique_id: "west20_nvr_channel_01_onvif_h264_available",
         },
         {
+          entity_id: "sensor.entry_gate_control_audio_authority_actual",
+          device_id: "dev-channel-1",
+          unique_id: "west20_nvr_channel_01_control_audio_authority",
+        },
+        {
+          entity_id: "sensor.entry_gate_control_audio_semantic_actual",
+          device_id: "dev-channel-1",
+          unique_id: "west20_nvr_channel_01_control_audio_semantic",
+        },
+        {
+          entity_id: "binary_sensor.entry_gate_nvr_config_writable_actual",
+          device_id: "dev-channel-1",
+          unique_id: "west20_nvr_channel_01_nvr_config_writable",
+        },
+        {
+          entity_id: "sensor.entry_gate_nvr_config_reason_actual",
+          device_id: "dev-channel-1",
+          unique_id: "west20_nvr_channel_01_nvr_config_reason",
+        },
+        {
+          entity_id: "binary_sensor.entry_gate_direct_ipc_configured_actual",
+          device_id: "dev-channel-1",
+          unique_id: "west20_nvr_channel_01_direct_ipc_configured",
+        },
+        {
+          entity_id: "sensor.entry_gate_direct_ipc_ip_actual",
+          device_id: "dev-channel-1",
+          unique_id: "west20_nvr_channel_01_direct_ipc_ip",
+        },
+        {
+          entity_id: "sensor.entry_gate_direct_ipc_model_actual",
+          device_id: "dev-channel-1",
+          unique_id: "west20_nvr_channel_01_direct_ipc_model",
+        },
+        {
           entity_id: "sensor.recorder_model_actual",
           device_id: "dev-nvr",
           unique_id: "west20_nvr_model",
+        },
+        {
+          entity_id: "binary_sensor.west20_nvr_nvr_config_writable",
+          device_id: "dev-nvr",
+          unique_id: "west20_nvr_nvr_config_writable",
+        },
+        {
+          entity_id: "sensor.west20_nvr_nvr_config_reason",
+          device_id: "dev-nvr",
+          unique_id: "west20_nvr_nvr_config_reason",
         },
         {
           entity_id: "camera.driveway_ipc_camera",
@@ -719,6 +827,8 @@ describe("discoverBridgeTopology", () => {
     expect(topology.nvrs[0]?.diagnostics).toMatchObject({
       channelCount: 16,
       diskCount: 2,
+      nvrConfigWritable: true,
+      nvrConfigReason: "ok",
     });
 
     expect(topology.nvrs[0]?.channels[0]).toMatchObject({
@@ -734,6 +844,13 @@ describe("discoverBridgeTopology", () => {
       },
     });
     expect(topology.nvrs[0]?.channels[0]?.diagnostics).toMatchObject({
+      controlAudioAuthority: "direct_ipc",
+      controlAudioSemantic: "stream_audio_enable",
+      nvrConfigWritable: true,
+      nvrConfigReason: "ok",
+      directIPCConfigured: true,
+      directIPCIP: "192.168.150.60",
+      directIPCModel: "DH-IPC-HFW2849S-S-IL",
       catalog: {
         recommendedHaIntegration: "native",
         recommendedHaReason: "Bridge HLS preferred",

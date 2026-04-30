@@ -270,6 +270,55 @@ describe("buildPanelModel", () => {
           last_changed: now,
           last_updated: now,
         },
+        "binary_sensor.west20_nvr_channel_01_nvr_config_writable": {
+          entity_id: "binary_sensor.west20_nvr_channel_01_nvr_config_writable",
+          state: "on",
+          attributes: {},
+          last_changed: now,
+          last_updated: now,
+        },
+        "sensor.west20_nvr_channel_01_nvr_config_reason": {
+          entity_id: "sensor.west20_nvr_channel_01_nvr_config_reason",
+          state: "ok",
+          attributes: {},
+          last_changed: now,
+          last_updated: now,
+        },
+        "sensor.west20_nvr_channel_01_control_audio_authority": {
+          entity_id: "sensor.west20_nvr_channel_01_control_audio_authority",
+          state: "direct_ipc",
+          attributes: {},
+          last_changed: now,
+          last_updated: now,
+        },
+        "sensor.west20_nvr_channel_01_control_audio_semantic": {
+          entity_id: "sensor.west20_nvr_channel_01_control_audio_semantic",
+          state: "stream_audio_enable",
+          attributes: {},
+          last_changed: now,
+          last_updated: now,
+        },
+        "binary_sensor.west20_nvr_channel_01_direct_ipc_configured": {
+          entity_id: "binary_sensor.west20_nvr_channel_01_direct_ipc_configured",
+          state: "on",
+          attributes: {},
+          last_changed: now,
+          last_updated: now,
+        },
+        "sensor.west20_nvr_channel_01_direct_ipc_configured_ip": {
+          entity_id: "sensor.west20_nvr_channel_01_direct_ipc_configured_ip",
+          state: "192.168.150.60",
+          attributes: {},
+          last_changed: now,
+          last_updated: now,
+        },
+        "sensor.west20_nvr_channel_01_direct_ipc_model": {
+          entity_id: "sensor.west20_nvr_channel_01_direct_ipc_model",
+          state: "DH-IPC-HFW2849S-S-IL",
+          attributes: {},
+          last_changed: now,
+          last_updated: now,
+        },
         "binary_sensor.front_vto_online": {
           entity_id: "binary_sensor.front_vto_online",
           state: "on",
@@ -347,6 +396,15 @@ describe("buildPanelModel", () => {
       active: true,
       mode: null,
       url: "http://bridge.local:9205/api/v1/nvr/west20_nvr/channels/1/recording",
+    });
+    expect(model.cameras[0]).toMatchObject({
+      audioControlAuthority: "direct_ipc",
+      audioControlSemantic: "stream_audio_enable",
+      nvrConfigWritable: true,
+      nvrConfigReason: "ok",
+      directIPCConfigured: true,
+      directIPCConfiguredIP: "192.168.150.60",
+      directIPCModel: "DH-IPC-HFW2849S-S-IL",
     });
     expect(model.cameras[0]?.stream.source).toBe(
       "http://bridge.local:9205/api/v1/media/hls/west20_nvr_channel_01/quality",

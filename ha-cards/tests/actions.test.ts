@@ -87,6 +87,15 @@ function buildCamera(overrides: Partial<CameraViewModel> = {}): CameraViewModel 
     audioMuted: false,
     audioMuteSupported: false,
     audioMuteActionUrl: null,
+    validationNotes: [],
+    audioControlAuthority: null,
+    audioControlSemantic: null,
+    nvrConfigWritable: null,
+    nvrConfigReason: null,
+    directIPCConfigured: false,
+    directIPCConfiguredIP: null,
+    directIPCIP: null,
+    directIPCModel: null,
     ...overrides,
   };
 }

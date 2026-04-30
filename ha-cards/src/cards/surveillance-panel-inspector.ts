@@ -148,6 +148,15 @@ function renderNvrInspector(
                   nvr.healthy ? "success" : "warning",
                   renderIcon,
                 )}
+                ${nvr.nvrConfigWritable !== null
+                  ? renderNvrSummaryChip(
+                      "mdi:cog-refresh-outline",
+                      "Config Writes",
+                      nvr.nvrConfigWritable ? "Writable" : "Blocked",
+                      nvr.nvrConfigWritable ? "success" : "warning",
+                      renderIcon,
+                    )
+                  : nothing}
                 ${renderNvrSummaryChip(
                   "mdi:cctv",
                   "Channels recording",
@@ -333,6 +342,7 @@ function renderCameraInspector(
                   : nothing}
               </div>
             </div>
+            ${renderCameraControlAuthority(camera)}
           `
         : nothing}
 
@@ -342,6 +352,7 @@ function renderCameraInspector(
 
       ${detailTab === "settings"
         ? html`
+            ${renderCameraControlAuthority(camera)}
             ${renderCameraStreamStatus(camera)}
             ${renderCameraStreamProfiles(camera)}
             ${renderCameraBridgeAdapter(camera)}
@@ -500,6 +511,86 @@ function renderCameraBridgeAdapter(camera: CameraViewModel): TemplateResult | ty
       <div class="muted">
         Bridge diagnostics are only shown here when a required route is missing.
       </div>
+    </div>
+  `;
+}
+
+function renderCameraControlAuthority(
+  camera: CameraViewModel,
+): TemplateResult | typeof nothing {
+  const showAudioAuthority = Boolean(camera.audioControlAuthority);
+  const showAudioSemantic = Boolean(camera.audioControlSemantic);
+  const showNvrWriteState = camera.nvrConfigWritable !== null;
+  const showDirectIPC =
+    camera.directIPCConfigured ||
+    Boolean(camera.directIPCConfiguredIP) ||
+    Boolean(camera.directIPCIP) ||
+    Boolean(camera.directIPCModel);
+  const showValidationNotes = camera.deviceKind === "nvr_channel" && camera.validationNotes.length > 0;
+
+  if (
+    !showAudioAuthority &&
+    !showAudioSemantic &&
+    !showNvrWriteState &&
+    !showDirectIPC &&
+    !showValidationNotes
+  ) {
+    return nothing;
+  }
+
+  return html`
+    <div class="panel">
+      <div class="panel-title">Control Authority</div>
+      <div class="chip-row">
+        ${showAudioAuthority
+          ? html`
+              <span class="badge ${audioAuthorityTone(camera.audioControlAuthority)}">
+                Audio via ${audioAuthorityLabel(camera.audioControlAuthority)}
+              </span>
+            `
+          : nothing}
+        ${showAudioSemantic
+          ? html`<span class="badge info">${audioSemanticLabel(camera.audioControlSemantic)}</span>`
+          : nothing}
+        ${showNvrWriteState
+          ? html`
+              <span class="badge ${camera.nvrConfigWritable ? "success" : "warning"}">
+                NVR config writes ${camera.nvrConfigWritable ? "ready" : "blocked"}
+              </span>
+            `
+          : nothing}
+        ${showDirectIPC
+          ? html`
+              <span class="badge ${camera.directIPCConfigured ? "success" : "info"}">
+                ${camera.directIPCConfigured ? "Direct IPC mapped" : "Direct IPC seen in inventory"}
+              </span>
+            `
+          : nothing}
+      </div>
+      <div class="detail-inline-meta">
+        ${camera.directIPCIP || camera.directIPCConfiguredIP
+          ? html`
+              <span class="muted">
+                Direct IPC: ${camera.directIPCConfiguredIP ?? camera.directIPCIP}
+                ${camera.directIPCModel ? ` (${camera.directIPCModel})` : ""}
+              </span>
+            `
+          : nothing}
+        ${camera.nvrConfigReason
+          ? html`<span class="muted">NVR write probe: ${camera.nvrConfigReason}</span>`
+          : nothing}
+      </div>
+      ${showValidationNotes
+        ? html`
+            <div class="chip-row">
+              ${repeat(
+                camera.validationNotes,
+                (note) => note,
+                (note) => html`<span class="badge warning">${note}</span>`,
+              )}
+            </div>
+          `
+        : nothing}
     </div>
   `;
 }
@@ -719,6 +810,47 @@ function renderVtoInspector(
         : nothing}
     </div>
   `;
+}
+
+function audioAuthorityLabel(authority: string | null): string {
+  switch (authority?.trim().toLowerCase()) {
+    case "direct_ipc":
+      return "Direct IPC";
+    case "imou_override":
+      return "IMOU";
+    case "nvr":
+      return "NVR";
+    case "nvr_read_only":
+      return "NVR read-only";
+    default:
+      return authority?.trim() || "unknown";
+  }
+}
+
+function audioAuthorityTone(
+  authority: string | null,
+): "success" | "warning" | "critical" | "info" {
+  switch (authority?.trim().toLowerCase()) {
+    case "direct_ipc":
+      return "success";
+    case "imou_override":
+      return "info";
+    case "nvr":
+      return "warning";
+    case "nvr_read_only":
+      return "critical";
+    default:
+      return "info";
+  }
+}
+
+function audioSemanticLabel(semantic: string | null): string {
+  switch (semantic?.trim().toLowerCase()) {
+    case "stream_audio_enable":
+      return "Stream audio toggle";
+    default:
+      return semantic?.trim() || "Audio control";
+  }
 }
 
 function renderNvrSummaryChip(

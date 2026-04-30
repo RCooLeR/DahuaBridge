@@ -20,6 +20,7 @@ import (
 	dahuarpc "RCooLeR/DahuaBridge/internal/dahua/rpc"
 	dahuartsp "RCooLeR/DahuaBridge/internal/dahua/rtsp"
 	"RCooLeR/DahuaBridge/internal/imou"
+	"RCooLeR/DahuaBridge/internal/metrics"
 	"RCooLeR/DahuaBridge/internal/onvif"
 	"github.com/rs/zerolog"
 )
@@ -43,11 +44,19 @@ type Driver struct {
 	onvif   *onvif.Client
 	imou    imou.Service
 	imouCfg config.ImouConfig
+	ipcCfgs []config.DeviceConfig
+	metrics *metrics.Registry
 	logger  zerolog.Logger
 
 	mu               sync.RWMutex
 	cachedInventory  *inventorySnapshot
 	inventoryExpires time.Time
+
+	configWriteMu      sync.RWMutex
+	configWriteChecked time.Time
+	configWriteKnown   bool
+	configWriteAllowed bool
+	configWriteReason  string
 }
 
 type inventorySnapshot struct {
@@ -64,6 +73,7 @@ type channelInventory struct {
 	AudioKnown     bool
 	SubResolution  string
 	SubCodec       string
+	RemoteDevice   remoteDeviceInventory
 }
 
 type diskInventory struct {
@@ -91,6 +101,8 @@ var (
 	encodeCompressionPattern      = regexp.MustCompile(`^table\.Encode\[(\d+)\]\.(MainFormat|ExtraFormat)\[0\]\.Video\.Compression$`)
 	encodeAudioCompressionPattern = regexp.MustCompile(`^table\.Encode\[(\d+)\]\.MainFormat\[\d+\]\.Audio\.Compression$`)
 	encodeAudioEnablePattern      = regexp.MustCompile(`^table\.Encode\[(\d+)\]\.MainFormat\[\d+\]\.AudioEnable$`)
+	remoteDevicePattern           = regexp.MustCompile(`^table\.RemoteDevice\.[^.]*_(\d+)\.([A-Za-z0-9_.\[\]]+)$`)
+	remoteDeviceLegacyPattern     = regexp.MustCompile(`^table\.RemoteDevice\[(\d+)\]\.([A-Za-z0-9_.\[\]]+)$`)
 	storageNamePattern            = regexp.MustCompile(`^list\.info\[(\d+)\]\.Name$`)
 	storageStatePattern           = regexp.MustCompile(`^list\.info\[(\d+)\]\.State$`)
 	storageDetailTotal            = regexp.MustCompile(`^list\.info\[(\d+)\]\.Detail\[(\d+)\]\.TotalBytes$`)
@@ -99,7 +111,7 @@ var (
 	placeholderChannelNamePattern = regexp.MustCompile(`(?i)^\s*(channel|канал)\s*0*(\d+)\s*$`)
 )
 
-func New(cfg config.DeviceConfig, imouCfg config.ImouConfig, imouClient imou.Service, logger zerolog.Logger, client *cgi.Client) *Driver {
+func New(cfg config.DeviceConfig, imouCfg config.ImouConfig, imouClient imou.Service, ipcCfgs []config.DeviceConfig, logger zerolog.Logger, metricsRegistry *metrics.Registry, client *cgi.Client) *Driver {
 	return &Driver{
 		cfg:     cfg,
 		client:  client,
@@ -108,6 +120,8 @@ func New(cfg config.DeviceConfig, imouCfg config.ImouConfig, imouClient imou.Ser
 		onvif:   onvif.New(cfg),
 		imou:    imouClient,
 		imouCfg: imouCfg,
+		ipcCfgs: append([]config.DeviceConfig(nil), ipcCfgs...),
+		metrics: metricsRegistry,
 		logger:  logger.With().Str("device_id", cfg.ID).Str("device_type", string(dahua.DeviceKindNVR)).Logger(),
 	}
 }
@@ -223,12 +237,18 @@ func (d *Driver) Probe(ctx context.Context) (*dahua.ProbeResult, error) {
 	if recordModeErr != nil {
 		d.logger.Debug().Err(recordModeErr).Msg("record mode probe failed")
 	}
+	nvrConfigWritable, nvrConfigReason := d.nvrConfigWriteStatus(ctx)
+	rootState := states[cfg.ID]
+	rootState.Info["nvr_config_writable"] = nvrConfigWritable
+	rootState.Info["nvr_config_reason"] = nvrConfigReason
+	states[cfg.ID] = rootState
 
 	for _, channel := range channels {
 		if !channelInventoryWanted(cfg, channel) {
 			continue
 		}
 		childID := channelDeviceID(cfg.ID, channel.Index)
+		directIPCCredential, directIPCConfigured := cfg.DirectIPCCredential(channel.Index + 1)
 		children = append(children, dahua.Device{
 			ID:           childID,
 			ParentID:     cfg.ID,
@@ -251,8 +271,23 @@ func (d *Driver) Probe(ctx context.Context) (*dahua.ProbeResult, error) {
 				"rtsp_sub_url":     buildRTSPURL(cfg.BaseURL, channel.Index+1, 1),
 				"device_category":  "channel",
 				"inventory_source": "cgi",
+				"direct_ipc_ip":    channel.RemoteDevice.Address,
+				"direct_ipc_model": channel.RemoteDevice.DeviceType,
 			},
 		})
+		if directIPCConfigured {
+			children[len(children)-1].Attributes["direct_ipc_configured"] = "true"
+			children[len(children)-1].Attributes["direct_ipc_configured_ip"] = directIPCCredential.DirectIPCIP
+		}
+		if channel.RemoteDevice.HTTPPort > 0 {
+			children[len(children)-1].Attributes["direct_ipc_http_port"] = strconv.Itoa(channel.RemoteDevice.HTTPPort)
+		}
+		if channel.RemoteDevice.HTTPSPort > 0 {
+			children[len(children)-1].Attributes["direct_ipc_https_port"] = strconv.Itoa(channel.RemoteDevice.HTTPSPort)
+		}
+		if channel.RemoteDevice.RTSPPort > 0 {
+			children[len(children)-1].Attributes["direct_ipc_rtsp_port"] = strconv.Itoa(channel.RemoteDevice.RTSPPort)
+		}
 		states[childID] = dahua.DeviceState{
 			Available: true,
 			Info: map[string]any{
@@ -267,7 +302,27 @@ func (d *Driver) Probe(ctx context.Context) (*dahua.ProbeResult, error) {
 				"rtsp_sub_url":     buildRTSPURL(cfg.BaseURL, channel.Index+1, 1),
 				"snapshot_rel_url": fmt.Sprintf("/api/v1/nvr/%s/channels/%d/snapshot", cfg.ID, channel.Index+1),
 				"stream_available": d.streamAvailable(ctx, cfg, channel.Index+1),
+				"direct_ipc_ip":    channel.RemoteDevice.Address,
+				"direct_ipc_model": channel.RemoteDevice.DeviceType,
 			},
+		}
+		if channel.RemoteDevice.HTTPPort > 0 {
+			states[childID].Info["direct_ipc_http_port"] = channel.RemoteDevice.HTTPPort
+		}
+		if channel.RemoteDevice.HTTPSPort > 0 {
+			states[childID].Info["direct_ipc_https_port"] = channel.RemoteDevice.HTTPSPort
+		}
+		if channel.RemoteDevice.RTSPPort > 0 {
+			states[childID].Info["direct_ipc_rtsp_port"] = channel.RemoteDevice.RTSPPort
+		}
+		if channel.RemoteDevice.UserName != "" {
+			states[childID].Info["direct_ipc_inventory_username"] = channel.RemoteDevice.UserName
+		}
+		states[childID].Info["nvr_config_writable"] = nvrConfigWritable
+		states[childID].Info["nvr_config_reason"] = nvrConfigReason
+		if directIPCConfigured {
+			states[childID].Info["direct_ipc_configured"] = true
+			states[childID].Info["direct_ipc_configured_ip"] = directIPCCredential.DirectIPCIP
 		}
 		if channel.AudioKnown {
 			states[childID].Info["control_audio_stream_enabled"] = channel.AudioEnabled
@@ -278,6 +333,9 @@ func (d *Driver) Probe(ctx context.Context) (*dahua.ProbeResult, error) {
 			recordingCapabilities = recordingCapabilitiesForChannel(channel.Index+1, recordModes)
 		}
 		recordingCapabilities = d.applyRecordingOverride(channel.Index+1, recordingCapabilities)
+		if recordingCapabilities.Supported && !nvrConfigWritable {
+			recordingCapabilities.Supported = false
+		}
 		if recordingCapabilities.Supported || recordingCapabilities.Active || recordingCapabilities.Mode != "" {
 			attachChannelRecordingState(&state, recordingCapabilities)
 		}
@@ -299,12 +357,20 @@ func (d *Driver) Probe(ctx context.Context) (*dahua.ProbeResult, error) {
 			Audio:     audioCapabilities,
 			Recording: recordingCapabilities,
 		})
+		state.Info["control_audio_authority"] = d.audioControlAuthority(ctx, channel.Index+1)
+		state.Info["control_audio_semantic"] = "stream_audio_enable"
 		notes := make([]string, 0, 4)
 		if ptzErr != nil && auxCapabilities.Supported {
 			notes = append(notes, "ptz_capability_query_failed_aux_fallback_used")
 		}
 		if !ptzCapabilities.Supported && auxCapabilities.Supported && len(auxCapabilities.Features) > 0 {
 			notes = append(notes, "non_ptz_channel_feature_surface_detected")
+		}
+		if directIPCConfigured && channel.RemoteDevice.Address != "" && !strings.EqualFold(strings.TrimSpace(channel.RemoteDevice.Address), strings.TrimSpace(directIPCCredential.DirectIPCIP)) {
+			notes = append(notes, "direct_ipc_configured_ip_differs_from_nvr_remote_device_ip")
+		}
+		if !nvrConfigWritable && nvrConfigReason == "permission_denied" {
+			notes = append(notes, "nvr_config_write_permission_denied")
 		}
 		notes = append(notes, audioNotes...)
 		attachValidationNotes(&state, notes)
@@ -595,6 +661,7 @@ func (d *Driver) UpdateConfig(cfg config.DeviceConfig) error {
 	d.rtsp.UpdateConfig(cfg)
 	d.onvif.UpdateConfig(cfg)
 	d.InvalidateInventoryCache()
+	d.resetConfigWriteStatus()
 	return nil
 }
 
@@ -623,7 +690,16 @@ func (d *Driver) loadInventory(ctx context.Context) ([]channelInventory, error) 
 		return nil, err
 	}
 
-	channels := mergeChannelInventory(parseChannelTitles(titlesKV), parseChannelStreams(encodeKV))
+	channels := make([]channelInventory, 0)
+	remoteDevicesKV, err := d.client.GetKeyValues(ctx, "/cgi-bin/configManager.cgi", url.Values{
+		"action": []string{"getConfig"},
+		"name":   []string{"RemoteDevice"},
+	})
+	if err == nil {
+		channels = mergeChannelInventory(parseChannelTitles(titlesKV), parseChannelStreams(encodeKV), parseRemoteDevices(remoteDevicesKV))
+	} else {
+		channels = mergeChannelInventory(parseChannelTitles(titlesKV), parseChannelStreams(encodeKV), nil)
+	}
 
 	d.mu.Lock()
 	d.cachedInventory = &inventorySnapshot{Channels: channels}
@@ -780,15 +856,22 @@ func parseChannelStreams(values map[string]string) map[int]channelInventory {
 	return result
 }
 
-func mergeChannelInventory(titles map[int]string, streams map[int]channelInventory) []channelInventory {
+func mergeChannelInventory(titles map[int]string, streams map[int]channelInventory, remoteDevices map[int]remoteDeviceInventory) []channelInventory {
 	seen := make(map[int]struct{})
-	indexes := make([]int, 0, len(titles)+len(streams))
+	indexes := make([]int, 0, len(titles)+len(streams)+len(remoteDevices))
 
 	for index := range titles {
 		seen[index] = struct{}{}
 		indexes = append(indexes, index)
 	}
 	for index := range streams {
+		if _, ok := seen[index]; ok {
+			continue
+		}
+		seen[index] = struct{}{}
+		indexes = append(indexes, index)
+	}
+	for index := range remoteDevices {
 		if _, ok := seen[index]; ok {
 			continue
 		}
@@ -803,6 +886,7 @@ func mergeChannelInventory(titles map[int]string, streams map[int]channelInvento
 		item := streams[index]
 		item.Index = index
 		item.Name = firstNonEmpty(titles[index], fmt.Sprintf("Channel %d", index+1))
+		item.RemoteDevice = remoteDevices[index]
 		items = append(items, item)
 	}
 
@@ -813,7 +897,8 @@ func channelInventoryUsable(item channelInventory) bool {
 	return strings.TrimSpace(item.MainResolution) != "" ||
 		strings.TrimSpace(item.MainCodec) != "" ||
 		strings.TrimSpace(item.SubResolution) != "" ||
-		strings.TrimSpace(item.SubCodec) != ""
+		strings.TrimSpace(item.SubCodec) != "" ||
+		strings.TrimSpace(item.RemoteDevice.Address) != ""
 }
 
 func channelInventoryWanted(cfg config.DeviceConfig, item channelInventory) bool {
@@ -1033,7 +1118,10 @@ func parseRPCRecordingSearchResult(values map[string]any) dahua.NVRRecordingSear
 		result.ReturnedCount = count
 	}
 
-	rawItems, _ := values["items"].([]any)
+	rawItems, _ := values["infos"].([]any)
+	if len(rawItems) == 0 {
+		rawItems, _ = values["items"].([]any)
+	}
 	result.Items = make([]dahua.NVRRecording, 0, len(rawItems))
 	for _, rawItem := range rawItems {
 		itemMap, ok := rawItem.(map[string]any)

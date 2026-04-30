@@ -160,7 +160,7 @@ func TestDriverSetAudioMuteUsesImouAudioEncodeControl(t *testing.T) {
 	}
 
 	capabilities, notes := driver.audioCapabilities(context.Background(), 5)
-	if !capabilities.Mute || !capabilities.StreamEnabled || capabilities.Muted {
+	if !capabilities.Mute || capabilities.Muted {
 		t.Fatalf("unexpected audio capabilities %+v", capabilities)
 	}
 	if len(notes) == 0 {

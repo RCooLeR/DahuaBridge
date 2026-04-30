@@ -92,6 +92,15 @@ export interface CameraViewModel {
   audioMuted: boolean;
   audioMuteSupported: boolean;
   audioMuteActionUrl: string | null;
+  validationNotes: string[];
+  audioControlAuthority: string | null;
+  audioControlSemantic: string | null;
+  nvrConfigWritable: boolean | null;
+  nvrConfigReason: string | null;
+  directIPCConfigured: boolean;
+  directIPCConfiguredIP: string | null;
+  directIPCIP: string | null;
+  directIPCModel: string | null;
 }
 
 export interface CameraAuxTargetViewModel {
@@ -193,6 +202,8 @@ export interface NvrViewModel {
   storageText: string;
   recordingActive: boolean;
   healthy: boolean;
+  nvrConfigWritable: boolean | null;
+  nvrConfigReason: string | null;
 }
 
 export interface VtoViewModel {
@@ -546,6 +557,15 @@ function buildCameraViewModel(
     audioMuteSupported:
       camera.capabilities.audio.mute === true && !!rewriteBridgeUrl(muteFeature?.url ?? null, browserBridgeUrl),
     audioMuteActionUrl: rewriteBridgeUrl(muteFeature?.url ?? null, browserBridgeUrl),
+    validationNotes: [...camera.capabilities.validationNotes],
+    audioControlAuthority: camera.diagnostics.controlAudioAuthority,
+    audioControlSemantic: camera.diagnostics.controlAudioSemantic,
+    nvrConfigWritable: camera.diagnostics.nvrConfigWritable,
+    nvrConfigReason: camera.diagnostics.nvrConfigReason,
+    directIPCConfigured: camera.diagnostics.directIPCConfigured === true,
+    directIPCConfiguredIP: camera.diagnostics.directIPCConfiguredIP,
+    directIPCIP: camera.diagnostics.directIPCIP,
+    directIPCModel: camera.diagnostics.directIPCModel,
   };
 }
 
@@ -690,6 +710,8 @@ function buildNvrViewModel(
             : "Storage unknown",
     recordingActive: nvr.recordingActive,
     healthy: nvr.healthy,
+    nvrConfigWritable: nvr.diagnostics.nvrConfigWritable,
+    nvrConfigReason: nvr.diagnostics.nvrConfigReason,
   };
 }
 

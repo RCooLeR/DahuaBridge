@@ -450,6 +450,64 @@ func TestNormalizeChannelPTZAndRecordingOverrides(t *testing.T) {
 	}
 }
 
+func TestNormalizeDeviceDirectIPCCredentials(t *testing.T) {
+	cfg := DeviceConfig{
+		ID:      "nvr",
+		BaseURL: "http://127.0.0.1",
+		DirectIPCCredentials: []ChannelDirectIPCCredential{
+			{NVRChannel: 8, DirectIPCIP: " 192.168.150.120 ", DirectIPCBaseURL: " https://192.168.150.120/ ", DirectIPCUser: " admin ", DirectIPCPassword: " secret "},
+			{NVRChannel: 0, DirectIPCIP: "192.168.150.80", DirectIPCUser: "admin", DirectIPCPassword: "secret"},
+			{NVRChannel: 8, DirectIPCIP: "192.168.150.121", DirectIPCUser: "operator", DirectIPCPassword: "updated"},
+			{NVRChannel: 11, DirectIPCIP: "192.168.150.20", DirectIPCUser: "viewer", DirectIPCPassword: "pw"},
+		},
+	}
+
+	if err := normalizeDevice(&cfg); err != nil {
+		t.Fatalf("normalizeDevice returned error: %v", err)
+	}
+	if len(cfg.DirectIPCCredentials) != 2 {
+		t.Fatalf("unexpected direct ipc credentials %+v", cfg.DirectIPCCredentials)
+	}
+
+	channel8, ok := cfg.DirectIPCCredential(8)
+	if !ok {
+		t.Fatal("expected channel 8 direct ipc credential")
+	}
+	if channel8.DirectIPCIP != "192.168.150.121" || channel8.DirectIPCUser != "operator" || channel8.DirectIPCPassword != "updated" || channel8.DirectIPCBaseURL != "" {
+		t.Fatalf("unexpected channel 8 credential %+v", channel8)
+	}
+
+	channel11, ok := cfg.DirectIPCCredential(11)
+	if !ok {
+		t.Fatal("expected channel 11 direct ipc credential")
+	}
+	if channel11.DirectIPCIP != "192.168.150.20" || channel11.DirectIPCUser != "viewer" || channel11.DirectIPCPassword != "pw" {
+		t.Fatalf("unexpected channel 11 credential %+v", channel11)
+	}
+}
+
+func TestNormalizeDeviceDirectIPCCredentialBaseURL(t *testing.T) {
+	cfg := DeviceConfig{
+		ID:      "nvr",
+		BaseURL: "http://127.0.0.1",
+		DirectIPCCredentials: []ChannelDirectIPCCredential{
+			{NVRChannel: 11, DirectIPCIP: "192.168.150.20", DirectIPCBaseURL: " https://192.168.150.20/ ", DirectIPCUser: "admin", DirectIPCPassword: "secret"},
+		},
+	}
+
+	if err := normalizeDevice(&cfg); err != nil {
+		t.Fatalf("normalizeDevice returned error: %v", err)
+	}
+
+	channel11, ok := cfg.DirectIPCCredential(11)
+	if !ok {
+		t.Fatal("expected channel 11 direct ipc credential")
+	}
+	if channel11.DirectIPCBaseURL != "https://192.168.150.20" {
+		t.Fatalf("unexpected normalized direct ipc base url %q", channel11.DirectIPCBaseURL)
+	}
+}
+
 func TestNormalizeDeviceChannelAuxControlOverrides(t *testing.T) {
 	cfg := DeviceConfig{
 		ID:      "nvr",

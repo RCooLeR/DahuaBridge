@@ -206,6 +206,21 @@ devices:
       #     device_id: 66ECDBDPSFACBCA
       #     channel_id: "1"
       #     features: [events, light, warning_light, siren]
+      # Optional direct IPC credentials for NVR child channels. Use this when the NVR can read a channel but the
+      # real writable control surface lives on the camera itself. The bridge will still pull discovered channel IPs
+      # from the NVR inventory and will publish both the discovered IP and this configured mapping in channel state.
+      # direct_ipc_credentials:
+      #   - nvr_channel: 8
+      #     direct_ipc_ip: 192.168.150.120
+      #     # Optional explicit camera URL. Use this when the camera must be reached over HTTPS or a non-default port.
+      #     direct_ipc_base_url: http://192.168.150.120
+      #     direct_ipc_user: admin
+      #     direct_ipc_password: change-me
+      #   - nvr_channel: 11
+      #     direct_ipc_ip: 192.168.150.20
+      #     direct_ipc_base_url: https://192.168.150.20
+      #     direct_ipc_user: admin
+      #     direct_ipc_password: change-me
       # Poll interval for full probe refreshes.
       poll_interval: 30s
       # Timeout for requests to this device.
