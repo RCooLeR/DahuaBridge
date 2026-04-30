@@ -5,10 +5,7 @@ Code=DoorBell;action=Start
 --myboundary
 Content-Type: text/plain
 
-Code=AlarmLocal
-action=Start
-index=3
-
+Code=AlarmLocal;action=Start;index=3
 --myboundary
 Content-Type: text/plain
 

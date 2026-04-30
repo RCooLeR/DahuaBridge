@@ -296,6 +296,9 @@ func TestRuntimeServicesNVRRecordingsMergesBridgeClips(t *testing.T) {
 	if result.Items[0].Source != "nvr" {
 		t.Fatalf("expected NVR item first, got %+v", result.Items[0])
 	}
+	if result.Items[0].DownloadURL != "" {
+		t.Fatalf("NVR archive items must not expose unverified direct download URLs, got %q", result.Items[0].DownloadURL)
+	}
 	if result.Items[1].Source != "bridge" || result.Items[1].ClipID != "clip_1" {
 		t.Fatalf("expected bridge clip second, got %+v", result.Items[1])
 	}
@@ -438,6 +441,16 @@ func TestRuntimeServicesCreateNVRPlaybackSessionResolvesPlaybackStream(t *testin
 	}
 	if !strings.Contains(profile.StreamURL, "assistant:secret@") {
 		t.Fatalf("expected credentialed playback stream url, got %q", profile.StreamURL)
+	}
+	_, stableProfile, ok := services.GetStream(session.StreamID, "stable", true)
+	if !ok {
+		t.Fatal("expected stable playback stream to resolve")
+	}
+	if !strings.Contains(stableProfile.StreamURL, "subtype=0") {
+		t.Fatalf("expected stable playback profile to use main subtype, got %q", stableProfile.StreamURL)
+	}
+	if stableProfile.SourceWidth != 1920 || stableProfile.SourceHeight != 1080 {
+		t.Fatalf("expected stable playback profile to use main source size, got %dx%d", stableProfile.SourceWidth, stableProfile.SourceHeight)
 	}
 }
 

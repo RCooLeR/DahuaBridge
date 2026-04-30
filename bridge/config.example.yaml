@@ -19,9 +19,9 @@ http:
   write_timeout: 10s
   # Maximum idle keep-alive time for HTTP connections.
   idle_timeout: 60s
-  # Rate limit for admin/API actions per client, per minute. Increase only if you automate admin endpoints heavily.
+  # Rate limit for admin/API actions per client, per minute. Increase for heavy /admin/test-bridge diagnostics.
   admin_rate_limit_per_minute: 300
-  # Burst size for admin/API actions before rate limiting kicks in.
+  # Burst size for admin/API actions before rate limiting kicks in. Raise this if you click many diagnostics quickly.
   admin_rate_limit_burst: 10
   # Rate limit for snapshot requests per client, per minute. Snapshots can be relatively expensive on Dahua devices.
   snapshot_rate_limit_per_minute: 240
@@ -29,7 +29,7 @@ http:
   snapshot_rate_limit_burst: 40
   # Rate limit for bridge media endpoints such as MJPEG/HLS/WebRTC helper requests, per client, per minute.
   media_rate_limit_per_minute: 600
-  # Burst size for media requests before rate limiting kicks in.
+  # Burst size for media requests before rate limiting kicks in. Raise this for rapid stream switching tests.
   media_rate_limit_burst: 12
 
 # Top-level media settings used for bridge-hosted MJPEG, HLS, and WebRTC helper/transcode paths.

@@ -2,6 +2,7 @@ import { html, type TemplateResult } from "lit";
 import { repeat } from "lit/directives/repeat.js";
 
 import { renderControlButton } from "./surveillance-panel-primitives";
+import { EVENT_FILTER_ALL, type EventFilterOption } from "./surveillance-panel-state";
 import type {
   NvrArchiveRecordingModel,
   NvrArchiveSearchResultModel,
@@ -14,9 +15,13 @@ interface RenderArchiveRecordingsArgs {
   archiveLoading: boolean;
   archiveError: string;
   eventWindowHours: number;
+  archiveEventCode: string;
+  archiveEventTypeOptions: readonly EventFilterOption[];
   playbackSupported: boolean;
   isLaunchingPlayback: (recording: NvrArchiveRecordingModel) => boolean;
   isPlaybackActive: (recording: NvrArchiveRecordingModel) => boolean;
+  isDownloadingRecording: (recording: NvrArchiveRecordingModel) => boolean;
+  onSelectArchiveEventType: (eventCode: string) => void;
   onLaunchPlayback: (recording: NvrArchiveRecordingModel) => void;
   onDownloadRecording: (recording: NvrArchiveRecordingModel) => void;
   renderIcon: (icon: string) => TemplateResult;
@@ -28,9 +33,13 @@ export function renderArchiveRecordings({
   archiveLoading,
   archiveError,
   eventWindowHours,
+  archiveEventCode,
+  archiveEventTypeOptions,
   playbackSupported,
   isLaunchingPlayback,
   isPlaybackActive,
+  isDownloadingRecording,
+  onSelectArchiveEventType,
   onLaunchPlayback,
   onDownloadRecording,
   renderIcon,
@@ -61,6 +70,24 @@ export function renderArchiveRecordings({
           <span class="badge info">${eventWindowHours}h window</span>
           ${archiveRecordings?.channel
             ? html`<span class="badge">${`Channel ${archiveRecordings.channel}`}</span>`
+            : null}
+        </div>
+        <div class="archive-filter-row">
+          <label class="event-filter archive-event-filter">
+            <span class="event-filter-label">Event type</span>
+            <select
+              class="event-filter-select"
+              .value=${archiveEventCode}
+              @change=${(event: Event) =>
+                onSelectArchiveEventType((event.currentTarget as HTMLSelectElement).value)}
+            >
+              ${archiveEventTypeOptions.map(
+                (option) => html`<option value=${option.value}>${option.label}</option>`,
+              )}
+            </select>
+          </label>
+          ${archiveEventCode !== EVENT_FILTER_ALL
+            ? html`<span class="badge info">Filtered by event type</span>`
             : null}
         </div>
       </div>
@@ -94,14 +121,15 @@ export function renderArchiveRecordings({
                                 },
                               )
                             : null}
-                          ${item.downloadUrl
+                          ${item.downloadUrl || item.exportUrl
                             ? renderControlButton(
-                                "Download",
+                                item.downloadUrl ? "Download" : "Export MP4",
                                 "mdi:download",
                                 () => onDownloadRecording(item),
                                 renderIcon,
                                 {
                                   compact: true,
+                                  disabled: isDownloadingRecording(item),
                                 },
                               )
                             : null}

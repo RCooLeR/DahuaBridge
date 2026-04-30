@@ -14,7 +14,7 @@ export default defineConfig({
         inlineDynamicImports: true,
       },
     },
-    sourcemap: true,
+    sourcemap: false,
     target: "es2022",
   },
 });

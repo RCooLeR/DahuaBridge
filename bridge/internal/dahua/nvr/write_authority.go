@@ -11,6 +11,12 @@ import (
 
 const nvrConfigWriteCacheTTL = 15 * time.Minute
 
+type channelWriteStatus struct {
+	Checked time.Time
+	Allowed bool
+	Reason  string
+}
+
 func (d *Driver) nvrConfigWriteStatus(ctx context.Context) (bool, string) {
 	d.configWriteMu.RLock()
 	if d.configWriteKnown && time.Since(d.configWriteChecked) < nvrConfigWriteCacheTTL {
@@ -42,39 +48,18 @@ func (d *Driver) probeNVRConfigWriteStatus(ctx context.Context) (bool, string) {
 	}
 
 	cfg := d.currentConfig()
-	channel := 0
-	current := recordModeState{}
-	for zeroBasedChannel, state := range recordModes {
+	for zeroBasedChannel := range recordModes {
 		channelNumber := zeroBasedChannel + 1
 		if !cfg.AllowsChannel(channelNumber) {
 			continue
 		}
-		channel = channelNumber
-		current = state
-		break
-	}
-	if channel == 0 {
-		return false, "record_mode_unavailable"
+		if !cfg.AllowConfigWrites {
+			return false, "disabled_by_config"
+		}
+		return true, "enabled_by_config"
 	}
 
-	for _, tablePrefix := range []bool{false, true} {
-		body, err := d.client.GetText(ctx, "/cgi-bin/configManager.cgi", recordModeConfigQuery(channel, current.Mode, current, tablePrefix))
-		if err == nil {
-			if strings.EqualFold(strings.TrimSpace(body), "OK") {
-				return true, "ok"
-			}
-			return false, "unexpected_response"
-		}
-		if isAuthorityDeniedConfigError(err) {
-			return false, "permission_denied"
-		}
-		if isUnsupportedRecordConfigError(err) {
-			continue
-		}
-		return false, "probe_failed"
-	}
-
-	return false, "unsupported"
+	return false, "record_mode_unavailable"
 }
 
 func isAuthorityDeniedConfigError(err error) bool {
@@ -94,6 +79,10 @@ func (d *Driver) resetConfigWriteStatus() {
 	d.configWriteAllowed = false
 	d.configWriteReason = ""
 	d.configWriteMu.Unlock()
+
+	d.audioWriteMu.Lock()
+	d.audioWriteStatus = nil
+	d.audioWriteMu.Unlock()
 }
 
 func (d *Driver) requireNVRConfigWrite(ctx context.Context, channel int, operation string) error {
@@ -104,6 +93,8 @@ func (d *Driver) requireNVRConfigWrite(ctx context.Context, channel int, operati
 	switch strings.TrimSpace(reason) {
 	case "permission_denied":
 		return fmt.Errorf("%w: %s requires nvr config-write permission on channel %d", dahua.ErrUnsupportedOperation, operation, channel)
+	case "disabled_by_config":
+		return fmt.Errorf("%w: %s requires allow_config_writes=true on channel %d", dahua.ErrUnsupportedOperation, operation, channel)
 	default:
 		return fmt.Errorf("%w: %s requires an nvr config-write surface on channel %d", dahua.ErrUnsupportedOperation, operation, channel)
 	}

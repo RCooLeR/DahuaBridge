@@ -8,9 +8,8 @@ Use these pages in order:
 2. [Configuration](configuration.md)
 3. [Features](features.md)
 4. [Media And Recording](media-and-recording.md)
-5. [Dahua API Notes](dahua-api.md)
-6. [API Reference](api-reference.md)
-7. [Device And Stream Model](device-and-stream-model.md)
+5. [API Reference](api-reference.md)
+6. [Device And Stream Model](device-and-stream-model.md)
 
 ## 📚 What This Section Covers
 

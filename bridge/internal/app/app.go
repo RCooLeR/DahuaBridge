@@ -193,7 +193,7 @@ func buildDrivers(
 		if !deviceCfg.EnabledValue() {
 			continue
 		}
-		driver := nvr.New(deviceCfg, cfg.Imou, imouClient, cfg.Devices.IPC, logger, metricsRegistry, cgi.New(deviceCfg, metricsRegistry))
+		driver := nvr.New(deviceCfg, cfg.Imou, imouClient, cfg.Devices.IPC, logger, metricsRegistry, cgi.New(deviceCfg, metricsRegistry, logger))
 		drivers = append(drivers, driver)
 		services.RegisterNVR(deviceCfg.ID, driver, driver, deviceCfg)
 	}
@@ -203,7 +203,7 @@ func buildDrivers(
 			continue
 		}
 
-		driver := vto.New(deviceCfg, logger, cgi.New(deviceCfg, metricsRegistry))
+		driver := vto.New(deviceCfg, logger, cgi.New(deviceCfg, metricsRegistry, logger))
 		drivers = append(drivers, driver)
 		services.RegisterVTO(deviceCfg.ID, driver, deviceCfg)
 	}
@@ -213,7 +213,7 @@ func buildDrivers(
 			continue
 		}
 
-		driver := ipc.New(deviceCfg, logger, cgi.New(deviceCfg, metricsRegistry))
+		driver := ipc.New(deviceCfg, logger, cgi.New(deviceCfg, metricsRegistry, logger))
 		drivers = append(drivers, driver)
 		services.RegisterIPC(deviceCfg.ID, driver, deviceCfg)
 	}

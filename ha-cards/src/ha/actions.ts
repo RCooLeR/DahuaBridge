@@ -37,13 +37,17 @@ export async function postBridgeRequest(
   targetUrl: string,
   options: BridgeRequestOptions = {},
 ): Promise<void> {
+  const method = options.method ?? "POST";
+  const started = performance.now();
+  logBridgeRequest("request", method, targetUrl);
   const response = await fetch(targetUrl, {
-    method: options.method ?? "POST",
+    method,
     headers: {
       "Content-Type": "application/json",
     },
     body: options.body ? JSON.stringify(options.body) : undefined,
   });
+  logBridgeRequest("response", method, targetUrl, response.status, performance.now() - started);
 
   if (!response.ok) {
     throw new Error(`Bridge request failed with status ${response.status}`);
@@ -51,16 +55,62 @@ export async function postBridgeRequest(
 }
 
 export async function readBridgeJson<T>(targetUrl: string): Promise<T> {
+  const started = performance.now();
+  logBridgeRequest("request", "GET", targetUrl);
   const response = await fetch(targetUrl, {
     method: "GET",
     headers: {
       "Content-Type": "application/json",
     },
   });
+  logBridgeRequest("response", "GET", targetUrl, response.status, performance.now() - started);
 
   if (!response.ok) {
     throw new Error(`Bridge request failed with status ${response.status}`);
   }
 
   return (await response.json()) as T;
+}
+
+function logBridgeRequest(
+  phase: "request" | "response",
+  method: string,
+  targetUrl: string,
+  status?: number,
+  durationMs?: number,
+): void {
+  if (typeof console === "undefined" || typeof console.debug !== "function") {
+    return;
+  }
+  console.debug("[DahuaBridge]", `card bridge ${phase}`, {
+    method,
+    url: redactBridgeUrl(targetUrl),
+    status,
+    duration_ms: durationMs === undefined ? undefined : Math.round(durationMs),
+  });
+}
+
+function redactBridgeUrl(targetUrl: string): string {
+  try {
+    const parsed = new URL(targetUrl, window.location.origin);
+    for (const key of [...parsed.searchParams.keys()]) {
+      if (shouldRedactUrlParam(key)) {
+        parsed.searchParams.set(key, "[redacted]");
+      }
+    }
+    return parsed.toString();
+  } catch {
+    return targetUrl;
+  }
+}
+
+function shouldRedactUrlParam(key: string): boolean {
+  const normalized = key.trim().toLowerCase();
+  return (
+    normalized.includes("password") ||
+    normalized.includes("passwd") ||
+    normalized.includes("pwd") ||
+    normalized.includes("token") ||
+    normalized.includes("secret")
+  );
 }

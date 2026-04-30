@@ -96,7 +96,7 @@ const (
 )
 
 func New(cfg config.DeviceConfig, logger zerolog.Logger, client *cgi.Client) *Driver {
-	rpc, err := newRPCClient(cfg)
+	rpc, err := newRPCClient(cfg, logger)
 	if err != nil {
 		logger.Warn().Err(err).Str("device_id", cfg.ID).Msg("vto rpc client initialization failed")
 	}

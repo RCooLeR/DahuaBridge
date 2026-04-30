@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
@@ -63,6 +64,7 @@ class DahuaBridgeAPI:
 
     async def async_get_bytes(self, target: str) -> bytes:
         url = self._absolute_url(target)
+        started = time.monotonic()
         try:
             _LOGGER.debug("Requesting bridge bytes from %s", url)
             async with self._session.get(url) as response:
@@ -77,13 +79,22 @@ class DahuaBridgeAPI:
                     raise DahuaBridgeAPIError(
                         f"GET {url} returned {response.status}: {body}"
                     )
-                return await response.read()
+                payload = await response.read()
+                _LOGGER.debug(
+                    "Bridge bytes response: GET %s returned %s in %.3fs (%d bytes)",
+                    url,
+                    response.status,
+                    time.monotonic() - started,
+                    len(payload),
+                )
+                return payload
         except ClientError as err:
             _LOGGER.warning("Bridge request failed: GET %s raised %r", url, err)
             raise DahuaBridgeAPIError(f"GET {url} failed: {err}") from err
 
     async def async_get_mjpeg_frame(self, target: str) -> bytes:
         url = self._absolute_url(target)
+        started = time.monotonic()
         jpeg_start = b"\xff\xd8"
         jpeg_end = b"\xff\xd9"
         max_buffer = 4 * 1024 * 1024
@@ -114,8 +125,10 @@ class DahuaBridgeAPI:
                         if end >= 0:
                             frame = bytes(buffer[start : end + 2])
                             _LOGGER.debug(
-                                "Bridge MJPEG frame extracted from %s (%d bytes)",
+                                "Bridge MJPEG frame extracted from %s with status %s in %.3fs (%d bytes)",
                                 url,
+                                response.status,
+                                time.monotonic() - started,
                                 len(frame),
                             )
                             return frame
@@ -139,16 +152,21 @@ class DahuaBridgeAPI:
         self, method: str, target: str, payload: dict[str, Any] | None = None
     ) -> dict[str, Any]:
         url = self._absolute_url(target)
+        started = time.monotonic()
+        status = 0
         try:
             _LOGGER.debug("Requesting bridge JSON via %s %s", method, url)
             async with self._session.request(method, url, json=payload) as response:
+                status = response.status
                 body = await response.text()
+                duration = time.monotonic() - started
                 if response.status >= 400:
                     _LOGGER.warning(
-                        "Bridge request failed: %s %s returned %s with body %s",
+                        "Bridge request failed: %s %s returned %s in %.3fs with body %s",
                         method,
                         url,
                         response.status,
+                        duration,
                         body,
                     )
                     raise DahuaBridgeAPIError(
@@ -161,7 +179,13 @@ class DahuaBridgeAPI:
             raise DahuaBridgeAPIError(f"{method} {url} failed: {err}") from err
 
         if not body.strip():
-            _LOGGER.debug("Bridge request returned empty JSON body: %s %s", method, url)
+            _LOGGER.debug(
+                "Bridge request returned empty JSON body: %s %s returned %s in %.3fs",
+                method,
+                url,
+                status,
+                time.monotonic() - started,
+            )
             return {}
 
         try:
@@ -188,7 +212,13 @@ class DahuaBridgeAPI:
             raise DahuaBridgeAPIError(
                 f"{method} {url} returned unexpected payload type"
             )
-        _LOGGER.debug("Bridge request succeeded: %s %s", method, url)
+        _LOGGER.debug(
+            "Bridge JSON response: %s %s returned %s in %.3fs",
+            method,
+            url,
+            status,
+            time.monotonic() - started,
+        )
         return payload
 
     def _absolute_url(self, target: str) -> str:

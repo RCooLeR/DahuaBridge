@@ -370,15 +370,14 @@ export class DahuaBridgeSurveillanceTileCard
                     )}
                   </div>
                   <div class="tile-controls">
-                    ${renderIconButton(
-                      "Snapshot",
-                      "mdi:camera",
-                      () => this.openWindow(this.resolveSnapshotUrl(camera)),
-                      this.renderIcon,
-                      {
-                        disabled: !this.hasSnapshot(camera),
-                      },
-                    )}
+                    ${this.hasSnapshot(camera)
+                      ? renderIconButton(
+                          "Snapshot",
+                          "mdi:camera",
+                          () => this.openWindow(this.resolveSnapshotUrl(camera)),
+                          this.renderIcon,
+                        )
+                      : nothing}
                     ${camera.supportsRecording
                       ? renderIconButton(
                           camera.bridgeRecordingActive ? "Stop MP4" : "Start MP4",
@@ -509,46 +508,46 @@ export class DahuaBridgeSurveillanceTileCard
                       : nothing}
                   </div>
                   <div class="tile-controls">
-                    ${renderIconButton(
-                      this._vtoStreamPlaying ? "Stop Stream" : "Play Stream",
-                      this._vtoStreamPlaying ? "mdi:stop-circle-outline" : "mdi:play-circle-outline",
-                      () => {
-                        const previousPlaying = this._vtoStreamPlaying;
-                        this._vtoStreamPlaying = !this._vtoStreamPlaying;
-                        if (!this._vtoStreamPlaying && this._vtoMicrophoneState.enabled) {
-                          void this.stopVtoMicrophone();
-                        }
-                        this.requestUpdate("_vtoStreamPlaying", previousPlaying);
-                      },
-                      this.renderIcon,
-                      {
-                        disabled: !this.hasPlayableVtoStream(vto),
-                        tone: this._vtoStreamPlaying ? "warning" : "primary",
-                        active: this._vtoStreamPlaying,
-                      },
-                    )}
-                    ${renderIconButton(
-                      "Snapshot",
-                      "mdi:camera",
-                      () => this.openWindow(this.resolveVtoSnapshotUrl(vto)),
-                      this.renderIcon,
-                      {
-                        disabled: !this.hasVtoSnapshot(vto),
-                      },
-                    )}
-                    ${renderIconButton(
-                      vto.bridgeRecordingActive ? "Stop MP4" : "Start MP4",
-                      vto.bridgeRecordingActive ? "mdi:record-rec" : "mdi:record-circle-outline",
-                      () => void this.triggerVtoBridgeRecording(vto),
-                      this.renderIcon,
-                      {
-                        disabled:
-                          this._actions.isBusy("vto:bridge_recording") ||
-                          (!vto.recordingStartUrl && !vto.recordingStopUrl),
-                        tone: vto.bridgeRecordingActive ? "danger" : "warning",
-                        active: vto.bridgeRecordingActive,
-                      },
-                    )}
+                    ${this.hasPlayableVtoStream(vto)
+                      ? renderIconButton(
+                          this._vtoStreamPlaying ? "Stop Stream" : "Play Stream",
+                          this._vtoStreamPlaying ? "mdi:stop-circle-outline" : "mdi:play-circle-outline",
+                          () => {
+                            const previousPlaying = this._vtoStreamPlaying;
+                            this._vtoStreamPlaying = !this._vtoStreamPlaying;
+                            if (!this._vtoStreamPlaying && this._vtoMicrophoneState.enabled) {
+                              void this.stopVtoMicrophone();
+                            }
+                            this.requestUpdate("_vtoStreamPlaying", previousPlaying);
+                          },
+                          this.renderIcon,
+                          {
+                            tone: this._vtoStreamPlaying ? "warning" : "primary",
+                            active: this._vtoStreamPlaying,
+                          },
+                        )
+                      : nothing}
+                    ${this.hasVtoSnapshot(vto)
+                      ? renderIconButton(
+                          "Snapshot",
+                          "mdi:camera",
+                          () => this.openWindow(this.resolveVtoSnapshotUrl(vto)),
+                          this.renderIcon,
+                        )
+                      : nothing}
+                    ${vto.recordingStartUrl || vto.recordingStopUrl
+                      ? renderIconButton(
+                          vto.bridgeRecordingActive ? "Stop MP4" : "Start MP4",
+                          vto.bridgeRecordingActive ? "mdi:record-rec" : "mdi:record-circle-outline",
+                          () => void this.triggerVtoBridgeRecording(vto),
+                          this.renderIcon,
+                          {
+                            disabled: this._actions.isBusy("vto:bridge_recording"),
+                            tone: vto.bridgeRecordingActive ? "danger" : "warning",
+                            active: vto.bridgeRecordingActive,
+                          },
+                        )
+                      : nothing}
                     ${showCallActions && (vto.hasUnlockButtonEntity || Boolean(vto.unlockActionUrl))
                       ? renderIconButton(
                           "Unlock",
@@ -623,20 +622,21 @@ export class DahuaBridgeSurveillanceTileCard
                           },
                         )
                       : nothing}
-                    ${renderIconButton(
-                      this._vtoMicrophoneState.enabled ? "Disable Mic" : "Enable Mic",
-                      this._vtoMicrophoneState.enabled ? "mdi:microphone-off" : "mdi:microphone",
-                      () =>
-                        void (this._vtoMicrophoneState.enabled
-                          ? this.stopVtoMicrophone()
-                          : this.startVtoMicrophone(vto)),
-                      this.renderIcon,
-                      {
-                        disabled: !this.hasAvailableVtoIntercom(vto),
-                        tone: this._vtoMicrophoneState.enabled ? "warning" : undefined,
-                        active: this._vtoMicrophoneState.enabled,
-                      },
-                    )}
+                    ${vto.capabilities.browserMicrophoneSupported && this.hasAvailableVtoIntercom(vto)
+                      ? renderIconButton(
+                          this._vtoMicrophoneState.enabled ? "Disable Mic" : "Enable Mic",
+                          this._vtoMicrophoneState.enabled ? "mdi:microphone-off" : "mdi:microphone",
+                          () =>
+                            void (this._vtoMicrophoneState.enabled
+                              ? this.stopVtoMicrophone()
+                              : this.startVtoMicrophone(vto)),
+                          this.renderIcon,
+                          {
+                            tone: this._vtoMicrophoneState.enabled ? "warning" : undefined,
+                            active: this._vtoMicrophoneState.enabled,
+                          },
+                        )
+                      : nothing}
                   </div>
                 </div>
               </div>

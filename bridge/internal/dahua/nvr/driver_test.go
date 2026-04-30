@@ -320,6 +320,176 @@ func TestDriverFindRecordingsUsesRPCMediaFileFind(t *testing.T) {
 	}
 }
 
+func TestDriverFindRecordingsEventFilterUsesRPCEventLog(t *testing.T) {
+	loginRequests := 0
+	var rpcCalls []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/RPC2_Login":
+			loginRequests++
+			if loginRequests == 1 {
+				_, _ = w.Write([]byte(`{"id":1,"params":{"realm":"Login to Test","random":"12345","encryption":"Default"},"result":false,"session":"sess1","error":{"code":268632079,"message":"challenge"}}`))
+				return
+			}
+			_, _ = w.Write([]byte(`{"id":2,"params":{},"result":true,"session":"sess2"}`))
+		case "/RPC2":
+			var payload struct {
+				Method string         `json:"method"`
+				Params map[string]any `json:"params"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				t.Fatalf("decode rpc request: %v", err)
+			}
+			rpcCalls = append(rpcCalls, payload.Method)
+			switch payload.Method {
+			case "log.startFind":
+				condition, ok := payload.Params["condition"].(map[string]any)
+				if !ok {
+					t.Fatalf("missing log condition: %#v", payload.Params)
+				}
+				rawTypes, ok := condition["Types"].([]any)
+				if !ok {
+					t.Fatalf("missing log Types: %#v", condition)
+				}
+				types := make([]string, 0, len(rawTypes))
+				for _, rawType := range rawTypes {
+					value, ok := rawType.(string)
+					if !ok {
+						t.Fatalf("unexpected log type %#v", rawType)
+					}
+					types = append(types, value)
+				}
+				if containsString(types, "Event") {
+					t.Fatalf("event log filter must not include broad Event type: %+v", types)
+				}
+				if !containsString(types, "Event.VideoMotion.Start") || !containsString(types, "Event.VideoMotion.Stop") {
+					t.Fatalf("expected VideoMotion log types, got %+v", types)
+				}
+				if condition["Order"] != "Descent" || condition["Translate"] != true {
+					t.Fatalf("unexpected log condition %+v", condition)
+				}
+				_, _ = w.Write([]byte(`{"id":10,"params":{"token":67108871},"result":true,"session":"sess2"}`))
+			case "log.getCount":
+				if payload.Params["token"] != float64(67108871) {
+					t.Fatalf("unexpected count token %#v", payload.Params["token"])
+				}
+				_, _ = w.Write([]byte(`{"id":11,"params":{"count":3},"result":true,"session":"sess2"}`))
+			case "log.doSeekFind":
+				if payload.Params["token"] != float64(67108871) {
+					t.Fatalf("unexpected seek token %#v", payload.Params["token"])
+				}
+				_, _ = w.Write([]byte(`{"id":12,"params":{"found":3,"items":[{"Channel":1,"Code":"VideoMotion","Time":"2026-04-30 12:00:30","Type":"Motion Detect","Detail":"motion started"},{"Channel":2,"Code":"VideoMotion","Time":"2026-04-30 12:00:40","Type":"Motion Detect"},{"Channel":1,"Code":"NetMonitorAbort","Time":"2026-04-30 12:01:00","Type":"Network"}]},"result":true,"session":"sess2"}`))
+			default:
+				http.Error(w, "unexpected rpc method", http.StatusBadRequest)
+			}
+		default:
+			http.Error(w, "unexpected path", http.StatusBadRequest)
+		}
+	}))
+	defer server.Close()
+
+	cfg := config.DeviceConfig{
+		ID:               "west20_nvr",
+		BaseURL:          server.URL,
+		Username:         "assistant",
+		Password:         "secret",
+		ChannelAllowlist: []int{1},
+		RequestTimeout:   5 * time.Second,
+	}
+	metricsRegistry := metrics.New(buildinfo.Info())
+	driver := New(cfg, config.ImouConfig{}, nil, nil, zerolog.Nop(), metricsRegistry, cgi.New(cfg, metricsRegistry))
+
+	got, err := driver.FindRecordings(context.Background(), dahua.NVRRecordingQuery{
+		Channel:   1,
+		StartTime: time.Date(2026, 4, 30, 11, 59, 0, 0, time.Local),
+		EndTime:   time.Date(2026, 4, 30, 12, 5, 0, 0, time.Local),
+		Limit:     10,
+		EventCode: "motion",
+	})
+	if err != nil {
+		t.Fatalf("FindRecordings returned error: %v", err)
+	}
+	if got.DeviceID != "west20_nvr" || got.Channel != 1 || got.ReturnedCount != 1 {
+		t.Fatalf("unexpected search result %+v", got)
+	}
+	if len(got.Items) != 1 {
+		t.Fatalf("expected one event item, got %+v", got.Items)
+	}
+	item := got.Items[0]
+	if item.Source != "nvr_event" || item.FilePath != "" || item.Type != "Event.VideoMotion" {
+		t.Fatalf("unexpected event recording %+v", item)
+	}
+	if item.StartTime != "2026-04-30 12:00:15" || item.EndTime != "2026-04-30 12:01:15" {
+		t.Fatalf("unexpected event playback window %+v", item)
+	}
+	if !containsString(item.Flags, "Event") || !containsString(item.Flags, "VideoMotion") {
+		t.Fatalf("expected event flags, got %+v", item.Flags)
+	}
+	if len(rpcCalls) != 3 || rpcCalls[0] != "log.startFind" || rpcCalls[1] != "log.getCount" || rpcCalls[2] != "log.doSeekFind" {
+		t.Fatalf("unexpected rpc sequence %+v", rpcCalls)
+	}
+}
+
+func TestDriverFindRecordingsEventFilterUsesEventFlagAndDropsTimingResults(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Query().Get("action") {
+		case "factory.create":
+			_, _ = w.Write([]byte("result=handle1\n"))
+		case "findFile":
+			query := r.URL.Query()
+			if query.Get("condition.Events[0]") != "VideoMotion" {
+				t.Fatalf("expected VideoMotion event condition, got %+v", query)
+			}
+			if query.Get("condition.Flag[0]") != "Event" {
+				t.Fatalf("expected Event flag condition, got %+v", query)
+			}
+			_, _ = w.Write([]byte("OK"))
+		case "findNextFile":
+			_, _ = w.Write([]byte(
+				"found=1\n" +
+					"items[0].Channel=0\n" +
+					"items[0].StartTime=2026-04-30 00:00:00\n" +
+					"items[0].EndTime=2026-04-30 00:10:00\n" +
+					"items[0].FilePath=/mnt/dvr/2026-04-30/0/dav/00.00.00-00.10.00[R][0@0][0].dav\n" +
+					"items[0].Type=dav\n" +
+					"items[0].VideoStream=Main\n" +
+					"items[0].Flags[0]=Timing\n",
+			))
+		case "close":
+			_, _ = w.Write([]byte("OK"))
+		default:
+			http.Error(w, "unexpected action", http.StatusBadRequest)
+		}
+	}))
+	defer server.Close()
+
+	cfg := config.DeviceConfig{
+		ID:               "west20_nvr",
+		BaseURL:          server.URL,
+		Username:         "assistant",
+		Password:         "secret",
+		ChannelAllowlist: []int{1},
+		RequestTimeout:   5 * time.Second,
+	}
+	metricsRegistry := metrics.New(buildinfo.Info())
+	driver := New(cfg, config.ImouConfig{}, nil, nil, zerolog.Nop(), metricsRegistry, cgi.New(cfg, metricsRegistry))
+	driver.rpc = nil
+
+	got, err := driver.FindRecordings(context.Background(), dahua.NVRRecordingQuery{
+		Channel:   1,
+		StartTime: time.Date(2026, 4, 30, 0, 0, 0, 0, time.UTC),
+		EndTime:   time.Date(2026, 4, 30, 0, 10, 0, 0, time.UTC),
+		Limit:     10,
+		EventCode: "motion",
+	})
+	if err != nil {
+		t.Fatalf("FindRecordings returned error: %v", err)
+	}
+	if got.ReturnedCount != 0 || len(got.Items) != 0 {
+		t.Fatalf("expected regular timing result to be hidden for event filter, got %+v", got)
+	}
+}
+
 func TestSummarizeDisks(t *testing.T) {
 	summary := summarizeDisks([]diskInventory{
 		{

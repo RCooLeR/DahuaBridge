@@ -155,6 +155,10 @@ NVR entries also commonly use:
 
 - `channel_allowlist`
 - `onvif_*`
+- `allow_config_writes`, default `false`; set to `true` only when the bridge is allowed to change NVR config values such as record mode or stream-audio state
+- `direct_ipc`, when direct-camera API calls are needed for a channel; `/admin/test-bridge` uses these credentials for direct IPC lighting, audio, and raw PTZ CGI diagnostics
+
+For heavy use of `/admin/test-bridge`, raise `http.admin_rate_limit_per_minute` and `http.admin_rate_limit_burst` enough for repeated button testing.
 
 ## ✅ Configuration Advice
 
@@ -163,6 +167,7 @@ NVR entries also commonly use:
 - only enable hardware acceleration after confirming it works in your environment
 - use `media.enabled: false` only if you do not want bridge-hosted snapshots, HLS, MJPEG, WebRTC helpers, or bridge-owned clip recording
 - keep `channel_allowlist`, `lock_allowlist`, and `alarm_allowlist` narrow if your devices expose unused placeholders
+- leave `allow_config_writes` disabled unless NVR config mutation has been approved for that installation
 
 ## 📚 Next Step
 

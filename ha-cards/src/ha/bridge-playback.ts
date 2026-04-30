@@ -95,7 +95,7 @@ export async function seekPlaybackSession(
   browserBridgeUrl?: string | null,
   signal?: AbortSignal,
 ): Promise<NvrPlaybackSessionModel> {
-  const response = await fetch(seekUrl.replace("{session_id}", encodeURIComponent(sessionID)), {
+  const response = await fetch(resolvePlaybackSeekUrl(seekUrl, sessionID), {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -138,6 +138,15 @@ export async function seekPlaybackSession(
       ]),
     ),
   };
+}
+
+function resolvePlaybackSeekUrl(seekUrl: string, sessionID: string): string {
+  const encodedSessionID = encodeURIComponent(sessionID);
+  return seekUrl
+    .replace(/\{session_id\}/gi, encodedSessionID)
+    .replace(/\{sessionId\}/g, encodedSessionID)
+    .replace(/%7Bsession_id%7D/gi, encodedSessionID)
+    .replace(/%7BsessionId%7D/g, encodedSessionID);
 }
 
 export function createPlaybackSessionFromRecording(

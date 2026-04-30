@@ -37,16 +37,18 @@ The panel supports:
 - bridge event polling
 - recent event timeline display
 - event window selection
-- filtering by room, device kind, severity, and event code
+- filtering by event type and date window
 
 ## 5. Archive And Playback Workflows
 
 The panel supports:
 
 - NVR archive search
+- event type and date window filters for archive searches
 - selected-camera archive browsing
 - inline playback session creation
 - playback seek and playback source switching
+- native NVR archive export to bridge MP4, followed by download when the export clip completes
 
 ## 6. Device Actions
 
@@ -59,6 +61,8 @@ Depending on what the bridge exposes for a device, the cards can surface:
 - VTO call, lock, and intercom actions
 
 The cards do not invent capabilities on their own. They render what the bridge and integration already expose.
+
+Controls without a real Home Assistant entity or bridge action URL are hidden in overview, tile, and selected-device views rather than shown as dead buttons.
 
 ## Related Docs
 

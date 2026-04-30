@@ -16,6 +16,7 @@ You need:
 Use the bridge guide:
 
 - [bridge/docs/getting-started.md](../bridge/docs/getting-started.md)
+- [github-deploy.md](github-deploy.md)
 
 That guide covers:
 
@@ -35,6 +36,7 @@ At minimum, confirm:
 - `/api/v1/devices`
 - `/api/v1/home-assistant/native/catalog`
 - `/admin`
+- `/admin/test-bridge`
 
 These are documented in:
 

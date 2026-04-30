@@ -77,6 +77,7 @@ export interface NvrArchiveRecordingModel {
   startTime: string;
   endTime: string;
   downloadUrl: string | null;
+  exportUrl: string | null;
   filePath: string | null;
   type: string | null;
   videoStream: string | null;
@@ -86,6 +87,15 @@ export interface NvrArchiveRecordingModel {
   lengthBytes: number | null;
   cutLengthBytes: number | null;
   flags: string[];
+}
+
+export interface NvrArchiveExportClipModel {
+  id: string;
+  status: "recording" | "completed" | "failed" | string;
+  downloadUrl: string | null;
+  selfUrl: string | null;
+  durationMs: number | null;
+  error: string | null;
 }
 
 export interface NvrArchiveSearchResultModel {

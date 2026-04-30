@@ -31,6 +31,7 @@ type adminActions struct {
 	auxControllers    map[string]dahua.NVRAuxController
 	audioControllers  map[string]dahua.NVRAudioController
 	recordControllers map[string]dahua.NVRRecordingController
+	nvrDiagnostics    map[string]dahua.NVRDiagnosticController
 	nvrRefresh        map[string]dahua.NVRInventoryRefresher
 	configure         map[string]dahua.ConfigurableDriver
 }
@@ -63,6 +64,7 @@ func newAdminActions(
 		auxControllers:    make(map[string]dahua.NVRAuxController),
 		audioControllers:  make(map[string]dahua.NVRAudioController),
 		recordControllers: make(map[string]dahua.NVRRecordingController),
+		nvrDiagnostics:    make(map[string]dahua.NVRDiagnosticController),
 		nvrRefresh:        make(map[string]dahua.NVRInventoryRefresher),
 		configure:         make(map[string]dahua.ConfigurableDriver),
 	}
@@ -98,6 +100,9 @@ func newAdminActions(
 		}
 		if controller, ok := driver.(dahua.NVRRecordingController); ok && driver.Kind() == dahua.DeviceKindNVR {
 			actions.recordControllers[driver.ID()] = controller
+		}
+		if controller, ok := driver.(dahua.NVRDiagnosticController); ok && driver.Kind() == dahua.DeviceKindNVR {
+			actions.nvrDiagnostics[driver.ID()] = controller
 		}
 		if refresher, ok := driver.(dahua.NVRInventoryRefresher); ok && driver.Kind() == dahua.DeviceKindNVR {
 			actions.nvrRefresh[driver.ID()] = refresher
@@ -267,6 +272,14 @@ func (a *adminActions) ControlNVRRecording(ctx context.Context, deviceID string,
 		return fmt.Errorf("%w: %s", dahua.ErrDeviceNotFound, deviceID)
 	}
 	return controller.Recording(ctx, request)
+}
+
+func (a *adminActions) NVRDiagnosticAction(ctx context.Context, deviceID string, request dahua.NVRDiagnosticActionRequest) (dahua.NVRDiagnosticActionResult, error) {
+	controller, ok := a.nvrDiagnostics[deviceID]
+	if !ok {
+		return dahua.NVRDiagnosticActionResult{}, fmt.Errorf("%w: %s", dahua.ErrDeviceNotFound, deviceID)
+	}
+	return controller.DiagnosticAction(ctx, request)
 }
 
 func (a *adminActions) ProbeAllDevices(ctx context.Context) []dahua.ProbeActionResult {

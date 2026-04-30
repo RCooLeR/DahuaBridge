@@ -150,6 +150,14 @@ Verified working:
 - CGI `mediaFileFind.cgi` archive search
 - RPC2 `configManager.getConfig`
 - RPC2 `mediaFileFind.factory.create/findFile/findNextFile/close/destroy`
+- NVR channel control calls through the bridge:
+  - PTZ pulse on channel `5`
+  - aux light start/stop on channel `5`
+  - warning light start/stop on channel `5`
+  - siren pulse on channel `5`
+  - stream-audio mute toggle and restore on channels `1` through `11`
+  - recorder mode `start` then `auto` restore on channel `5`
+- archive playback sessions, session lookup, seek, HLS playback, and MP4 export by capturing the playback RTSP stream with FFmpeg
 
 Verified not working on this hardware/account combination:
 
@@ -163,6 +171,7 @@ Interpretation:
 - the configured NVR account is currently write-capable for at least `RecordMode` and `Encode[*].MainFormat[*].AudioEnable`
 - camera-centric APIs used by `rroller/dahua` are not automatically valid on NVR child channels
 - `Lighting_V2` exists and is readable on the NVR, but camera-centric keys like `VideoInOptions[*].NightOptions.SwitchMode` are still not exposed there
+- direct native HTTP archive download through the generic Dahua file endpoint failed during live testing; bridge-side MP4 export is the reliable download path
 
 ### 3.2 VTO
 
@@ -194,12 +203,21 @@ Verified working:
   - `magicBox.getDeviceType`
   - `configManager.getConfig`
   - `eventManager.attach`
+- bridge VTO controls:
+  - `audio/output-volume` writes for both configured output slots
+  - `audio/input-volume` writes for both configured input slots
+  - `audio/mute` toggle and restore
+  - `recording` current-state write
+  - `intercom/reset`
+  - `call/hangup` while idle
 
 Verified behavior details:
 
 - `VideoTalkPhone.getCallState` returned `Idle`
 - `VideoTalkPhone.answer`, `disconnect`, and `endCall` returned service errors while idle
   - that is expected enough to prove the methods exist, but it is not a full call-flow validation
+- `intercom/uplink/enable` returned `503` when no external RTP uplink target was configured
+- VTO lock output was intentionally not fired during the April 30, 2026 live regression
 
 ### 3.3 Direct IPC
 
@@ -481,7 +499,40 @@ Live result:
 - `findFile` returned `OK`
 - `findNextFile` returned item lines for actual `.dav` recordings on the NVR
 
-### 4.7 `devVideoInput.cgi?action=getCaps`
+### 4.7 NVR Archive Playback And MP4 Export
+
+Native NVR archive items are `.dav` files. On the verified NVR, direct generic HTTP file download was not reliable, so the bridge downloads archive footage by playing the archive stream and capturing it to MP4 with FFmpeg.
+
+Working playback RTSP shape:
+
+```text
+rtsp://<nvr>:554/cam/realmonitor?channel=<1-based-channel>&subtype=<0-or-1>&starttime=YYYY_MM_DD_HH_mm_ss&endtime=YYYY_MM_DD_HH_mm_ss
+```
+
+Bridge flow:
+
+1. `GET /api/v1/nvr/{deviceID}/recordings` finds native archive items.
+2. Native items expose `export_url`, not `download_url`.
+3. `POST /api/v1/nvr/{deviceID}/recordings/export` creates an archive playback session.
+4. The media layer records the playback stream to a bridge-owned MP4 clip.
+5. Clients poll the returned clip `self_url` until `status=completed`, then open `download_url`.
+
+The export endpoint accepts query parameters or JSON body fields:
+
+```json
+{
+  "channel": 5,
+  "start_time": "2026-04-30 10:04:12",
+  "end_time": "2026-04-30 10:30:03",
+  "seek_time": "2026-04-30 10:04:12",
+  "profile": "stable",
+  "duration_seconds": 4
+}
+```
+
+If no duration is supplied, the bridge records from `seek_time` or `start_time` until `end_time`.
+
+### 4.8 `devVideoInput.cgi?action=getCaps`
 
 Purpose:
 
@@ -506,7 +557,7 @@ Useful direct-camera fields observed live:
 - `caps.ExposureMode=...`
 - `caps.BrightnessCompensation=true`
 
-### 4.8 Camera-Centric CGI Calls From `rroller/dahua`
+### 4.9 Camera-Centric CGI Calls From `rroller/dahua`
 
 These calls exist in `rroller/dahua`, but they split into two different realities for our hardware.
 
@@ -530,6 +581,9 @@ Reality on the current NVR:
 - `coaxialControlIO` for channel `5` returned HTTP `400`
 - `VideoInOptions[4].NightOptions.SwitchMode` was not exposed
 - idempotent `RecordMode[...]` and `Encode[...].AudioEnable` writes returned `OK`
+- the working NVR PTZ/aux control path is `/cgi-bin/ptz.cgi?action=start|stop&channel=<1-based>&code=<Up|Down|Left|Right|Light|Aux|Wiper>&arg1=0&arg2=<speed-or-1>&arg3=0`
+- recorder mode writes use `configManager.cgi?action=setConfig&RecordMode[<zero-based>].Mode=<0|1|2>&RecordMode[...].ModeExtra1=2&RecordMode[...].ModeExtra2=2`, where `0=auto`, `1=manual`, and `2=stop`
+- stream-audio mute writes use `Encode[<zero-based>].MainFormat[0].AudioEnable=<true|false>` or the equivalent direct-IPC key when a direct IPC target is configured
 
 Conclusion:
 
@@ -616,6 +670,14 @@ Live result sample:
   ]
 }
 ```
+
+Event-filtered archive search uses the NVR web UI log flow instead of `mediaFileFind`, because tested firmware returned regular schedule files for event-filtered media searches. Verified sequence:
+
+1. `log.startFind` with `condition.Types` such as `Event.VideoMotion.Start` and `Event.VideoMotion.Stop`
+2. `log.getCount`
+3. `log.doSeekFind`
+
+The bridge maps matching log rows to synthetic `nvr_event` playback windows around the event timestamp, then uses the normal archive playback/export path for video.
 
 ### 5.3 NVR `configManager.getConfig`
 
@@ -804,7 +866,7 @@ Practical conclusion:
 
 - camera-centric `coaxialControlIO` assumptions do not hold for our NVR channels
 - `VideoInOptions[*].NightOptions.SwitchMode` is not exposed on this NVR
-- plain CGI `setConfig` writes do not work with our configured NVR account
+- plain CGI `setConfig` writes are operation-specific on the NVR; `RecordMode` and stream-audio writes work with the configured assistant account, while camera-centric NVR-child keys still fail
 - `Lighting_V2` write behavior is not uniform even across direct IPC models
 - VTO event handling in `rroller/dahua` is DHIP-centric, but our bridge currently succeeds with CGI event streaming
 
@@ -815,13 +877,14 @@ Use these rules when implementing bridge behavior:
 1. Treat NVR recording search as:
    - primary: RPC2 `mediaFileFind`
    - fallback: CGI `mediaFileFind.cgi`
-2. Treat NVR channel writes as available only for operations that have been verified on the current firmware and credential set.
-3. For mapped direct IPC channels, prefer direct camera `setConfig` over NVR-side guesses.
-4. Strip the `table.` prefix from `getConfig` output before building `setConfig` writes.
-5. Do not assume camera APIs from `rroller/dahua` apply to NVR child channels.
-6. Treat `Lighting_V2` as model-specific even on direct IPCs; on the current hardware it is writable on `DH-IPC-HFW2849S-S-IL`, `DH-IPC-HFW2849S-S-IL-BE`, `DH-T4A-PV`, and `DH-H4C-GE`, but not on `DH-IPC-HFW1430DS1-SAW`.
-7. For direct IPC capability probes, use `devVideoInput.cgi?action=getCaps&channel=1`.
-8. Treat VTO as two separate control families:
+2. Treat NVR archive download/export as playback-stream capture to MP4, not direct `.dav` file download.
+3. Treat NVR channel writes as available only for operations that have been verified on the current firmware and credential set.
+4. For mapped direct IPC channels, prefer direct camera `setConfig` over NVR-side guesses.
+5. Strip the `table.` prefix from `getConfig` output before building `setConfig` writes.
+6. Do not assume camera APIs from `rroller/dahua` apply to NVR child channels.
+7. Treat `Lighting_V2` as model-specific even on direct IPCs; on the current hardware it is writable on `DH-IPC-HFW2849S-S-IL`, `DH-IPC-HFW2849S-S-IL-BE`, `DH-T4A-PV`, and `DH-H4C-GE`, but not on `DH-IPC-HFW1430DS1-SAW`.
+8. For direct IPC capability probes, use `devVideoInput.cgi?action=getCaps&channel=1`.
+9. Treat VTO as two separate control families:
    - CGI config surfaces for inventory and config-backed state
    - RPC2 for call-state and call-control methods
-9. Keep per-device capability validation tied to live probes and not to model-name guesses alone.
+10. Keep per-device capability validation tied to live probes and not to model-name guesses alone.

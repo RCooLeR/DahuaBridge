@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 
 import type { TimelineEvent } from "../src/domain/events";
 import {
-  EVENT_FILTER_ALL,
   buildTimelineEventFilterOptions,
   defaultTimelineEventFilters,
   filterTimelineEvents,
@@ -27,7 +26,7 @@ const BASE_EVENT: TimelineEvent = {
 };
 
 describe("timeline event filters", () => {
-  it("filters events by room, device kind, severity, and code", () => {
+  it("filters events by event code only", () => {
     const events: TimelineEvent[] = [
       BASE_EVENT,
       {
@@ -44,9 +43,6 @@ describe("timeline event filters", () => {
     ];
 
     const filters = defaultTimelineEventFilters();
-    filters.roomLabel = "Garage";
-    filters.deviceKind = "ipc";
-    filters.severity = "info";
     filters.eventCode = "human";
 
     const filtered = filterTimelineEvents(events, filters);
@@ -68,12 +64,6 @@ describe("timeline event filters", () => {
       },
     ]);
 
-    expect(options.rooms[0]?.value).toBe(EVENT_FILTER_ALL);
-    expect(options.rooms.some((option) => option.value === "Front Gate")).toBe(true);
-    expect(options.rooms.some((option) => option.value === "Unassigned")).toBe(true);
-    expect(options.deviceKinds.some((option) => option.value === "channel")).toBe(true);
-    expect(options.deviceKinds.some((option) => option.value === "vto")).toBe(true);
-    expect(options.severities.some((option) => option.value === "critical")).toBe(true);
     expect(options.eventCodes.some((option) => option.value === "motion")).toBe(true);
     expect(options.eventCodes.some((option) => option.value === "tamper")).toBe(true);
   });
