@@ -193,7 +193,7 @@ func buildDrivers(
 		if !deviceCfg.EnabledValue() {
 			continue
 		}
-		driver := nvr.New(deviceCfg, cfg.Imou, imouClient, logger, cgi.New(deviceCfg, metricsRegistry))
+		driver := nvr.New(deviceCfg, cfg.Imou, imouClient, cfg.Devices.IPC, logger, metricsRegistry, cgi.New(deviceCfg, metricsRegistry))
 		drivers = append(drivers, driver)
 		services.RegisterNVR(deviceCfg.ID, driver, driver, deviceCfg)
 	}

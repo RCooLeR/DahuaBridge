@@ -41,6 +41,9 @@ func (d *Driver) Recording(ctx context.Context, request dahua.NVRRecordingReques
 	if !ok {
 		return fmt.Errorf("%w: recording controls are not supported on channel %d", dahua.ErrUnsupportedOperation, request.Channel)
 	}
+	if err := d.requireNVRConfigWrite(ctx, request.Channel, "recording control"); err != nil {
+		return err
+	}
 
 	switch request.Action {
 	case dahua.NVRRecordingActionStart:
@@ -57,7 +60,13 @@ func (d *Driver) recordingCapabilities(ctx context.Context, channel int) (dahua.
 	if err != nil {
 		return dahua.NVRRecordingCapabilities{}, err
 	}
-	return d.applyRecordingOverride(channel, recordingCapabilitiesForChannel(channel, recordModes)), nil
+	capabilities := d.applyRecordingOverride(channel, recordingCapabilitiesForChannel(channel, recordModes))
+	if capabilities.Supported {
+		if writable, _ := d.nvrConfigWriteStatus(ctx); !writable {
+			capabilities.Supported = false
+		}
+	}
+	return capabilities, nil
 }
 
 func (d *Driver) loadRecordModes(ctx context.Context) (map[int]recordModeState, error) {
@@ -72,6 +81,9 @@ func (d *Driver) loadRecordModes(ctx context.Context) (map[int]recordModeState, 
 }
 
 func (d *Driver) setChannelRecordMode(ctx context.Context, channel int, mode int, current recordModeState) error {
+	if err := d.requireNVRConfigWrite(ctx, channel, "recording control"); err != nil {
+		return err
+	}
 	for _, tablePrefix := range []bool{false, true} {
 		body, err := d.client.GetText(ctx, "/cgi-bin/configManager.cgi", recordModeConfigQuery(channel, mode, current, tablePrefix))
 		if err != nil {

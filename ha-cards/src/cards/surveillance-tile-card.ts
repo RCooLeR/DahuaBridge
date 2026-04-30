@@ -439,7 +439,9 @@ export class DahuaBridgeSurveillanceTileCard
                       : nothing}
                     ${camera.audioCodec.trim()
                       ? renderIconButton(
-                          this._cameraAudioMuted ? "Unmute Audio" : "Mute Audio",
+                          this._cameraAudioMuted
+                            ? "Enable Stream Audio"
+                            : "Disable Stream Audio",
                           this._cameraAudioMuted ? "mdi:volume-high" : "mdi:volume-off",
                           () => void this.toggleCameraAudio(camera),
                           this.renderIcon,

@@ -310,6 +310,9 @@ func (d *Driver) Aux(ctx context.Context, request dahua.NVRAuxRequest) error {
 	if !hasAuxOutput(auxCapabilities.Outputs, spec.canonical) {
 		return fmt.Errorf("%w: aux output %q is not supported on channel %d", dahua.ErrUnsupportedOperation, request.Output, request.Channel)
 	}
+	if spec.canonical == "light" && d.directIPCLightingWritable(ctx, request.Channel) {
+		return d.setDirectIPCLightingMode(ctx, request.Channel, request.Action)
+	}
 
 	switch spec.controlType {
 	case auxControlTypeLightMode:
@@ -355,7 +358,11 @@ func (d *Driver) auxCapabilities(_ context.Context, channel int, ptz dahua.NVRPT
 
 	var outputs []string
 	var features []string
-	if ptz.Aux {
+	usePTZAux := ptz.Aux
+	if usePTZAux && d.directIPCLightingWritable(context.Background(), channel) && !ptzMovementSupported(ptz) {
+		usePTZAux = false
+	}
+	if usePTZAux {
 		outputs = normalizeAuxOutputs(ptz.AuxFunctions)
 		if !hasAuxOutput(outputs, "aux") {
 			outputs = append(outputs, "aux")
@@ -370,6 +377,10 @@ func (d *Driver) auxCapabilities(_ context.Context, channel int, ptz dahua.NVRPT
 		if len(outputs) > 0 {
 			features = uniqueSortedStrings(append(features, auxFeatureAliases(outputs)...))
 		}
+	}
+	if d.directIPCLightingWritable(context.Background(), channel) {
+		outputs = uniqueSortedStrings(append(outputs, "light"))
+		features = uniqueSortedStrings(append(features, "light"))
 	}
 
 	if len(outputs) == 0 && len(features) == 0 {
@@ -480,8 +491,12 @@ func parsePTZCapabilities(values map[string]string) dahua.NVRPTZCapabilities {
 	}
 	sort.Strings(commands)
 	capabilities.Commands = commands
-	capabilities.Supported = len(commands) > 0 || capabilities.Aux
+	capabilities.Supported = len(commands) > 0
 	return capabilities
+}
+
+func ptzMovementSupported(capabilities dahua.NVRPTZCapabilities) bool {
+	return capabilities.Pan || capabilities.Tilt || capabilities.Zoom || capabilities.Focus
 }
 
 func attachChannelControlState(state *dahua.DeviceState, capabilities dahua.NVRChannelControlCapabilities) {
@@ -621,6 +636,9 @@ func uniqueSortedStrings(values []string) []string {
 }
 
 func (d *Driver) setChannelLightingMode(ctx context.Context, channel int, action dahua.NVRAuxAction) error {
+	if err := d.requireNVRConfigWrite(ctx, channel, "nvr lighting control"); err != nil {
+		return err
+	}
 	if err := d.setChannelLightingModeViaConfig(ctx, channel, action); err == nil {
 		return nil
 	} else if !errors.Is(err, dahua.ErrUnsupportedOperation) {

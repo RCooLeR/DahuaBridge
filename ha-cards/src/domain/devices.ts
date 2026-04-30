@@ -260,6 +260,14 @@ export interface BridgeDeviceDiagnosticsModel {
   subCodec: string | null;
   subResolution: string | null;
   audioCodec: string | null;
+  controlAudioAuthority: string | null;
+  controlAudioSemantic: string | null;
+  nvrConfigWritable: boolean | null;
+  nvrConfigReason: string | null;
+  directIPCConfigured: boolean | null;
+  directIPCConfiguredIP: string | null;
+  directIPCIP: string | null;
+  directIPCModel: string | null;
   catalog: BridgeCatalogHintsModel;
   onvif: BridgeOnvifModel;
 }
@@ -1117,6 +1125,30 @@ function buildDeviceDiagnostics(
     subResolution:
       sensorStateForDevice(hass, registrySnapshot, deviceId, "sub_resolution") ?? null,
     audioCodec: sensorStateForDevice(hass, registrySnapshot, deviceId, "audio_codec") ?? null,
+    controlAudioAuthority:
+      sensorStateForDevice(hass, registrySnapshot, deviceId, "control_audio_authority") ?? null,
+    controlAudioSemantic:
+      sensorStateForDevice(hass, registrySnapshot, deviceId, "control_audio_semantic") ?? null,
+    nvrConfigWritable: optionalBinaryStateForDevice(
+      hass,
+      registrySnapshot,
+      deviceId,
+      "nvr_config_writable",
+    ),
+    nvrConfigReason:
+      sensorStateForDevice(hass, registrySnapshot, deviceId, "nvr_config_reason") ?? null,
+    directIPCConfigured: optionalBinaryStateForDevice(
+      hass,
+      registrySnapshot,
+      deviceId,
+      "direct_ipc_configured",
+    ),
+    directIPCConfiguredIP:
+      sensorStateForDevice(hass, registrySnapshot, deviceId, "direct_ipc_configured_ip") ?? null,
+    directIPCIP:
+      sensorStateForDevice(hass, registrySnapshot, deviceId, "direct_ipc_ip") ?? null,
+    directIPCModel:
+      sensorStateForDevice(hass, registrySnapshot, deviceId, "direct_ipc_model") ?? null,
     catalog: {
       recommendedProfile:
         sensorStateForDevice(hass, registrySnapshot, deviceId, "recommended_profile") ?? null,

@@ -193,7 +193,7 @@ export class SurveillancePanelActions {
   ): Promise<boolean> {
     if (!camera.audioMuteActionUrl) {
       this.host.setError(
-        "Camera audio mute control is unavailable. The bridge did not expose an audio mute URL for this camera.",
+        "Camera stream-audio control is unavailable. The bridge did not expose a stream-audio toggle URL for this camera.",
       );
       return false;
     }
