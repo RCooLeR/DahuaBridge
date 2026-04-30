@@ -29,6 +29,7 @@ type adminActions struct {
 	channelControls   map[string]dahua.NVRChannelControlReader
 	ptzControllers    map[string]dahua.NVRPTZController
 	auxControllers    map[string]dahua.NVRAuxController
+	audioControllers  map[string]dahua.NVRAudioController
 	recordControllers map[string]dahua.NVRRecordingController
 	nvrRefresh        map[string]dahua.NVRInventoryRefresher
 	configure         map[string]dahua.ConfigurableDriver
@@ -60,6 +61,7 @@ func newAdminActions(
 		channelControls:   make(map[string]dahua.NVRChannelControlReader),
 		ptzControllers:    make(map[string]dahua.NVRPTZController),
 		auxControllers:    make(map[string]dahua.NVRAuxController),
+		audioControllers:  make(map[string]dahua.NVRAudioController),
 		recordControllers: make(map[string]dahua.NVRRecordingController),
 		nvrRefresh:        make(map[string]dahua.NVRInventoryRefresher),
 		configure:         make(map[string]dahua.ConfigurableDriver),
@@ -90,6 +92,9 @@ func newAdminActions(
 		}
 		if controller, ok := driver.(dahua.NVRAuxController); ok && driver.Kind() == dahua.DeviceKindNVR {
 			actions.auxControllers[driver.ID()] = controller
+		}
+		if controller, ok := driver.(dahua.NVRAudioController); ok && driver.Kind() == dahua.DeviceKindNVR {
+			actions.audioControllers[driver.ID()] = controller
 		}
 		if controller, ok := driver.(dahua.NVRRecordingController); ok && driver.Kind() == dahua.DeviceKindNVR {
 			actions.recordControllers[driver.ID()] = controller
@@ -237,7 +242,23 @@ func (a *adminActions) ControlNVRAux(ctx context.Context, deviceID string, reque
 	if !ok {
 		return fmt.Errorf("%w: %s", dahua.ErrDeviceNotFound, deviceID)
 	}
-	return controller.Aux(ctx, request)
+	if err := controller.Aux(ctx, request); err != nil {
+		return err
+	}
+	a.publishNVRAuxState(deviceID, request, time.Now().UTC())
+	return nil
+}
+
+func (a *adminActions) ControlNVRAudio(ctx context.Context, deviceID string, request dahua.NVRAudioRequest) error {
+	controller, ok := a.audioControllers[deviceID]
+	if !ok {
+		return fmt.Errorf("%w: %s", dahua.ErrDeviceNotFound, deviceID)
+	}
+	if err := controller.SetAudioMute(ctx, request); err != nil {
+		return err
+	}
+	a.publishNVRAudioState(deviceID, request)
+	return nil
 }
 
 func (a *adminActions) ControlNVRRecording(ctx context.Context, deviceID string, request dahua.NVRRecordingRequest) error {
@@ -394,4 +415,124 @@ func stringStateValue(value any) string {
 		return ""
 	}
 	return strings.TrimSpace(fmt.Sprint(value))
+}
+
+func (a *adminActions) publishNVRAuxState(deviceID string, request dahua.NVRAuxRequest, changedAt time.Time) {
+	if a.probes == nil {
+		return
+	}
+
+	normalizedOutput := strings.ToLower(strings.TrimSpace(request.Output))
+	if normalizedOutput == "" {
+		return
+	}
+
+	a.probes.Update(deviceID, func(result *dahua.ProbeResult) {
+		channelDeviceID := findNVRChannelDeviceID(result, request.Channel)
+		if channelDeviceID == "" {
+			return
+		}
+		if result.States == nil {
+			result.States = make(map[string]dahua.DeviceState)
+		}
+
+		state := result.States[channelDeviceID]
+		if state.Info == nil {
+			state.Info = make(map[string]any)
+		}
+		state.Available = true
+
+		active := request.Action != dahua.NVRAuxActionStop
+		switch normalizedOutput {
+		case "aux", "siren":
+			setNVRAuxFeatureState(state.Info, "siren", active, changedAt.Add(resolveSirenActiveWindow(request)))
+		case "light":
+			setNVRAuxFeatureState(state.Info, "light", active, time.Time{})
+			if active {
+				state.Info["control_aux_current_text_light"] = "White Light"
+			} else {
+				state.Info["control_aux_current_text_light"] = "Smart Light"
+			}
+		case "warning_light":
+			setNVRAuxFeatureState(state.Info, "warning_light", active, time.Time{})
+			if active {
+				state.Info["control_aux_current_text_warning_light"] = "Warning Light On"
+			} else {
+				state.Info["control_aux_current_text_warning_light"] = "Warning Light Off"
+			}
+		case "wiper":
+			setNVRAuxFeatureState(state.Info, "wiper", active, time.Time{})
+		}
+
+		result.States[channelDeviceID] = state
+	})
+}
+
+func (a *adminActions) publishNVRAudioState(deviceID string, request dahua.NVRAudioRequest) {
+	if a.probes == nil {
+		return
+	}
+	a.probes.Update(deviceID, func(result *dahua.ProbeResult) {
+		channelDeviceID := findNVRChannelDeviceID(result, request.Channel)
+		if channelDeviceID == "" {
+			return
+		}
+		if result.States == nil {
+			result.States = make(map[string]dahua.DeviceState)
+		}
+		state := result.States[channelDeviceID]
+		if state.Info == nil {
+			state.Info = make(map[string]any)
+		}
+		state.Available = true
+		state.Info["control_audio_muted"] = request.Muted
+		state.Info["control_audio_stream_enabled"] = !request.Muted
+		result.States[channelDeviceID] = state
+	})
+}
+
+func findNVRChannelDeviceID(result *dahua.ProbeResult, channel int) string {
+	if result == nil || channel <= 0 {
+		return ""
+	}
+	expected := strconv.Itoa(channel)
+	for _, child := range result.Children {
+		if child.Kind != dahua.DeviceKindNVRChannel {
+			continue
+		}
+		if strings.TrimSpace(child.Attributes["channel_index"]) == expected {
+			return child.ID
+		}
+	}
+	return ""
+}
+
+func setNVRAuxFeatureState(info map[string]any, feature string, active bool, until time.Time) {
+	if info == nil {
+		return
+	}
+	feature = strings.TrimSpace(feature)
+	if feature == "" {
+		return
+	}
+	info["control_aux_active_"+feature] = active
+	if until.IsZero() {
+		delete(info, "control_aux_active_until_"+feature)
+		return
+	}
+	info["control_aux_active_until_"+feature] = until.UTC().Format(time.RFC3339Nano)
+}
+
+func resolveSirenActiveWindow(request dahua.NVRAuxRequest) time.Duration {
+	switch request.Action {
+	case dahua.NVRAuxActionStop:
+		return 0
+	case dahua.NVRAuxActionPulse:
+		if request.Duration > 0 && request.Duration < 10*time.Second {
+			return request.Duration
+		}
+		return 10 * time.Second
+	default:
+		return 10 * time.Second
+	}
 }

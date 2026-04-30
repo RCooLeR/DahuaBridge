@@ -1,12 +1,20 @@
 package nvr
 
 import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
+	"RCooLeR/DahuaBridge/internal/buildinfo"
 	"RCooLeR/DahuaBridge/internal/config"
 	"RCooLeR/DahuaBridge/internal/dahua"
+	"RCooLeR/DahuaBridge/internal/dahua/cgi"
+	"RCooLeR/DahuaBridge/internal/metrics"
 	"RCooLeR/DahuaBridge/internal/onvif"
+	"github.com/rs/zerolog"
 )
 
 func TestParseSoftwareVersion(t *testing.T) {
@@ -149,6 +157,138 @@ func TestParseRecordingSearchResult(t *testing.T) {
 	}
 }
 
+func TestParseRPCRecordingSearchResult(t *testing.T) {
+	got := parseRPCRecordingSearchResult(map[string]any{
+		"found": float64(2),
+		"items": []any{
+			map[string]any{
+				"Channel":     float64(0),
+				"StartTime":   "2026-04-28 01:58:16",
+				"EndTime":     "2026-04-28 02:00:02",
+				"FilePath":    "/mnt/dvr/2026-04-28/0/dav/01/1/0/2129/01.58.16-02.00.02[R][0@0][0].dav",
+				"Type":        "dav",
+				"VideoStream": "Main",
+				"Disk":        float64(8),
+				"Partition":   float64(0),
+				"Cluster":     float64(2129),
+				"Length":      float64(37617664),
+				"CutLength":   float64(37617664),
+				"Flags":       []any{"Timing", "UnMarked"},
+			},
+			map[string]any{
+				"Channel":     float64(0),
+				"StartTime":   "2026-04-28 02:00:02",
+				"EndTime":     "2026-04-28 02:30:00",
+				"FilePath":    "/mnt/dvr/2026-04-28/0/dav/02/1/0/2296/02.00.02-02.30.00[R][0@0][0].dav",
+				"Type":        "dav",
+				"VideoStream": "Main",
+				"Disk":        float64(8),
+				"Partition":   float64(0),
+				"Cluster":     float64(2296),
+				"Length":      float64(611844096),
+				"CutLength":   float64(611844096),
+				"Flags":       []any{"Timing"},
+			},
+		},
+	})
+
+	if got.ReturnedCount != 2 {
+		t.Fatalf("unexpected returned count %d", got.ReturnedCount)
+	}
+	if len(got.Items) != 2 {
+		t.Fatalf("expected 2 recording items, got %d", len(got.Items))
+	}
+	if got.Items[0].Channel != 1 {
+		t.Fatalf("expected channel 1, got %d", got.Items[0].Channel)
+	}
+	if got.Items[0].Disk != 8 || got.Items[0].Cluster != 2129 {
+		t.Fatalf("unexpected first item disk/cluster: %+v", got.Items[0])
+	}
+	if len(got.Items[0].Flags) != 2 {
+		t.Fatalf("expected 2 flags, got %+v", got.Items[0].Flags)
+	}
+}
+
+func TestDriverFindRecordingsUsesRPCMediaFileFind(t *testing.T) {
+	loginRequests := 0
+	var rpcCalls []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/RPC2_Login":
+			loginRequests++
+			if loginRequests == 1 {
+				_, _ = w.Write([]byte(`{"id":1,"params":{"realm":"Login to Test","random":"12345","encryption":"Default"},"result":false,"session":"sess1","error":{"code":268632079,"message":"challenge"}}`))
+				return
+			}
+			_, _ = w.Write([]byte(`{"id":2,"params":{},"result":true,"session":"sess2"}`))
+		case "/RPC2":
+			var payload struct {
+				Method string `json:"method"`
+				Object any    `json:"object"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				t.Fatalf("decode rpc request: %v", err)
+			}
+			rpcCalls = append(rpcCalls, payload.Method)
+			switch payload.Method {
+			case "mediaFileFind.factory.create":
+				_, _ = w.Write([]byte(`{"id":10,"result":758262256,"session":"sess2"}`))
+			case "mediaFileFind.findFile":
+				if payload.Object != float64(758262256) {
+					t.Fatalf("unexpected findFile object %#v", payload.Object)
+				}
+				_, _ = w.Write([]byte(`{"id":11,"result":true,"session":"sess2"}`))
+			case "mediaFileFind.findNextFile":
+				if payload.Object != float64(758262256) {
+					t.Fatalf("unexpected findNextFile object %#v", payload.Object)
+				}
+				_, _ = w.Write([]byte(`{"id":12,"params":{"found":1,"items":[{"Channel":0,"StartTime":"2026-04-30 00:00:00","EndTime":"2026-04-30 00:10:00","FilePath":"/mnt/dvr/2026-04-30/0/dav/00.00.00-00.10.00.dav","Type":"dav","VideoStream":"Main","Disk":8,"Partition":0,"Cluster":100,"Length":1234,"CutLength":1234,"Flags":["Timing"]}]},"result":true,"session":"sess2"}`))
+			case "mediaFileFind.close":
+				_, _ = w.Write([]byte(`{"id":13,"result":true,"session":"sess2"}`))
+			case "mediaFileFind.destroy":
+				_, _ = w.Write([]byte(`{"id":14,"result":true,"session":"sess2"}`))
+			default:
+				http.Error(w, "unexpected rpc method", http.StatusBadRequest)
+			}
+		default:
+			http.Error(w, "unexpected path", http.StatusBadRequest)
+		}
+	}))
+	defer server.Close()
+
+	cfg := config.DeviceConfig{
+		ID:               "west20_nvr",
+		BaseURL:          server.URL,
+		Username:         "assistant",
+		Password:         "secret",
+		ChannelAllowlist: []int{1},
+		RequestTimeout:   5 * time.Second,
+	}
+	driver := New(cfg, config.ImouConfig{}, nil, zerolog.Nop(), cgi.New(cfg, metrics.New(buildinfo.Info())))
+
+	got, err := driver.FindRecordings(context.Background(), dahua.NVRRecordingQuery{
+		Channel:   1,
+		StartTime: time.Date(2026, 4, 30, 0, 0, 0, 0, time.UTC),
+		EndTime:   time.Date(2026, 4, 30, 0, 10, 0, 0, time.UTC),
+		Limit:     10,
+	})
+	if err != nil {
+		t.Fatalf("FindRecordings returned error: %v", err)
+	}
+	if got.DeviceID != "west20_nvr" || got.Channel != 1 || got.ReturnedCount != 1 {
+		t.Fatalf("unexpected search result %+v", got)
+	}
+	if len(got.Items) != 1 || got.Items[0].FilePath == "" || got.Items[0].Channel != 1 {
+		t.Fatalf("unexpected recording items %+v", got.Items)
+	}
+	if len(rpcCalls) != 5 {
+		t.Fatalf("expected 5 rpc calls, got %d (%+v)", len(rpcCalls), rpcCalls)
+	}
+	if rpcCalls[0] != "mediaFileFind.factory.create" || rpcCalls[1] != "mediaFileFind.findFile" || rpcCalls[2] != "mediaFileFind.findNextFile" || rpcCalls[3] != "mediaFileFind.close" || rpcCalls[4] != "mediaFileFind.destroy" {
+		t.Fatalf("unexpected rpc sequence %+v", rpcCalls)
+	}
+}
+
 func TestSummarizeDisks(t *testing.T) {
 	summary := summarizeDisks([]diskInventory{
 		{
@@ -284,6 +424,23 @@ func TestAttachONVIFChannelStateIncludesSnapshotURI(t *testing.T) {
 	}
 	if state.Info["onvif_snapshot_url"] != "http://nvr.example.local/onvif/snapshot1.jpg" {
 		t.Fatalf("unexpected state snapshot url %#v", state.Info["onvif_snapshot_url"])
+	}
+}
+
+func TestApplyRecordingOverrideForcesChannelState(t *testing.T) {
+	supported := true
+	active := true
+	driver := &Driver{
+		cfg: config.DeviceConfig{
+			ChannelRecordingOverrides: []config.ChannelRecordingControlOverride{
+				{Channel: 9, Supported: &supported, Active: &active, Mode: "auto"},
+			},
+		},
+	}
+
+	capabilities := driver.applyRecordingOverride(9, dahua.NVRRecordingCapabilities{})
+	if !capabilities.Supported || !capabilities.Active || capabilities.Mode != "auto" {
+		t.Fatalf("unexpected overridden recording capabilities %+v", capabilities)
 	}
 }
 

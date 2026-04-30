@@ -1,6 +1,11 @@
 .idea/
 .gotmp/
 .gotmp-ha-native/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+.coverage
 bridge/bin/
 bridge/dist/
 bridge/var/
@@ -16,4 +21,9 @@ bridge/*.test
 bridge/coverage.out
 bridge/*.exe
 integration/**/__pycache__/
+ha-cards/node_modules/
+ha-cards/dist/
+ha-cards/coverage/
+ha-cards/*.tsbuildinfo
+ha-cards/vite.config.ts.timestamp-*
 tmp/

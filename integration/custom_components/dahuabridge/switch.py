@@ -6,9 +6,10 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .catalog import (
-    bool_intercom_value_for_record,
+    bool_switch_value_for_record,
     catalog_records,
     device_id_for_record,
+    switch_payload_for_value,
     switch_specs_for_record,
 )
 from .const import DOMAIN
@@ -68,7 +69,7 @@ class DahuaBridgeControlSwitch(DahuaBridgeEntity, SwitchEntity):
 
     @property
     def is_on(self) -> bool:
-        return bool(bool_intercom_value_for_record(self.record, self._spec.value_key))
+        return bool(bool_switch_value_for_record(self.record, self._spec))
 
     @property
     def available(self) -> bool:
@@ -83,6 +84,6 @@ class DahuaBridgeControlSwitch(DahuaBridgeEntity, SwitchEntity):
     async def _async_set_state(self, value: bool) -> None:
         await self.coordinator.api.async_post_json(
             self._target_url,
-            {self._spec.payload_key: value},
+            switch_payload_for_value(self._spec, value),
         )
         await self.coordinator.async_request_refresh()

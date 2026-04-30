@@ -886,13 +886,120 @@ func TestDriverSetAudioAndRecordingControls(t *testing.T) {
 	}
 
 	expected := []string{
-		"AudioOutputVolume%5B1%5D=70&action=setConfig",
-		"AudioInputVolume%5B0%5D=65&action=setConfig",
-		"Sound.SilentMode=true&action=setConfig",
-		"VideoTalkPhoneGeneral.AutoRecordEnable=true&action=setConfig",
+		"action=setConfig&AudioOutputVolume%5B1%5D=70",
+		"action=setConfig&AudioInputVolume%5B0%5D=65",
+		"action=setConfig&table.Sound.SilentMode=true",
+		"action=setConfig&VideoTalkPhoneGeneral.AutoRecordEnable=true",
 	}
 	if !reflect.DeepEqual(requests, expected) {
 		t.Fatalf("unexpected requests %+v", requests)
+	}
+}
+
+func TestDriverSetAudioMuteFallsBackToLegacyKey(t *testing.T) {
+	requests := make([]string, 0, 2)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests = append(requests, r.URL.RawQuery)
+		switch r.URL.Query().Get("table.Sound.SilentMode") {
+		case "true":
+			http.Error(w, "Error\r\nBad Request!", http.StatusBadRequest)
+		default:
+			fmt.Fprint(w, "OK")
+		}
+	}))
+	defer server.Close()
+
+	cfg := config.DeviceConfig{
+		ID:             "front_vto",
+		BaseURL:        server.URL,
+		Username:       "admin",
+		Password:       "secret",
+		RequestTimeout: 2 * time.Second,
+	}
+	driver := New(cfg, zerolog.Nop(), cgi.New(cfg, metrics.New(buildinfo.BuildInfo{})))
+
+	if err := driver.SetAudioMute(context.Background(), true); err != nil {
+		t.Fatalf("SetAudioMute returned error: %v", err)
+	}
+
+	expected := []string{
+		"action=setConfig&table.Sound.SilentMode=true",
+		"action=setConfig&Sound.SilentMode=true",
+	}
+	if !reflect.DeepEqual(requests, expected) {
+		t.Fatalf("unexpected requests %+v", requests)
+	}
+}
+
+func TestDriverSetAudioAndRecordingControlsFallbackKeys(t *testing.T) {
+	tests := []struct {
+		name     string
+		run      func(*Driver) error
+		expected []string
+	}{
+		{
+			name: "audio output volume",
+			run: func(driver *Driver) error {
+				return driver.SetAudioOutputVolume(context.Background(), 1, 70)
+			},
+			expected: []string{
+				"action=setConfig&AudioOutputVolume%5B1%5D=70",
+				"action=setConfig&table.AudioOutputVolume%5B1%5D=70",
+			},
+		},
+		{
+			name: "audio input volume",
+			run: func(driver *Driver) error {
+				return driver.SetAudioInputVolume(context.Background(), 0, 65)
+			},
+			expected: []string{
+				"action=setConfig&AudioInputVolume%5B0%5D=65",
+				"action=setConfig&table.AudioInputVolume%5B0%5D=65",
+			},
+		},
+		{
+			name: "recording enabled",
+			run: func(driver *Driver) error {
+				return driver.SetRecordingEnabled(context.Background(), true)
+			},
+			expected: []string{
+				"action=setConfig&VideoTalkPhoneGeneral.AutoRecordEnable=true",
+				"action=setConfig&table.VideoTalkPhoneGeneral.AutoRecordEnable=true",
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			requests := make([]string, 0, 2)
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				requests = append(requests, r.URL.RawQuery)
+				switch requests[len(requests)-1] {
+				case test.expected[0]:
+					http.Error(w, "Error\r\nBad Request!", http.StatusBadRequest)
+				default:
+					fmt.Fprint(w, "OK")
+				}
+			}))
+			defer server.Close()
+
+			cfg := config.DeviceConfig{
+				ID:             "front_vto",
+				BaseURL:        server.URL,
+				Username:       "admin",
+				Password:       "secret",
+				RequestTimeout: 2 * time.Second,
+			}
+			driver := New(cfg, zerolog.Nop(), cgi.New(cfg, metrics.New(buildinfo.BuildInfo{})))
+
+			if err := test.run(driver); err != nil {
+				t.Fatalf("control setter returned error: %v", err)
+			}
+
+			if !reflect.DeepEqual(requests, test.expected) {
+				t.Fatalf("unexpected requests %+v", requests)
+			}
+		})
 	}
 }
 

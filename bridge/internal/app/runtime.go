@@ -3,6 +3,9 @@ package app
 import (
 	"context"
 	"fmt"
+	"net/url"
+	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -17,8 +20,9 @@ type runtimeServices struct {
 	mu            sync.RWMutex
 	cfg           config.Config
 	probes        *store.ProbeStore
-	media         intercomStatusReader
+	media         runtimeMediaReader
 	nvrSnapshots  map[string]dahua.SnapshotProvider
+	nvrDownloads  map[string]dahua.NVRRecordingDownloader
 	nvrRecordings map[string]dahua.NVRRecordingSearcher
 	playback      map[string]playbackSession
 	nvrConfigs    map[string]config.DeviceConfig
@@ -29,8 +33,11 @@ type runtimeServices struct {
 	snapshotCache map[string]cachedSnapshot
 }
 
-type intercomStatusReader interface {
+type runtimeMediaReader interface {
 	IntercomStatus(string) media.IntercomStatus
+	CaptureFrame(context.Context, string, string, int) ([]byte, string, error)
+	FindClips(media.ClipQuery) ([]media.ClipInfo, error)
+	ActiveClip(string) (media.ClipInfo, bool)
 }
 
 type cachedSnapshot struct {
@@ -40,12 +47,14 @@ type cachedSnapshot struct {
 }
 
 const snapshotCacheTTL = 2 * time.Second
+const bridgeRecordingTimeLayout = "2006-01-02 15:04:05"
 
 func newRuntimeServices(cfg config.Config, probes *store.ProbeStore) *runtimeServices {
 	return &runtimeServices{
 		cfg:           cfg,
 		probes:        probes,
 		nvrSnapshots:  make(map[string]dahua.SnapshotProvider),
+		nvrDownloads:  make(map[string]dahua.NVRRecordingDownloader),
 		nvrRecordings: make(map[string]dahua.NVRRecordingSearcher),
 		playback:      make(map[string]playbackSession),
 		nvrConfigs:    make(map[string]config.DeviceConfig),
@@ -57,7 +66,7 @@ func newRuntimeServices(cfg config.Config, probes *store.ProbeStore) *runtimeSer
 	}
 }
 
-func (r *runtimeServices) AttachMedia(reader intercomStatusReader) {
+func (r *runtimeServices) AttachMedia(reader runtimeMediaReader) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.media = reader
@@ -67,6 +76,9 @@ func (r *runtimeServices) RegisterNVR(deviceID string, provider dahua.SnapshotPr
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.nvrSnapshots[deviceID] = provider
+	if downloader, ok := provider.(dahua.NVRRecordingDownloader); ok && downloader != nil {
+		r.nvrDownloads[deviceID] = downloader
+	}
 	if recordings != nil {
 		r.nvrRecordings[deviceID] = recordings
 	}
@@ -130,7 +142,14 @@ func (r *runtimeServices) NVRSnapshot(ctx context.Context, deviceID string, chan
 
 	r.mu.RLock()
 	provider, ok := r.nvrSnapshots[deviceID]
+	mediaReader := r.media
 	r.mu.RUnlock()
+	if mediaReader != nil {
+		if body, contentType, err := r.captureSnapshotFromStream(ctx, mediaReader, deviceID, channel, dahua.DeviceKindNVRChannel); err == nil {
+			r.storeSnapshot(cacheKey, body, contentType)
+			return body, contentType, nil
+		}
+	}
 	if !ok {
 		return nil, "", fmt.Errorf("snapshot provider not found for device %q", deviceID)
 	}
@@ -146,6 +165,7 @@ func (r *runtimeServices) NVRSnapshot(ctx context.Context, deviceID string, chan
 func (r *runtimeServices) NVRRecordings(ctx context.Context, deviceID string, query dahua.NVRRecordingQuery) (dahua.NVRRecordingSearchResult, error) {
 	r.mu.RLock()
 	searcher, ok := r.nvrRecordings[deviceID]
+	mediaReader := r.media
 	r.mu.RUnlock()
 	if !ok {
 		return dahua.NVRRecordingSearchResult{}, fmt.Errorf("%w: %s", dahua.ErrDeviceNotFound, deviceID)
@@ -158,7 +178,50 @@ func (r *runtimeServices) NVRRecordings(ctx context.Context, deviceID string, qu
 	if result.DeviceID == "" {
 		result.DeviceID = deviceID
 	}
+	for index := range result.Items {
+		if result.Items[index].DownloadURL == "" && strings.TrimSpace(result.Items[index].FilePath) != "" {
+			result.Items[index].DownloadURL = buildNVRRecordingDownloadURL(
+				r.cfg.HomeAssistant.PublicBaseURL,
+				deviceID,
+				result.Items[index].FilePath,
+			)
+		}
+	}
+	if mediaReader != nil {
+		clips, clipsErr := mediaReader.FindClips(media.ClipQuery{
+			RootDeviceID: deviceID,
+			Channel:      query.Channel,
+			StartTime:    query.StartTime,
+			EndTime:      query.EndTime,
+			Limit:        query.Limit,
+		})
+		if clipsErr == nil {
+			bridgeItems := bridgeClipsToRecordings(r.cfg.HomeAssistant.PublicBaseURL, clips)
+			sort.Slice(bridgeItems, func(i, j int) bool {
+				return bridgeItems[i].StartTime > bridgeItems[j].StartTime
+			})
+			if query.Limit <= 0 {
+				result.Items = append(result.Items, bridgeItems...)
+			} else if remaining := query.Limit - len(result.Items); remaining > 0 {
+				if len(bridgeItems) > remaining {
+					bridgeItems = bridgeItems[:remaining]
+				}
+				result.Items = append(result.Items, bridgeItems...)
+			}
+			result.ReturnedCount = len(result.Items)
+		}
+	}
 	return result, nil
+}
+
+func (r *runtimeServices) NVRDownloadRecording(ctx context.Context, deviceID string, filePath string) (dahua.NVRRecordingDownload, error) {
+	r.mu.RLock()
+	downloader, ok := r.nvrDownloads[deviceID]
+	r.mu.RUnlock()
+	if !ok {
+		return dahua.NVRRecordingDownload{}, fmt.Errorf("%w: %s", dahua.ErrDeviceNotFound, deviceID)
+	}
+	return downloader.DownloadRecording(ctx, filePath)
 }
 
 func (r *runtimeServices) VTOSnapshot(ctx context.Context, deviceID string) ([]byte, string, error) {
@@ -169,7 +232,14 @@ func (r *runtimeServices) VTOSnapshot(ctx context.Context, deviceID string) ([]b
 
 	r.mu.RLock()
 	provider, ok := r.vtoSnapshots[deviceID]
+	mediaReader := r.media
 	r.mu.RUnlock()
+	if mediaReader != nil {
+		if body, contentType, err := r.captureSnapshotFromStream(ctx, mediaReader, deviceID, 1, dahua.DeviceKindVTO); err == nil {
+			r.storeSnapshot(cacheKey, body, contentType)
+			return body, contentType, nil
+		}
+	}
 	if !ok {
 		return nil, "", fmt.Errorf("snapshot provider not found for vto %q", deviceID)
 	}
@@ -190,7 +260,14 @@ func (r *runtimeServices) IPCSnapshot(ctx context.Context, deviceID string) ([]b
 
 	r.mu.RLock()
 	provider, ok := r.ipcSnapshots[deviceID]
+	mediaReader := r.media
 	r.mu.RUnlock()
+	if mediaReader != nil {
+		if body, contentType, err := r.captureSnapshotFromStream(ctx, mediaReader, deviceID, 1, dahua.DeviceKindIPC); err == nil {
+			r.storeSnapshot(cacheKey, body, contentType)
+			return body, contentType, nil
+		}
+	}
 	if !ok {
 		return nil, "", fmt.Errorf("snapshot provider not found for ipc %q", deviceID)
 	}
@@ -237,6 +314,7 @@ func (r *runtimeServices) AdminSettings() map[string]any {
 			"ffmpeg_path":           cfg.Media.FFmpegPath,
 			"video_encoder":         cfg.Media.VideoEncoder,
 			"input_preset":          cfg.Media.InputPreset,
+			"clip_path":             cfg.Media.ClipPath,
 			"idle_timeout":          cfg.Media.IdleTimeout.String(),
 			"start_timeout":         cfg.Media.StartTimeout.String(),
 			"max_workers":           cfg.Media.MaxWorkers,
@@ -301,7 +379,7 @@ func (r *runtimeServices) ListStreams(includeCredentials bool) []streams.Entry {
 		}
 	}
 
-	return streams.BuildCatalog(streams.CatalogInput{
+	entries := streams.BuildCatalog(streams.CatalogInput{
 		Config:             r.cfg,
 		ProbeResults:       r.probes.List(),
 		NVRConfigs:         nvrConfigs,
@@ -310,6 +388,12 @@ func (r *runtimeServices) ListStreams(includeCredentials bool) []streams.Entry {
 		IntercomStatuses:   intercomStatuses,
 		IncludeCredentials: includeCredentials,
 	})
+	if mediaReader != nil {
+		for index := range entries {
+			entries[index].Capture = buildCaptureSummary(r.cfg.HomeAssistant.PublicBaseURL, entries[index], mediaReader)
+		}
+	}
+	return entries
 }
 
 func (r *runtimeServices) GetStream(streamID string, profileName string, includeCredentials bool) (streams.Entry, streams.Profile, bool) {
@@ -337,6 +421,148 @@ func (r *runtimeServices) GetStream(streamID string, profileName string, include
 
 func snapshotCacheKey(kind string, deviceID string, channel int) string {
 	return fmt.Sprintf("%s:%s:%d", kind, deviceID, channel)
+}
+
+func (r *runtimeServices) captureSnapshotFromStream(ctx context.Context, mediaReader runtimeMediaReader, deviceID string, channel int, kind dahua.DeviceKind) ([]byte, string, error) {
+	streamID, profileName, ok := r.streamSnapshotTarget(deviceID, channel, kind)
+	if !ok {
+		return nil, "", fmt.Errorf("stream snapshot target not found")
+	}
+	return mediaReader.CaptureFrame(ctx, streamID, profileName, 0)
+}
+
+func (r *runtimeServices) streamSnapshotTarget(deviceID string, channel int, kind dahua.DeviceKind) (string, string, bool) {
+	for _, entry := range r.ListStreams(false) {
+		switch kind {
+		case dahua.DeviceKindNVRChannel:
+			if entry.DeviceKind == dahua.DeviceKindNVRChannel && entry.RootDeviceID == deviceID && entry.Channel == channel {
+				return entry.ID, firstNonEmptyProfile(entry.RecommendedProfile, "stable"), true
+			}
+		case dahua.DeviceKindVTO:
+			if entry.DeviceKind == dahua.DeviceKindVTO && entry.ID == deviceID {
+				return entry.ID, firstNonEmptyProfile(entry.RecommendedProfile, "stable"), true
+			}
+		case dahua.DeviceKindIPC:
+			if entry.DeviceKind == dahua.DeviceKindIPC && entry.ID == deviceID {
+				return entry.ID, firstNonEmptyProfile(entry.RecommendedProfile, "stable"), true
+			}
+		}
+	}
+	return "", "", false
+}
+
+func bridgeClipsToRecordings(publicBaseURL string, clips []media.ClipInfo) []dahua.NVRRecording {
+	items := make([]dahua.NVRRecording, 0, len(clips))
+	for _, clip := range clips {
+		items = append(items, dahua.NVRRecording{
+			Source:         "bridge",
+			Status:         string(clip.Status),
+			ClipID:         clip.ID,
+			StreamID:       clip.StreamID,
+			DownloadURL:    buildClipDownloadURL(publicBaseURL, clip.ID),
+			Channel:        clip.Channel,
+			StartTime:      clip.StartedAt.Format(bridgeRecordingTimeLayout),
+			EndTime:        firstNonEmptyTime(clip.EndedAt, clip.StartedAt.Add(clip.Duration), clip.StartedAt).Format(bridgeRecordingTimeLayout),
+			FilePath:       clip.FileName,
+			Type:           "bridge_mp4",
+			VideoStream:    clip.Profile,
+			LengthBytes:    clip.Bytes,
+			CutLengthBytes: clip.Bytes,
+		})
+	}
+	return items
+}
+
+func buildClipDownloadURL(publicBaseURL string, clipID string) string {
+	publicBaseURL = strings.TrimRight(strings.TrimSpace(publicBaseURL), "/")
+	path := "/api/v1/media/recordings/" + url.PathEscape(clipID) + "/download"
+	if publicBaseURL == "" {
+		return path
+	}
+	return publicBaseURL + path
+}
+
+func buildCaptureSummary(publicBaseURL string, entry streams.Entry, mediaReader runtimeMediaReader) *streams.CaptureSummary {
+	summary := &streams.CaptureSummary{
+		SnapshotURL:       buildMediaSnapshotURL(publicBaseURL, entry.ID, entry.RecommendedProfile),
+		StartRecordingURL: buildMediaStreamRecordingStartURL(publicBaseURL, entry.ID),
+		RecordingsURL:     buildMediaRecordingsURL(publicBaseURL, entry.ID),
+	}
+	if clip, ok := mediaReader.ActiveClip(entry.ID); ok {
+		summary.Active = true
+		summary.ActiveClipID = clip.ID
+		summary.ActiveClipProfile = clip.Profile
+		summary.ActiveClipStartedAt = clip.StartedAt.Format(time.RFC3339)
+		summary.ActiveClipDownloadURL = buildClipDownloadURL(publicBaseURL, clip.ID)
+		summary.StopRecordingURL = buildMediaRecordingStopURL(publicBaseURL, clip.ID)
+	}
+	return summary
+}
+
+func buildNVRRecordingDownloadURL(publicBaseURL string, deviceID string, filePath string) string {
+	publicBaseURL = strings.TrimRight(strings.TrimSpace(publicBaseURL), "/")
+	path := "/api/v1/nvr/" + url.PathEscape(deviceID) + "/recordings/download?file_path=" + url.QueryEscape(filePath)
+	if publicBaseURL == "" {
+		return path
+	}
+	return publicBaseURL + path
+}
+
+func buildMediaSnapshotURL(publicBaseURL string, streamID string, profile string) string {
+	publicBaseURL = strings.TrimRight(strings.TrimSpace(publicBaseURL), "/")
+	path := "/api/v1/media/snapshot/" + url.PathEscape(streamID)
+	if strings.TrimSpace(profile) != "" {
+		path += "?profile=" + url.QueryEscape(profile)
+	}
+	if publicBaseURL == "" {
+		return path
+	}
+	return publicBaseURL + path
+}
+
+func buildMediaStreamRecordingStartURL(publicBaseURL string, streamID string) string {
+	publicBaseURL = strings.TrimRight(strings.TrimSpace(publicBaseURL), "/")
+	path := "/api/v1/media/streams/" + url.PathEscape(streamID) + "/recordings"
+	if publicBaseURL == "" {
+		return path
+	}
+	return publicBaseURL + path
+}
+
+func buildMediaRecordingsURL(publicBaseURL string, streamID string) string {
+	publicBaseURL = strings.TrimRight(strings.TrimSpace(publicBaseURL), "/")
+	path := "/api/v1/media/recordings?stream_id=" + url.QueryEscape(streamID)
+	if publicBaseURL == "" {
+		return path
+	}
+	return publicBaseURL + path
+}
+
+func buildMediaRecordingStopURL(publicBaseURL string, clipID string) string {
+	publicBaseURL = strings.TrimRight(strings.TrimSpace(publicBaseURL), "/")
+	path := "/api/v1/media/recordings/" + url.PathEscape(clipID) + "/stop"
+	if publicBaseURL == "" {
+		return path
+	}
+	return publicBaseURL + path
+}
+
+func firstNonEmptyProfile(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return "stable"
+}
+
+func firstNonEmptyTime(values ...time.Time) time.Time {
+	for _, value := range values {
+		if !value.IsZero() {
+			return value
+		}
+	}
+	return time.Time{}
 }
 
 func (r *runtimeServices) cachedSnapshot(cacheKey string) ([]byte, string, bool) {

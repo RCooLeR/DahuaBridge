@@ -17,6 +17,7 @@ import (
 	"RCooLeR/DahuaBridge/internal/dahua/vto"
 	"RCooLeR/DahuaBridge/internal/eventbuffer"
 	"RCooLeR/DahuaBridge/internal/httpserver"
+	"RCooLeR/DahuaBridge/internal/imou"
 	"RCooLeR/DahuaBridge/internal/logging"
 	"RCooLeR/DahuaBridge/internal/media"
 	"RCooLeR/DahuaBridge/internal/metrics"
@@ -36,9 +37,10 @@ func Run(ctx context.Context, cfg config.Config, info buildinfo.BuildInfo) error
 	recentEvents := eventbuffer.New(eventbuffer.DefaultCapacity)
 	services := newRuntimeServices(cfg, probeStore)
 	mediaManager := media.New(cfg.Media, services, logger, metricsRegistry)
+	imouClient := imou.NewClient(cfg.Imou)
 	services.AttachMedia(mediaManager)
 
-	if err := loadPersistedState(cfg, logger, metricsRegistry, probeStore); err != nil {
+	if err := loadPersistedState(cfg, logger, metricsRegistry, probeStore, imouClient); err != nil {
 		return fmt.Errorf("load persisted state: %w", err)
 	}
 
@@ -47,11 +49,11 @@ func Run(ctx context.Context, cfg config.Config, info buildinfo.BuildInfo) error
 		persistenceWG.Add(1)
 		go func() {
 			defer persistenceWG.Done()
-			runStateStoreLoop(ctx, cfg, logger, metricsRegistry, probeStore)
+			runStateStoreLoop(ctx, cfg, logger, metricsRegistry, probeStore, imouClient)
 		}()
 	}
 
-	drivers := buildDrivers(cfg, logger, metricsRegistry, services)
+	drivers := buildDrivers(cfg, logger, metricsRegistry, services, imouClient)
 	if len(drivers) == 0 {
 		return errors.New("no enabled drivers were created from config")
 	}
@@ -98,7 +100,7 @@ func Run(ctx context.Context, cfg config.Config, info buildinfo.BuildInfo) error
 	wg.Wait()
 	persistenceWG.Wait()
 
-	if err := persistState(cfg, logger, metricsRegistry, probeStore); err != nil {
+	if err := persistState(cfg, logger, metricsRegistry, probeStore, imouClient); err != nil {
 		logger.Error().Err(err).Msg("final state store flush failed")
 	}
 	return nil
@@ -109,22 +111,29 @@ func loadPersistedState(
 	logger zerolog.Logger,
 	metricsRegistry *metrics.Registry,
 	probes *store.ProbeStore,
+	imouClient *imou.Client,
 ) error {
 	if !cfg.StateStore.Enabled {
 		return nil
 	}
 
-	ok, err := probes.LoadFile(cfg.StateStore.Path)
+	ok, authState, err := probes.LoadFileWithMetadata(cfg.StateStore.Path)
 	metricsRegistry.ObserveStateStore("load", err)
 	if err != nil {
 		return err
 	}
 	if ok {
+		if imouClient != nil && imouClient.Enabled() && authState != nil {
+			imouClient.ImportAuthState(authState)
+		}
 		stats := probes.Stats()
-		logger.Info().
+		event := logger.Info().
 			Str("path", cfg.StateStore.Path).
-			Int("device_count", stats.DeviceCount).
-			Msg("loaded persisted probe state")
+			Int("device_count", stats.DeviceCount)
+		if authState != nil && authState.ExpiresAt.After(time.Now()) {
+			event = event.Bool("imou_auth_restored", true)
+		}
+		event.Msg("loaded persisted probe state")
 		return nil
 	}
 
@@ -138,6 +147,7 @@ func runStateStoreLoop(
 	logger zerolog.Logger,
 	metricsRegistry *metrics.Registry,
 	probes *store.ProbeStore,
+	imouClient *imou.Client,
 ) {
 	ticker := time.NewTicker(cfg.StateStore.FlushInterval)
 	defer ticker.Stop()
@@ -147,7 +157,7 @@ func runStateStoreLoop(
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			if err := persistState(cfg, logger, metricsRegistry, probes); err != nil {
+			if err := persistState(cfg, logger, metricsRegistry, probes, imouClient); err != nil {
 				logger.Error().Err(err).Str("path", cfg.StateStore.Path).Msg("state store flush failed")
 			}
 		}
@@ -159,12 +169,13 @@ func persistState(
 	logger zerolog.Logger,
 	metricsRegistry *metrics.Registry,
 	probes *store.ProbeStore,
+	imouClient *imou.Client,
 ) error {
 	if !cfg.StateStore.Enabled {
 		return nil
 	}
 
-	err := probes.SaveFile(cfg.StateStore.Path)
+	err := probes.SaveFileWithMetadata(cfg.StateStore.Path, imouClient.ExportAuthState())
 	metricsRegistry.ObserveStateStore("save", err)
 	return err
 }
@@ -174,6 +185,7 @@ func buildDrivers(
 	logger zerolog.Logger,
 	metricsRegistry *metrics.Registry,
 	services *runtimeServices,
+	imouClient imou.Service,
 ) []dahua.Driver {
 	drivers := make([]dahua.Driver, 0, len(cfg.Devices.NVR)+len(cfg.Devices.VTO)+len(cfg.Devices.IPC))
 
@@ -181,7 +193,7 @@ func buildDrivers(
 		if !deviceCfg.EnabledValue() {
 			continue
 		}
-		driver := nvr.New(deviceCfg, logger, cgi.New(deviceCfg, metricsRegistry))
+		driver := nvr.New(deviceCfg, cfg.Imou, imouClient, logger, cgi.New(deviceCfg, metricsRegistry))
 		drivers = append(drivers, driver)
 		services.RegisterNVR(deviceCfg.ID, driver, driver, deviceCfg)
 	}

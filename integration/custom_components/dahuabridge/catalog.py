@@ -39,7 +39,10 @@ class SwitchSpec:
     url: str
     icon: str
     value_key: str
-    payload_key: str
+    payload_key: str | None = None
+    value_source: str = "intercom"
+    payload_on: dict[str, Any] | None = None
+    payload_off: dict[str, Any] | None = None
 
 
 DIAGNOSTIC_FIELDS = {
@@ -210,6 +213,11 @@ def intercom_for_record(record: dict[str, Any] | None) -> dict[str, Any]:
 def controls_for_record(record: dict[str, Any] | None) -> dict[str, Any]:
     controls = stream_for_record(record).get("controls", {})
     return controls if isinstance(controls, dict) else {}
+
+
+def capture_for_record(record: dict[str, Any] | None) -> dict[str, Any]:
+    capture = stream_for_record(record).get("capture", {})
+    return capture if isinstance(capture, dict) else {}
 
 
 def features_for_record(record: dict[str, Any] | None) -> list[dict[str, Any]]:
@@ -570,39 +578,107 @@ def number_specs_for_record(record: dict[str, Any]) -> list[NumberSpec]:
 
 
 def switch_specs_for_record(record: dict[str, Any]) -> list[SwitchSpec]:
-    intercom = intercom_for_record(record)
-    if not intercom:
-        return []
-
     specs: list[SwitchSpec] = []
 
-    mute_url = str(intercom.get("mute_url", "")).strip()
-    if mute_url and bool(intercom.get("supports_vto_mute_control")):
-        specs.append(
-            SwitchSpec(
-                key="muted",
-                name="Muted",
-                url=mute_url,
-                icon="mdi:volume-mute",
-                value_key="muted",
-                payload_key="muted",
+    intercom = intercom_for_record(record)
+    if intercom:
+        mute_url = str(intercom.get("mute_url", "")).strip()
+        if mute_url and bool(intercom.get("supports_vto_mute_control")):
+            specs.append(
+                SwitchSpec(
+                    key="muted",
+                    name="Muted",
+                    url=mute_url,
+                    icon="mdi:volume-mute",
+                    value_key="muted",
+                    payload_key="muted",
+                )
             )
-        )
 
-    recording_url = str(intercom.get("recording_url", "")).strip()
-    if recording_url and bool(intercom.get("supports_vto_recording_control")):
+        recording_url = str(intercom.get("recording_url", "")).strip()
+        if recording_url and bool(intercom.get("supports_vto_recording_control")):
+            specs.append(
+                SwitchSpec(
+                    key="auto_record_enabled",
+                    name="Auto Record",
+                    url=recording_url,
+                    icon="mdi:record-rec",
+                    value_key="auto_record_enabled",
+                    payload_key="auto_record_enabled",
+                )
+            )
+
+    for feature in features_for_record(record):
+        if not _is_toggle_output_feature(feature):
+            continue
+
+        key = str(feature.get("key", "")).strip()
+        url = str(feature.get("url", "")).strip()
+        parameter_key = str(feature.get("parameter_key", "")).strip()
+        parameter_value = str(feature.get("parameter_value", "")).strip()
+        if not key or not url or not parameter_key or not parameter_value:
+            continue
+
         specs.append(
             SwitchSpec(
-                key="auto_record_enabled",
-                name="Auto Record",
-                url=recording_url,
-                icon="mdi:record-rec",
-                value_key="auto_record_enabled",
-                payload_key="auto_record_enabled",
+                key=key,
+                name=str(feature.get("label", "")).strip() or name_for_field(key),
+                url=url,
+                icon=_feature_icon_for_key(key),
+                value_key=key,
+                value_source="feature",
+                payload_on={parameter_key: parameter_value, "action": "start"},
+                payload_off={parameter_key: parameter_value, "action": "stop"},
             )
         )
 
     return specs
+
+
+def bool_switch_value_for_record(
+    record: dict[str, Any] | None, spec: SwitchSpec
+) -> bool | None:
+    if spec.value_source == "feature":
+        feature = feature_by_key(record, spec.value_key)
+        if feature is None:
+            return None
+        value = feature.get("active")
+        return value if isinstance(value, bool) else None
+    return bool_intercom_value_for_record(record, spec.value_key)
+
+
+def switch_payload_for_value(spec: SwitchSpec, value: bool) -> dict[str, Any]:
+    if value:
+        if spec.payload_on is not None:
+            return dict(spec.payload_on)
+    elif spec.payload_off is not None:
+        return dict(spec.payload_off)
+    if spec.payload_key:
+        return {spec.payload_key: value}
+    return {}
+
+
+def _is_toggle_output_feature(feature: dict[str, Any]) -> bool:
+    if not bool(feature.get("supported")):
+        return False
+    if str(feature.get("parameter_key", "")).strip() != "output":
+        return False
+    key = str(feature.get("key", "")).strip()
+    if key not in {"light", "warning_light", "siren"}:
+        return False
+    actions = feature.get("actions", [])
+    if not isinstance(actions, list):
+        return False
+    normalized_actions = {str(action).strip() for action in actions}
+    return "start" in normalized_actions and "stop" in normalized_actions
+
+
+def _feature_icon_for_key(key: str) -> str:
+    return {
+        "light": "mdi:lightbulb-on-outline",
+        "warning_light": "mdi:alarm-light-outline",
+        "siren": "mdi:bullhorn",
+    }.get(key, "mdi:toggle-switch")
 
 
 def update_timestamp(data: dict[str, Any] | None) -> datetime | None:

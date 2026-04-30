@@ -65,6 +65,7 @@ type Manager struct {
 	mu                    sync.Mutex
 	mjpegWorkers          map[string]*worker
 	hlsWorkers            map[string]*hlsWorker
+	clipJobs              map[string]*clipJob
 	webrtcPeers           map[string]*webrtcSession
 	intercomUplinkEnabled map[string]bool
 }
@@ -154,6 +155,7 @@ func New(cfg config.MediaConfig, resolver StreamResolver, logger zerolog.Logger,
 		logger:                logger.With().Str("component", "media").Logger(),
 		mjpegWorkers:          make(map[string]*worker),
 		hlsWorkers:            make(map[string]*hlsWorker),
+		clipJobs:              make(map[string]*clipJob),
 		webrtcPeers:           make(map[string]*webrtcSession),
 		intercomUplinkEnabled: make(map[string]bool),
 	}
@@ -567,7 +569,7 @@ func (m *Manager) removeWebRTCSession(key string, session *webrtcSession) {
 }
 
 func (m *Manager) activeWorkerCountLocked() int {
-	return len(m.mjpegWorkers) + len(m.hlsWorkers) + len(m.webrtcPeers)
+	return len(m.mjpegWorkers) + len(m.hlsWorkers) + len(m.clipJobs) + len(m.webrtcPeers)
 }
 
 func (m *Manager) setMediaWorkerCountLocked() {
@@ -628,6 +630,15 @@ func (w *worker) stopWhenIdle() {
 	w.mu.Unlock()
 	if empty {
 		w.logger.Info().Msg("stopping idle media worker")
+		w.cancel()
+	}
+}
+
+func (w *worker) stopNowIfIdle() {
+	w.mu.Lock()
+	empty := len(w.subscribers) == 0
+	w.mu.Unlock()
+	if empty {
 		w.cancel()
 	}
 }
@@ -1021,14 +1032,10 @@ func (w *hlsWorker) buildFFmpegArgs(attempt ffmpegStartAttempt) []string {
 	args = appendVideoFilterArgs(args, w.parent.cfg, w.parent.cfg.ScaleWidth, w.profile, attempt.useHWAccel, frameRate)
 	args = append(args,
 		"-map", "0:v:0",
-		"-map", "0:a:0?",
 	)
 	args = appendVideoEncoderArgs(args, w.parent.cfg, attempt.useHWAccel, gopSize, "veryfast")
 	args = append(args,
-		"-c:a", "aac",
-		"-b:a", "96k",
-		"-ac", "1",
-		"-ar", "16000",
+		"-an",
 		"-f", "hls",
 		"-hls_time", formatFFmpegSeconds(w.parent.cfg.HLSSegmentTime),
 		"-hls_list_size", strconv.Itoa(w.parent.cfg.HLSListSize),

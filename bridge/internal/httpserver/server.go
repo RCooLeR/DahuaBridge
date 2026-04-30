@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -32,6 +33,7 @@ type ProbeReader interface {
 type SnapshotReader interface {
 	NVRSnapshot(context.Context, string, int) ([]byte, string, error)
 	NVRRecordings(context.Context, string, dahua.NVRRecordingQuery) (dahua.NVRRecordingSearchResult, error)
+	NVRDownloadRecording(context.Context, string, string) (dahua.NVRRecordingDownload, error)
 	CreateNVRPlaybackSession(context.Context, string, dahua.NVRPlaybackSessionRequest) (dahua.NVRPlaybackSession, error)
 	GetNVRPlaybackSession(string) (dahua.NVRPlaybackSession, error)
 	SeekNVRPlaybackSession(context.Context, string, time.Time) (dahua.NVRPlaybackSession, error)
@@ -45,8 +47,14 @@ type MediaReader interface {
 	Enabled() bool
 	Subscribe(context.Context, string, string) (<-chan []byte, func(), error)
 	SubscribeScaled(context.Context, string, string, int) (<-chan []byte, func(), error)
+	CaptureFrame(context.Context, string, string, int) ([]byte, string, error)
 	HLSPlaylist(context.Context, string, string) ([]byte, error)
 	HLSSegment(context.Context, string, string, string) ([]byte, string, error)
+	StartClip(context.Context, mediaapi.ClipStartRequest) (mediaapi.ClipInfo, error)
+	StopClip(context.Context, string) (mediaapi.ClipInfo, error)
+	GetClip(string) (mediaapi.ClipInfo, error)
+	FindClips(mediaapi.ClipQuery) ([]mediaapi.ClipInfo, error)
+	ClipFilePath(string) (string, error)
 	WebRTCAnswer(context.Context, string, string, mediaapi.WebRTCSessionDescription) (mediaapi.WebRTCSessionDescription, error)
 	WebRTCICEServers() []mediaapi.WebRTCICEServer
 	IntercomStatus(string) mediaapi.IntercomStatus
@@ -67,6 +75,7 @@ type ActionReader interface {
 	NVRChannelControlCapabilities(context.Context, string, int) (dahua.NVRChannelControlCapabilities, error)
 	ControlNVRPTZ(context.Context, string, dahua.NVRPTZRequest) error
 	ControlNVRAux(context.Context, string, dahua.NVRAuxRequest) error
+	ControlNVRAudio(context.Context, string, dahua.NVRAudioRequest) error
 	ControlNVRRecording(context.Context, string, dahua.NVRRecordingRequest) error
 	ProbeDevice(context.Context, string) (*dahua.ProbeResult, error)
 	ProbeAllDevices(context.Context) []dahua.ProbeActionResult
@@ -107,6 +116,10 @@ func New(
 		defaultPositiveInt(cfg.MediaRateLimitPerMinute, 60),
 		defaultPositiveInt(cfg.MediaRateLimitBurst, 12),
 	)
+	writeTimeout := cfg.WriteTimeout
+	if writeTimeout <= 0 || writeTimeout < 60*time.Second {
+		writeTimeout = 60 * time.Second
+	}
 
 	router := chi.NewRouter()
 	router.Use(corsMiddleware)
@@ -294,6 +307,37 @@ func New(
 
 		writeJSON(w, http.StatusOK, result)
 	})
+	router.With(rateLimitMiddleware(mediaLimiter)).Get("/api/v1/nvr/{deviceID}/recordings/download", func(w http.ResponseWriter, r *http.Request) {
+		filePath := strings.TrimSpace(r.URL.Query().Get("file_path"))
+		if filePath == "" {
+			writeErrorPayload(w, http.StatusBadRequest, "invalid_request", "file_path is required")
+			return
+		}
+
+		download, err := snapshots.NVRDownloadRecording(r.Context(), chi.URLParam(r, "deviceID"), filePath)
+		if err != nil {
+			writeClassifiedActionError(w, err, http.StatusBadGateway)
+			return
+		}
+		defer download.Body.Close()
+
+		contentType := strings.TrimSpace(download.ContentType)
+		if contentType == "" {
+			contentType = "application/octet-stream"
+		}
+		fileName := strings.TrimSpace(download.FileName)
+		if fileName == "" {
+			fileName = "recording.dav"
+		}
+
+		w.Header().Set("Content-Type", contentType)
+		w.Header().Set("Content-Disposition", `attachment; filename="`+filepath.Base(fileName)+`"`)
+		if download.ContentLength > 0 {
+			w.Header().Set("Content-Length", strconv.FormatInt(download.ContentLength, 10))
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.Copy(w, download.Body)
+	})
 	router.With(rateLimitMiddleware(adminLimiter)).Get("/api/v1/nvr/{deviceID}/channels/{channel}/controls", func(w http.ResponseWriter, r *http.Request) {
 		if actions == nil {
 			writeServiceUnavailableError(w, "action layer is not configured")
@@ -388,6 +432,38 @@ func New(
 			"action":      request.Action,
 			"output":      request.Output,
 			"duration_ms": request.Duration.Milliseconds(),
+		})
+	})
+	router.With(rateLimitMiddleware(adminLimiter)).Post("/api/v1/nvr/{deviceID}/channels/{channel}/audio/mute", func(w http.ResponseWriter, r *http.Request) {
+		if actions == nil {
+			writeServiceUnavailableError(w, "action layer is not configured")
+			return
+		}
+		channel, err := strconv.Atoi(chi.URLParam(r, "channel"))
+		if err != nil || channel <= 0 {
+			writeErrorPayload(w, http.StatusBadRequest, "invalid_request", "invalid channel")
+			return
+		}
+		muted, err := parseVTOMuteRequest(r)
+		if err != nil {
+			writeInvalidRequestError(w, err)
+			return
+		}
+		controlCtx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+		defer cancel()
+		if err := actions.ControlNVRAudio(controlCtx, chi.URLParam(r, "deviceID"), dahua.NVRAudioRequest{
+			Channel: channel,
+			Muted:   muted,
+		}); err != nil {
+			writeClassifiedActionError(w, err, http.StatusBadGateway)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"status":               "ok",
+			"device_id":            chi.URLParam(r, "deviceID"),
+			"channel":              channel,
+			"muted":                muted,
+			"stream_audio_enabled": !muted,
 		})
 	})
 	router.With(rateLimitMiddleware(adminLimiter)).Post("/api/v1/nvr/{deviceID}/channels/{channel}/recording", func(w http.ResponseWriter, r *http.Request) {
@@ -829,6 +905,111 @@ func New(
 		}
 		writeJSON(w, http.StatusOK, media.ListWorkers())
 	})
+	router.With(rateLimitMiddleware(snapshotLimiter)).Get("/api/v1/media/snapshot/{streamID}", func(w http.ResponseWriter, r *http.Request) {
+		if media == nil || !media.Enabled() {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "media layer is disabled"})
+			return
+		}
+
+		scaleWidth, err := parseOptionalPositiveInt(r.URL.Query().Get("width"))
+		if err != nil {
+			writeErrorPayload(w, http.StatusBadRequest, "invalid_request", err.Error())
+			return
+		}
+		body, contentType, err := media.CaptureFrame(r.Context(), chi.URLParam(r, "streamID"), strings.TrimSpace(r.URL.Query().Get("profile")), scaleWidth)
+		if err != nil {
+			writeClassifiedActionError(w, err, http.StatusBadGateway)
+			return
+		}
+		if contentType == "" {
+			contentType = "image/jpeg"
+		}
+		w.Header().Set("Content-Type", contentType)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(body)
+	})
+	router.With(rateLimitMiddleware(mediaLimiter)).Post("/api/v1/media/streams/{streamID}/recordings", func(w http.ResponseWriter, r *http.Request) {
+		if media == nil || !media.Enabled() {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "media layer is disabled"})
+			return
+		}
+
+		request, err := parseClipStartRequest(r)
+		if err != nil {
+			writeInvalidRequestError(w, err)
+			return
+		}
+		request.StreamID = chi.URLParam(r, "streamID")
+
+		clip, err := media.StartClip(r.Context(), request)
+		if err != nil {
+			writeClassifiedActionError(w, err, http.StatusBadGateway)
+			return
+		}
+		writeJSON(w, http.StatusOK, clipAPIResponse(r, clip))
+	})
+	router.Get("/api/v1/media/recordings", func(w http.ResponseWriter, r *http.Request) {
+		if media == nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "media layer is not configured"})
+			return
+		}
+
+		query, err := parseClipQuery(r)
+		if err != nil {
+			writeInvalidRequestError(w, err)
+			return
+		}
+		clips, err := media.FindClips(query)
+		if err != nil {
+			writeClassifiedActionError(w, err, http.StatusBadGateway)
+			return
+		}
+		payload := make([]map[string]any, 0, len(clips))
+		for _, clip := range clips {
+			payload = append(payload, clipAPIResponse(r, clip))
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"items":          payload,
+			"returned_count": len(payload),
+		})
+	})
+	router.Get("/api/v1/media/recordings/{clipID}", func(w http.ResponseWriter, r *http.Request) {
+		if media == nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "media layer is not configured"})
+			return
+		}
+		clip, err := media.GetClip(chi.URLParam(r, "clipID"))
+		if err != nil {
+			writeClassifiedActionError(w, err, http.StatusBadGateway)
+			return
+		}
+		writeJSON(w, http.StatusOK, clipAPIResponse(r, clip))
+	})
+	router.With(rateLimitMiddleware(mediaLimiter)).Post("/api/v1/media/recordings/{clipID}/stop", func(w http.ResponseWriter, r *http.Request) {
+		if media == nil || !media.Enabled() {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "media layer is disabled"})
+			return
+		}
+		clip, err := media.StopClip(r.Context(), chi.URLParam(r, "clipID"))
+		if err != nil {
+			writeClassifiedActionError(w, err, http.StatusBadGateway)
+			return
+		}
+		writeJSON(w, http.StatusOK, clipAPIResponse(r, clip))
+	})
+	router.With(rateLimitMiddleware(mediaLimiter)).Get("/api/v1/media/recordings/{clipID}/download", func(w http.ResponseWriter, r *http.Request) {
+		if media == nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "media layer is not configured"})
+			return
+		}
+		path, err := media.ClipFilePath(chi.URLParam(r, "clipID"))
+		if err != nil {
+			writeClassifiedActionError(w, err, http.StatusBadGateway)
+			return
+		}
+		w.Header().Set("Content-Disposition", `attachment; filename="`+filepath.Base(path)+`"`)
+		http.ServeFile(w, r, path)
+	})
 	router.With(rateLimitMiddleware(mediaLimiter)).Get("/api/v1/media/preview/{streamID}", func(w http.ResponseWriter, r *http.Request) {
 		if media == nil || !media.Enabled() {
 			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "media layer is disabled"})
@@ -1082,7 +1263,7 @@ func New(
 			Addr:         cfg.ListenAddress,
 			Handler:      router,
 			ReadTimeout:  cfg.ReadTimeout,
-			WriteTimeout: cfg.WriteTimeout,
+			WriteTimeout: writeTimeout,
 			IdleTimeout:  cfg.IdleTimeout,
 		},
 		logger: logger.With().Str("component", "http").Logger(),
@@ -1144,6 +1325,12 @@ func writeClassifiedActionError(w http.ResponseWriter, err error, defaultStatus 
 	case errors.Is(err, dahua.ErrPlaybackSessionNotFound):
 		status = http.StatusNotFound
 		code = "playback_session_not_found"
+	case errors.Is(err, mediaapi.ErrClipNotFound):
+		status = http.StatusNotFound
+		code = "clip_not_found"
+	case errors.Is(err, mediaapi.ErrClipAlreadyActive):
+		status = http.StatusConflict
+		code = "clip_already_active"
 	case errors.Is(err, context.DeadlineExceeded), errors.Is(err, context.Canceled):
 		status = http.StatusGatewayTimeout
 		code = "transport_failure"
@@ -1181,6 +1368,85 @@ func parseOptionalPositiveInt(raw string) (int, error) {
 		return 0, fmt.Errorf("invalid integer %q", raw)
 	}
 	return value, nil
+}
+
+func parseClipStartRequest(r *http.Request) (mediaapi.ClipStartRequest, error) {
+	if r.Body == nil {
+		return mediaapi.ClipStartRequest{}, nil
+	}
+
+	var request struct {
+		ProfileName     string `json:"profile"`
+		DurationSeconds *int   `json:"duration_seconds"`
+		DurationMS      *int   `json:"duration_ms"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		if errors.Is(err, io.EOF) {
+			return mediaapi.ClipStartRequest{}, nil
+		}
+		return mediaapi.ClipStartRequest{}, fmt.Errorf("invalid json body")
+	}
+
+	duration := time.Duration(0)
+	switch {
+	case request.DurationMS != nil:
+		if *request.DurationMS < 0 {
+			return mediaapi.ClipStartRequest{}, fmt.Errorf("duration_ms must be zero or positive")
+		}
+		duration = time.Duration(*request.DurationMS) * time.Millisecond
+	case request.DurationSeconds != nil:
+		if *request.DurationSeconds < 0 {
+			return mediaapi.ClipStartRequest{}, fmt.Errorf("duration_seconds must be zero or positive")
+		}
+		duration = time.Duration(*request.DurationSeconds) * time.Second
+	}
+
+	return mediaapi.ClipStartRequest{
+		ProfileName: strings.TrimSpace(request.ProfileName),
+		Duration:    duration,
+	}, nil
+}
+
+func parseClipQuery(r *http.Request) (mediaapi.ClipQuery, error) {
+	channel, err := parseOptionalPositiveInt(r.URL.Query().Get("channel"))
+	if err != nil {
+		return mediaapi.ClipQuery{}, fmt.Errorf("invalid channel")
+	}
+
+	var startTime time.Time
+	if raw := strings.TrimSpace(r.URL.Query().Get("start")); raw != "" {
+		startTime, err = parseFlexibleTimestamp(raw, "start")
+		if err != nil {
+			return mediaapi.ClipQuery{}, err
+		}
+	}
+	var endTime time.Time
+	if raw := strings.TrimSpace(r.URL.Query().Get("end")); raw != "" {
+		endTime, err = parseFlexibleTimestamp(raw, "end")
+		if err != nil {
+			return mediaapi.ClipQuery{}, err
+		}
+	}
+	if !startTime.IsZero() && !endTime.IsZero() && endTime.Before(startTime) {
+		return mediaapi.ClipQuery{}, fmt.Errorf("end must not be before start")
+	}
+
+	limit, err := parseOptionalPositiveInt(r.URL.Query().Get("limit"))
+	if err != nil {
+		return mediaapi.ClipQuery{}, err
+	}
+	if limit > 200 {
+		limit = 200
+	}
+
+	return mediaapi.ClipQuery{
+		StreamID:     strings.TrimSpace(r.URL.Query().Get("stream_id")),
+		RootDeviceID: strings.TrimSpace(r.URL.Query().Get("root_device_id")),
+		Channel:      channel,
+		StartTime:    startTime,
+		EndTime:      endTime,
+		Limit:        limit,
+	}, nil
 }
 
 func parseNVRRecordingQuery(r *http.Request) (dahua.NVRRecordingQuery, error) {
@@ -1372,8 +1638,10 @@ func parseNVRAuxRequest(r *http.Request) (dahua.NVRAuxRequest, error) {
 	switch output {
 	case "aux", "siren":
 		output = "aux"
-	case "light", "warning_light":
+	case "light":
 		output = "light"
+	case "warning_light":
+		output = "warning_light"
 	case "wiper":
 	default:
 		return dahua.NVRAuxRequest{}, fmt.Errorf("invalid output")
@@ -1511,6 +1779,65 @@ func parseFlexibleTimestamp(raw string, field string) (time.Time, error) {
 	}
 
 	return time.Time{}, fmt.Errorf("invalid %s time %q", field, raw)
+}
+
+func clipAPIResponse(r *http.Request, clip mediaapi.ClipInfo) map[string]any {
+	payload := map[string]any{
+		"id":               clip.ID,
+		"stream_id":        clip.StreamID,
+		"root_device_id":   clip.RootDeviceID,
+		"source_device_id": clip.SourceDeviceID,
+		"device_kind":      clip.DeviceKind,
+		"name":             clip.Name,
+		"channel":          clip.Channel,
+		"profile":          clip.Profile,
+		"status":           clip.Status,
+		"started_at":       clip.StartedAt.Format(time.RFC3339),
+		"duration_ms":      clip.Duration.Milliseconds(),
+		"bytes":            clip.Bytes,
+		"file_name":        clip.FileName,
+		"download_url":     buildAbsoluteRequestURL(r, "/api/v1/media/recordings/"+url.PathEscape(clip.ID)+"/download"),
+		"self_url":         buildAbsoluteRequestURL(r, "/api/v1/media/recordings/"+url.PathEscape(clip.ID)),
+	}
+	if !clip.EndedAt.IsZero() {
+		payload["ended_at"] = clip.EndedAt.Format(time.RFC3339)
+	}
+	if strings.TrimSpace(clip.Error) != "" {
+		payload["error"] = clip.Error
+	}
+	if clip.Status == mediaapi.ClipStatusRecording {
+		payload["stop_url"] = buildAbsoluteRequestURL(r, "/api/v1/media/recordings/"+url.PathEscape(clip.ID)+"/stop")
+	}
+	return payload
+}
+
+func buildAbsoluteRequestURL(r *http.Request, path string) string {
+	if r == nil {
+		return path
+	}
+	if strings.HasPrefix(path, "http://") || strings.HasPrefix(path, "https://") {
+		return path
+	}
+
+	scheme := "http"
+	if r.TLS != nil {
+		scheme = "https"
+	}
+	if forwardedProto := strings.TrimSpace(r.Header.Get("X-Forwarded-Proto")); forwardedProto != "" {
+		scheme = forwardedProto
+	}
+
+	host := strings.TrimSpace(r.Host)
+	if forwardedHost := strings.TrimSpace(r.Header.Get("X-Forwarded-Host")); forwardedHost != "" {
+		host = forwardedHost
+	}
+	if host == "" {
+		return path
+	}
+	if !strings.HasPrefix(path, "/") {
+		path = "/" + path
+	}
+	return scheme + "://" + host + path
 }
 
 func defaultPositiveInt(value int, fallback int) int {

@@ -23,6 +23,32 @@ var supportedEventCodes = []string{
 }
 
 func (d *Driver) StreamEvents(ctx context.Context, sink chan<- dahua.Event) error {
+	overrides := d.imouEventOverrides()
+	if len(overrides) == 0 {
+		return d.streamLocalEvents(ctx, sink)
+	}
+
+	merged := make(chan dahua.Event, 64)
+	go d.runLocalEventSource(ctx, merged)
+	for _, override := range overrides {
+		go d.runImouEventSource(ctx, override, merged)
+	}
+
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case event := <-merged:
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case sink <- event:
+			}
+		}
+	}
+}
+
+func (d *Driver) streamLocalEvents(ctx context.Context, sink chan<- dahua.Event) error {
 	query := url.Values{
 		"action": []string{"attach"},
 		"codes":  []string{"[" + strings.Join(supportedEventCodes, ",") + "]"},
@@ -80,6 +106,10 @@ func (d *Driver) parseEventStream(ctx context.Context, resp *http.Response, sink
 
 		event, ok := normalizeEvent(rootID, values)
 		if !ok {
+			return nil
+		}
+
+		if d.shouldSuppressLocalEvent(event) {
 			return nil
 		}
 

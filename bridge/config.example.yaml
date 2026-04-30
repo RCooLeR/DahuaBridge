@@ -32,35 +32,6 @@ http:
   # Burst size for media requests before rate limiting kicks in.
   media_rate_limit_burst: 12
 
-# Optional MQTT transport settings. Leave this disabled for the supported bridge-native Home Assistant integration path.
-mqtt:
-  # Enable only if you explicitly need raw bridge MQTT topics for an external consumer.
-  enabled: false
-  # MQTT broker URL. Common schemes are tcp://host:1883, ssl://host:8883, or ws://host:port/path if your broker supports WebSockets.
-  broker: tcp://127.0.0.1:1883
-  # MQTT client ID used by the bridge when connecting to the broker. Must be unique per broker connection.
-  client_id: dahuabridge
-  # MQTT username. Leave empty if your broker allows anonymous connections or uses another auth model.
-  username: ""
-  # MQTT password. Leave empty if your broker allows anonymous connections or uses another auth model.
-  password: ""
-  # Root topic prefix for non-discovery bridge topics.
-  topic_prefix: dahuabridge
-  # Home Assistant MQTT discovery prefix. "homeassistant" is the normal default.
-  discovery_prefix: homeassistant
-  # MQTT QoS level. Valid values are 0, 1, or 2. Most Home Assistant setups use 1.
-  qos: 1
-  # Whether published MQTT messages should be retained by the broker.
-  retain: true
-  # Whether to request a clean MQTT session on connect. false is safer if you want persistent subscriptions/session state.
-  clean_session: false
-  # MQTT keep-alive interval.
-  keep_alive: 30s
-  # Maximum time to wait when first connecting to the MQTT broker.
-  connect_timeout: 15s
-  # Maximum time to wait for a publish operation to complete.
-  publish_timeout: 10s
-
 # Top-level media settings used for bridge-hosted MJPEG, HLS, and WebRTC helper/transcode paths.
 media:
   # Enable or disable the media subsystem entirely. Set false if you do not want bridge-hosted media at all.
@@ -147,6 +118,25 @@ home_assistant:
   request_timeout: 15s
 
 # Top-level persistent state store settings. Used to restore last known state across restarts.
+imou:
+  # Enable Imou cloud overrides for devices/channels that are mapped below.
+  enabled: false
+  # App credentials from https://open.imoulife.com/. In Docker, prefer env vars:
+  # DAHUABRIDGE_IMOU_APP_ID and DAHUABRIDGE_IMOU_APP_SECRET.
+  app_id: ""
+  app_secret: ""
+  # Data center code. "fk" is Central Europe, "sg" is East Asia, "or" is Western America.
+  data_center: fk
+  # Optional explicit API endpoint override. Leave empty to derive from data_center.
+  # endpoint: https://openapi-fk.easy4ip.com
+  # Timeout for Imou Open Platform HTTP calls.
+  request_timeout: 15s
+  # Poll interval for Imou alarm/event queries on overridden channels.
+  alarm_poll_interval: 15s
+  # How long a cloud alarm keeps motion state active before the bridge emits a synthetic stop.
+  event_active_window: 20s
+
+# Top-level persistent state store settings. Used to restore last known state across restarts.
 state_store:
   # Enable or disable on-disk state persistence.
   enabled: true
@@ -160,7 +150,7 @@ devices:
   # NVR device list.
   nvr:
     # First NVR entry.
-    - # Stable device ID used internally, in MQTT, URLs, and Home Assistant unique IDs. Do not change casually after deployment.
+    - # Stable device ID used internally, in URLs and Home Assistant unique IDs. Do not change casually after deployment.
       id: example_nvr
       # Friendly display name shown to users.
       name: "Example NVR"
@@ -184,6 +174,38 @@ devices:
       # onvif_service_url: http://nvr.example.local/onvif/device_service
       # Optional allowlist of 1-based channel numbers to expose. Useful if the NVR has placeholder/unused channels.
       # channel_allowlist: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+      # Optional per-channel aux/light/wiper override map. Use this when Dahua firmware reports generic PTZ aux
+      # capabilities that do not match the real deterrence outputs, or when a real siren/light exists on a channel
+      # but is not advertised cleanly by the device.
+      # channel_aux_control_overrides:
+      #   - channel: 8
+      #     features: [siren]
+      #   - channel: 9
+      #     features: [warning_light]
+      #   - channel: 11
+      #     features: [siren]
+      # Optional per-channel PTZ visibility override. Use this when the NVR advertises PTZ on a fixed camera.
+      # channel_ptz_control_overrides:
+      #   - channel: 1
+      #     enabled: false
+      # Optional per-channel recording state override. Use this when RecordMode probing is incomplete on the NVR
+      # but you know the recorder is actively recording a channel.
+      # channel_recording_control_overrides:
+      #   - channel: 1
+      #     supported: true
+      #     active: true
+      #     mode: auto
+      # Optional Imou cloud overrides for specific NVR channels. Use this for cameras behind the NVR that expose
+      # events/lights/siren more reliably through the Imou Open Platform than through the NVR itself.
+      # channel_imou_overrides:
+      #   - channel: 5
+      #     device_id: 66ECDBDPSFACBCA
+      #     channel_id: "0"
+      #     features: [events, light, warning_light, siren]
+      #   - channel: 6
+      #     device_id: 66ECDBDPSFACBCA
+      #     channel_id: "1"
+      #     features: [events, light, warning_light, siren]
       # Poll interval for full probe refreshes.
       poll_interval: 30s
       # Timeout for requests to this device.
@@ -196,7 +218,7 @@ devices:
   # Standalone IPC camera device list.
   ipc:
     # First IPC entry.
-    - # Stable device ID used internally, in MQTT, URLs, and Home Assistant unique IDs.
+    - # Stable device ID used internally, in URLs and Home Assistant unique IDs.
       id: example_ipc_30
       # Friendly display name shown to users.
       name: "Example IPC 30"
@@ -222,7 +244,7 @@ devices:
       enabled: true
 
     # Second IPC entry, using HTTPS and self-signed TLS as an example.
-    - # Stable device ID used internally, in MQTT, URLs, and Home Assistant unique IDs.
+    - # Stable device ID used internally, in URLs and Home Assistant unique IDs.
       id: example_ipc_20
       # Friendly display name shown to users.
       name: "Example IPC 20"
@@ -250,7 +272,7 @@ devices:
   # VTO door station device list.
   vto:
     # First VTO entry.
-    - # Stable device ID used internally, in MQTT, URLs, and Home Assistant unique IDs.
+    - # Stable device ID used internally, in URLs and Home Assistant unique IDs.
       id: example_vto
       # Friendly display name shown to users.
       name: "Example VTO"

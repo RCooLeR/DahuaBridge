@@ -1,0 +1,25 @@
+{
+  "name": "@dahuabridge/ha-cards",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Home Assistant custom cards for DahuaBridge",
+  "scripts": {
+    "build": "vite build",
+    "check": "npm run test && npm run build",
+    "dev": "vite build --watch",
+    "lint": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "hls.js": "^1.6.14",
+    "lit": "^3.3.0",
+    "zod": "^4.1.12"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.1",
+    "typescript": "^5.9.3",
+    "vite": "^7.2.4",
+    "vitest": "^3.2.4"
+  }
+}

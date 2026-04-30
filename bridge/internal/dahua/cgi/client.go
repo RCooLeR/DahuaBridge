@@ -1,6 +1,7 @@
 package cgi
 
 import (
+	"bytes"
 	"context"
 	"crypto/md5"
 	"crypto/rand"
@@ -9,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 	"sync"
 
@@ -61,7 +63,7 @@ func (c *Client) GetText(ctx context.Context, path string, query url.Values) (st
 	endpoint := path
 	reqURL := baseURL + path
 	if len(query) > 0 {
-		reqURL += "?" + query.Encode()
+		reqURL += "?" + encodeQuery(query)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
@@ -104,7 +106,7 @@ func (c *Client) GetBinary(ctx context.Context, path string, query url.Values) (
 	endpoint := path
 	reqURL := baseURL + path
 	if len(query) > 0 {
-		reqURL += "?" + query.Encode()
+		reqURL += "?" + encodeQuery(query)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
@@ -137,7 +139,7 @@ func (c *Client) OpenStream(ctx context.Context, path string, query url.Values) 
 	baseURL, client := c.currentStreamState()
 	reqURL := baseURL + path
 	if len(query) > 0 {
-		reqURL += "?" + query.Encode()
+		reqURL += "?" + encodeQuery(query)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
@@ -168,7 +170,14 @@ func (c *Client) do(req *http.Request, client *http.Client) (*http.Response, err
 		req1.Header.Set("Authorization", auth)
 		resp, err := client.Do(req1)
 		if err == nil && resp.StatusCode != http.StatusUnauthorized {
-			return resp, nil
+			if shouldRetryDigestChallenge(resp) {
+				resp.Body.Close()
+			} else {
+				return resp, nil
+			}
+		}
+		if err != nil {
+			return nil, err
 		}
 		if resp != nil {
 			resp.Body.Close()
@@ -196,6 +205,51 @@ func (c *Client) do(req *http.Request, client *http.Client) (*http.Response, err
 	req2.Header.Set("Authorization", c.authorizationHeader(req2))
 
 	return client.Do(req2)
+}
+
+func shouldRetryDigestChallenge(resp *http.Response) bool {
+	if resp == nil || resp.StatusCode != http.StatusForbidden || resp.Body == nil {
+		return false
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return false
+	}
+	resp.Body = io.NopCloser(bytes.NewReader(body))
+	return strings.Contains(strings.TrimSpace(string(body)), "Authority:check failure.")
+}
+
+func encodeQuery(query url.Values) string {
+	if len(query) == 0 {
+		return ""
+	}
+
+	pairs := make([]string, 0, len(query))
+	appendKey := func(key string, values []string) {
+		escapedKey := url.QueryEscape(key)
+		for _, value := range values {
+			pairs = append(pairs, escapedKey+"="+url.QueryEscape(value))
+		}
+	}
+
+	if actionValues, ok := query["action"]; ok {
+		appendKey("action", actionValues)
+	}
+
+	keys := make([]string, 0, len(query))
+	for key := range query {
+		if key == "action" {
+			continue
+		}
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		appendKey(key, query[key])
+	}
+
+	return strings.Join(pairs, "&")
 }
 
 func (c *Client) setChallenge(challenge map[string]string) {

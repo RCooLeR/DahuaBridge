@@ -1,14 +1,29 @@
-# Documentation
+# DahuaBridge Documentation
 
-Start here if you want the short practical version.
+This section explains how the repository works as one system.
 
-- [install.md](install.md): step-by-step install guide
-- [how-it-works.md](how-it-works.md): short architecture overview
-- [device-model.md](device-model.md): what devices, sensors, events, and names the project creates
-- [controls.md](controls.md): control APIs, archive/playback APIs, and native-integration controls
+Use these pages in order:
 
-Other useful files:
+1. [Architecture](architecture.md)
+2. [Deployment Guide](deployment.md)
+3. [Feature Map](features.md)
+4. [HA Cards](ha-cards.md)
 
-- [project-status.md](project-status.md): current project state and open items
-- [../bridge/README.md](../bridge/README.md): bridge-specific technical details
-- [../integration/README.md](../integration/README.md): Home Assistant custom integration details
+Then move into the component-specific docs:
+
+- [Bridge docs](../bridge/docs/README.md)
+- [Integration docs](../integration/docs/README.md)
+- [HA cards docs](../ha-cards/docs/README.md)
+
+## What This Section Covers
+
+- how the bridge, integration, and optional cards fit together
+- the supported deployment model
+- which features belong to which layer
+- how to think about ownership and responsibilities across the repo
+
+## What This Section Does Not Duplicate
+
+- low-level bridge API reference: see [bridge/docs/api-reference.md](../bridge/docs/api-reference.md)
+- bridge media details: see [bridge/docs/media-and-recording.md](../bridge/docs/media-and-recording.md)
+- integration entities and services: see [integration/docs/entities-and-controls.md](../integration/docs/entities-and-controls.md)

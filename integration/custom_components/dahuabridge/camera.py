@@ -5,14 +5,19 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
+import voluptuous as vol
 from homeassistant.components.camera import Camera, CameraEntityFeature
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers import entity_platform
 
 from .bridge_api import DahuaBridgeAPIError
 from .catalog import (
     catalog_records,
+    capture_for_record,
     controls_for_record,
     device_for_record,
     device_id_for_record,
@@ -39,6 +44,20 @@ async def async_setup_entry(
 ) -> None:
     coordinator = hass.data[DOMAIN][entry.entry_id]
     seen: set[str] = set()
+    platform = entity_platform.async_get_current_platform()
+    platform.async_register_entity_service(
+        "start_recording",
+        {
+            vol.Optional("profile"): cv.string,
+            vol.Optional("duration_seconds"): cv.positive_int,
+        },
+        "async_start_recording",
+    )
+    platform.async_register_entity_service(
+        "stop_recording",
+        {},
+        "async_stop_recording",
+    )
 
     @callback
     def async_discover_entities() -> None:
@@ -96,6 +115,11 @@ class DahuaBridgeCamera(DahuaBridgeEntity, Camera):
         return self.record is not None
 
     @property
+    def is_recording(self) -> bool:
+        capture = capture_for_record(self.record)
+        return bool(capture.get("active", False))
+
+    @property
     def extra_state_attributes(self) -> dict[str, Any]:
         record = self.record
         stream = stream_for_record(record)
@@ -103,6 +127,7 @@ class DahuaBridgeCamera(DahuaBridgeEntity, Camera):
         device_id = device_id_for_record(record)
         parent_id = parent_id_for_record(record)
         attrs: dict[str, Any] = {}
+        capture = capture_for_record(record)
 
         recommended = str(stream.get("recommended_profile", "")).strip()
         if recommended:
@@ -111,6 +136,24 @@ class DahuaBridgeCamera(DahuaBridgeEntity, Camera):
         snapshot_url = snapshot_url_for_record(record)
         if snapshot_url:
             attrs["snapshot_url"] = self.coordinator.api.bridge_resource_url(snapshot_url)
+        if capture:
+            attrs["bridge_capture"] = _resolve_bridge_urls(self.coordinator.api, capture)
+            attrs["bridge_recording_active"] = bool(capture.get("active", False))
+            start_url = str(capture.get("start_recording_url", "")).strip()
+            if start_url:
+                attrs["bridge_start_recording_url"] = self.coordinator.api.bridge_resource_url(
+                    start_url
+                )
+            stop_url = str(capture.get("stop_recording_url", "")).strip()
+            if stop_url:
+                attrs["bridge_stop_recording_url"] = self.coordinator.api.bridge_resource_url(
+                    stop_url
+                )
+            recordings_url = str(capture.get("recordings_url", "")).strip()
+            if recordings_url:
+                attrs["bridge_recordings_url"] = self.coordinator.api.bridge_resource_url(
+                    recordings_url
+                )
 
         source = self._stream_source()
         if source:
@@ -131,6 +174,30 @@ class DahuaBridgeCamera(DahuaBridgeEntity, Camera):
         preview_url = str(stream.get("local_preview_url", "")).strip()
         if preview_url:
             attrs["preview_url"] = self.coordinator.api.bridge_resource_url(preview_url)
+
+        local_intercom_url = str(stream.get("local_intercom_url", "")).strip()
+        if local_intercom_url:
+            attrs["bridge_local_intercom_url"] = self.coordinator.api.bridge_resource_url(
+                local_intercom_url
+            )
+
+        onvif_stream_url = str(stream.get("onvif_stream_url", "")).strip()
+        if onvif_stream_url:
+            attrs["bridge_onvif_stream_url"] = self.coordinator.api.bridge_resource_url(
+                onvif_stream_url
+            )
+
+        onvif_snapshot_url = str(stream.get("onvif_snapshot_url", "")).strip()
+        if onvif_snapshot_url:
+            attrs["bridge_onvif_snapshot_url"] = self.coordinator.api.bridge_resource_url(
+                onvif_snapshot_url
+            )
+
+        profiles = stream.get("profiles")
+        if isinstance(profiles, dict) and profiles:
+            attrs["bridge_profiles"] = _resolve_bridge_urls(
+                self.coordinator.api, profiles
+            )
 
         controls = controls_for_record(record)
         if controls:
@@ -165,28 +232,46 @@ class DahuaBridgeCamera(DahuaBridgeEntity, Camera):
     async def async_camera_image(
         self, width: int | None = None, height: int | None = None
     ) -> bytes | None:
-        mjpeg_url = self._mjpeg_url()
-        if not mjpeg_url:
-            return await self._placeholder_logo_bytes()
-
-        resolved = self.coordinator.api.bridge_resource_url(
-            _with_requested_width(mjpeg_url, width)
-        )
-        _LOGGER.debug(
-            "Fetching camera MJPEG frame for %s from %s",
-            self.entity_id or self._device_id,
-            resolved,
-        )
-        try:
-            return await self.coordinator.api.async_get_mjpeg_frame(resolved)
-        except DahuaBridgeAPIError as err:
-            _LOGGER.warning(
-                "MJPEG frame fetch failed for %s via %s: %s",
+        snapshot_url = self._snapshot_url()
+        if snapshot_url:
+            resolved = self.coordinator.api.bridge_resource_url(
+                _with_requested_width(snapshot_url, width)
+            )
+            _LOGGER.debug(
+                "Fetching camera snapshot for %s from %s",
                 self.entity_id or self._device_id,
                 resolved,
-                err,
             )
-            return await self._placeholder_logo_bytes()
+            try:
+                return await self.coordinator.api.async_get_bytes(resolved)
+            except DahuaBridgeAPIError as err:
+                _LOGGER.warning(
+                    "Snapshot fetch failed for %s via %s: %s",
+                    self.entity_id or self._device_id,
+                    resolved,
+                    err,
+                )
+
+        mjpeg_url = self._mjpeg_url()
+        if mjpeg_url:
+            resolved = self.coordinator.api.bridge_resource_url(
+                _with_requested_width(mjpeg_url, width)
+            )
+            _LOGGER.debug(
+                "Fetching camera MJPEG frame for %s from %s",
+                self.entity_id or self._device_id,
+                resolved,
+            )
+            try:
+                return await self.coordinator.api.async_get_mjpeg_frame(resolved)
+            except DahuaBridgeAPIError as err:
+                _LOGGER.warning(
+                    "MJPEG frame fetch failed for %s via %s: %s",
+                    self.entity_id or self._device_id,
+                    resolved,
+                    err,
+                )
+        return await self._placeholder_logo_bytes()
 
     def _stream_source(self) -> str | None:
         return stream_source_for_record_with_preferences(
@@ -200,8 +285,42 @@ class DahuaBridgeCamera(DahuaBridgeEntity, Camera):
             self.record, self.coordinator.preferred_video_profile
         )
 
+    def _snapshot_url(self) -> str | None:
+        capture = capture_for_record(self.record)
+        value = str(capture.get("snapshot_url", "")).strip()
+        if value:
+            return value
+        return snapshot_url_for_record(self.record)
+
     def _stream_available(self) -> bool:
         return stream_available_for_record(self.record)
+
+    async def async_start_recording(
+        self, profile: str | None = None, duration_seconds: int | None = None
+    ) -> None:
+        capture = capture_for_record(self.record)
+        start_url = str(capture.get("start_recording_url", "")).strip()
+        if not start_url:
+            raise HomeAssistantError("Bridge recording is not available for this camera")
+
+        payload: dict[str, Any] = {}
+        resolved_profile = (profile or "").strip()
+        if resolved_profile:
+            payload["profile"] = resolved_profile
+        if duration_seconds is not None:
+            payload["duration_seconds"] = duration_seconds
+
+        await self.coordinator.api.async_post_json(start_url, payload)
+        await self.coordinator.async_request_refresh()
+
+    async def async_stop_recording(self) -> None:
+        capture = capture_for_record(self.record)
+        stop_url = str(capture.get("stop_recording_url", "")).strip()
+        if not stop_url:
+            raise HomeAssistantError("No active bridge recording for this camera")
+
+        await self.coordinator.api.async_post_action(stop_url)
+        await self.coordinator.async_request_refresh()
 
     async def _placeholder_logo_bytes(self) -> bytes | None:
         global _LOGO_BYTES
