@@ -123,14 +123,17 @@ Read more:
 The bridge supports:
 
 - archive search
+- optional archive event-type filtering
 - playback session creation
 - playback session lookup
 - playback seek
 - playback HLS/WebRTC helpers
+- MP4 export by capturing a native archive playback stream
 
 APIs:
 
 - `GET /api/v1/nvr/{deviceID}/recordings`
+- `POST /api/v1/nvr/{deviceID}/recordings/export`
 - `POST /api/v1/nvr/{deviceID}/playback/sessions`
 - `GET /api/v1/nvr/playback/sessions/{sessionID}`
 - `POST /api/v1/nvr/playback/sessions/{sessionID}/seek`
@@ -149,6 +152,7 @@ Important note:
 
 - device-side manual recording endpoints still exist
 - they are no longer the preferred recording UX for higher layers
+- `action:"auto"` returns a channel to schedule-controlled recording after manual start/stop
 - bridge-owned clip recording is the intended recording flow for integration and UI work
 
 APIs:
@@ -157,6 +161,11 @@ APIs:
 - `POST /api/v1/nvr/{deviceID}/channels/{channel}/ptz`
 - `POST /api/v1/nvr/{deviceID}/channels/{channel}/aux`
 - `POST /api/v1/nvr/{deviceID}/channels/{channel}/recording`
+- `POST /api/v1/nvr/{deviceID}/channels/{channel}/diagnostics`
+
+Operator diagnostics:
+
+- `/admin/test-bridge` lets you select a channel, switch stream transports, and compare bridge-selected control behavior with explicit NVR CGI, NVR RPC/config, and direct IPC attempts.
 
 ## 9. VTO Controls And Intercom Helpers
 
@@ -218,6 +227,7 @@ Operational features include:
 APIs:
 
 - `GET /admin`
+- `GET /admin/test-bridge`
 - `GET /healthz`
 - `GET /readyz`
 - `GET /api/v1/status`

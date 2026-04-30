@@ -184,8 +184,6 @@ func TestAudioCapabilitiesHideReadOnlyNVRMuteControl(t *testing.T) {
 			default:
 				http.Error(w, "unexpected config", http.StatusBadRequest)
 			}
-		case "setConfig":
-			http.Error(w, "Authority:check failure.", http.StatusForbidden)
 		default:
 			http.Error(w, "unexpected action", http.StatusBadRequest)
 		}
@@ -222,8 +220,57 @@ func TestAudioCapabilitiesHideReadOnlyNVRMuteControl(t *testing.T) {
 	if authority := driver.audioControlAuthority(context.Background(), 5); authority != "nvr_read_only" {
 		t.Fatalf("expected nvr_read_only authority, got %q", authority)
 	}
+	if !strings.Contains(strings.Join(notes, ","), "channel_nvr_audio_config_write_unavailable") {
+		t.Fatalf("expected unavailable note, got %+v", notes)
+	}
+}
+
+func TestAudioCapabilitiesHideNVRMuteWhenEncodeWriteDenied(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Query().Get("action") {
+		case "getConfig":
+			switch r.URL.Query().Get("name") {
+			case "ChannelTitle":
+				_, _ = w.Write([]byte("table.ChannelTitle[4].Name=Boiler Room\n"))
+			case "Encode":
+				_, _ = w.Write([]byte("table.Encode[4].MainFormat[0].Video.resolution=2560x1440\ntable.Encode[4].MainFormat[0].Audio.Compression=AAC\ntable.Encode[4].MainFormat[0].AudioEnable=true\n"))
+			case "RecordMode":
+				_, _ = w.Write([]byte("table.RecordMode[4].Mode=0\ntable.RecordMode[4].ModeExtra1=2\ntable.RecordMode[4].ModeExtra2=2\n"))
+			case "RemoteDevice":
+				_, _ = w.Write([]byte(""))
+			default:
+				http.Error(w, "unexpected config", http.StatusBadRequest)
+			}
+		case "setConfig":
+			http.Error(w, "Authority:check failure.", http.StatusForbidden)
+		default:
+			http.Error(w, "unexpected action", http.StatusBadRequest)
+		}
+	}))
+	defer server.Close()
+
+	cfg := config.DeviceConfig{
+		ID:                "west20_nvr",
+		BaseURL:           server.URL,
+		Username:          "assistant",
+		Password:          "secret",
+		ChannelAllowlist:  []int{5},
+		AllowConfigWrites: true,
+		RequestTimeout:    5 * time.Second,
+	}
+	metricsRegistry := metrics.New(buildinfo.Info())
+	driver := New(cfg, config.ImouConfig{}, nil, nil, zerolog.Nop(), metricsRegistry, cgi.New(cfg, metricsRegistry))
+	driver.rpc = nil
+
+	capabilities, notes := driver.audioCapabilities(context.Background(), 5)
+	if capabilities.Mute || capabilities.Supported {
+		t.Fatalf("expected denied encode write to hide mute support, got %+v", capabilities)
+	}
+	if authority := driver.audioControlAuthority(context.Background(), 5); authority != "nvr_read_only" {
+		t.Fatalf("expected nvr_read_only authority, got %q", authority)
+	}
 	if !strings.Contains(strings.Join(notes, ","), "channel_nvr_audio_config_write_permission_denied") {
-		t.Fatalf("expected permission note, got %+v", notes)
+		t.Fatalf("expected permission denied note, got %+v", notes)
 	}
 }
 
@@ -237,8 +284,6 @@ func TestRecordingCapabilitiesHideReadOnlyNVRWrites(t *testing.T) {
 			default:
 				http.Error(w, "unexpected config", http.StatusBadRequest)
 			}
-		case "setConfig":
-			http.Error(w, "Authority:check failure.", http.StatusForbidden)
 		default:
 			http.Error(w, "unexpected action", http.StatusBadRequest)
 		}
@@ -338,12 +383,13 @@ func TestDriverAuxSendsExpectedQueries(t *testing.T) {
 	defer server.Close()
 
 	cfg := config.DeviceConfig{
-		ID:               "west20_nvr",
-		BaseURL:          server.URL,
-		Username:         "assistant",
-		Password:         "secret",
-		ChannelAllowlist: []int{11},
-		RequestTimeout:   5 * time.Second,
+		ID:                "west20_nvr",
+		BaseURL:           server.URL,
+		Username:          "assistant",
+		Password:          "secret",
+		ChannelAllowlist:  []int{11},
+		AllowConfigWrites: true,
+		RequestTimeout:    5 * time.Second,
 	}
 	metricsRegistry := metrics.New(buildinfo.Info())
 	driver := New(cfg, config.ImouConfig{}, nil, nil, zerolog.Nop(), metricsRegistry, cgi.New(cfg, metricsRegistry))
@@ -443,12 +489,13 @@ func TestDriverAuxLightUsesRPCModeSwitch(t *testing.T) {
 	defer server.Close()
 
 	cfg := config.DeviceConfig{
-		ID:               "west20_nvr",
-		BaseURL:          server.URL,
-		Username:         "assistant",
-		Password:         "secret",
-		ChannelAllowlist: []int{11},
-		RequestTimeout:   5 * time.Second,
+		ID:                "west20_nvr",
+		BaseURL:           server.URL,
+		Username:          "assistant",
+		Password:          "secret",
+		ChannelAllowlist:  []int{11},
+		AllowConfigWrites: true,
+		RequestTimeout:    5 * time.Second,
 	}
 	metricsRegistry := metrics.New(buildinfo.Info())
 	driver := New(cfg, config.ImouConfig{}, nil, nil, zerolog.Nop(), metricsRegistry, cgi.New(cfg, metricsRegistry))
@@ -570,12 +617,13 @@ func TestDriverRecordingSendsExpectedQueries(t *testing.T) {
 	defer server.Close()
 
 	cfg := config.DeviceConfig{
-		ID:               "west20_nvr",
-		BaseURL:          server.URL,
-		Username:         "assistant",
-		Password:         "secret",
-		ChannelAllowlist: []int{5},
-		RequestTimeout:   5 * time.Second,
+		ID:                "west20_nvr",
+		BaseURL:           server.URL,
+		Username:          "assistant",
+		Password:          "secret",
+		ChannelAllowlist:  []int{5},
+		AllowConfigWrites: true,
+		RequestTimeout:    5 * time.Second,
 	}
 	metricsRegistry := metrics.New(buildinfo.Info())
 	driver := New(cfg, config.ImouConfig{}, nil, nil, zerolog.Nop(), metricsRegistry, cgi.New(cfg, metricsRegistry))
@@ -589,11 +637,11 @@ func TestDriverRecordingSendsExpectedQueries(t *testing.T) {
 		t.Fatalf("Recording returned error: %v", err)
 	}
 
-	if len(requests) != 4 {
-		t.Fatalf("expected 4 requests, got %d", len(requests))
+	if len(requests) != 3 {
+		t.Fatalf("expected 3 requests, got %d", len(requests))
 	}
-	if requests[3].Get("RecordMode[4].Mode") != "1" || requests[3].Get("RecordMode[4].ModeExtra1") != "2" || requests[3].Get("RecordMode[4].ModeExtra2") != "2" {
-		t.Fatalf("unexpected setConfig request: %+v", requests[3])
+	if requests[2].Get("RecordMode[4].Mode") != "1" || requests[2].Get("RecordMode[4].ModeExtra1") != "2" || requests[2].Get("RecordMode[4].ModeExtra2") != "2" {
+		t.Fatalf("unexpected setConfig request: %+v", requests[2])
 	}
 }
 
@@ -617,12 +665,13 @@ func TestDriverRecordingFallsBackToTablePrefixedQueries(t *testing.T) {
 	defer server.Close()
 
 	cfg := config.DeviceConfig{
-		ID:               "west20_nvr",
-		BaseURL:          server.URL,
-		Username:         "assistant",
-		Password:         "secret",
-		ChannelAllowlist: []int{5},
-		RequestTimeout:   5 * time.Second,
+		ID:                "west20_nvr",
+		BaseURL:           server.URL,
+		Username:          "assistant",
+		Password:          "secret",
+		ChannelAllowlist:  []int{5},
+		AllowConfigWrites: true,
+		RequestTimeout:    5 * time.Second,
 	}
 	metricsRegistry := metrics.New(buildinfo.Info())
 	driver := New(cfg, config.ImouConfig{}, nil, nil, zerolog.Nop(), metricsRegistry, cgi.New(cfg, metricsRegistry))
@@ -636,11 +685,11 @@ func TestDriverRecordingFallsBackToTablePrefixedQueries(t *testing.T) {
 		t.Fatalf("Recording returned error: %v", err)
 	}
 
-	if len(requests) != 6 {
-		t.Fatalf("expected 6 requests, got %d", len(requests))
+	if len(requests) != 4 {
+		t.Fatalf("expected 4 requests, got %d", len(requests))
 	}
-	if requests[5].Get("table.RecordMode[4].Mode") != "1" || requests[5].Get("table.RecordMode[4].ModeExtra1") != "2" || requests[5].Get("table.RecordMode[4].ModeExtra2") != "2" {
-		t.Fatalf("unexpected fallback setConfig request: %+v", requests[5])
+	if requests[3].Get("table.RecordMode[4].Mode") != "1" || requests[3].Get("table.RecordMode[4].ModeExtra1") != "2" || requests[3].Get("table.RecordMode[4].ModeExtra2") != "2" {
+		t.Fatalf("unexpected fallback setConfig request: %+v", requests[3])
 	}
 }
 
@@ -652,7 +701,7 @@ func TestDriverSetAudioMuteUsesEncodeAudioEnable(t *testing.T) {
 		case "getConfig":
 			switch r.URL.Query().Get("name") {
 			case "Encode":
-				_, _ = w.Write([]byte("table.Encode[4].MainFormat[0].Video.resolution=2560x1440\ntable.Encode[4].MainFormat[0].Audio.Compression=AAC\ntable.Encode[4].MainFormat[0].AudioEnable=true\n"))
+				_, _ = w.Write([]byte("table.Encode[4].MainFormat[0].Video.resolution=2560x1440\ntable.Encode[4].MainFormat[0].Audio.Compression=AAC\ntable.Encode[4].MainFormat[0].AudioEnable=true\ntable.Encode[4].ExtraFormat[0].AudioEnable=true\n"))
 			case "RecordMode":
 				_, _ = w.Write([]byte("table.RecordMode[4].Mode=0\ntable.RecordMode[4].ModeExtra1=2\ntable.RecordMode[4].ModeExtra2=2\n"))
 			default:
@@ -667,12 +716,13 @@ func TestDriverSetAudioMuteUsesEncodeAudioEnable(t *testing.T) {
 	defer server.Close()
 
 	cfg := config.DeviceConfig{
-		ID:               "west20_nvr",
-		BaseURL:          server.URL,
-		Username:         "assistant",
-		Password:         "secret",
-		ChannelAllowlist: []int{5},
-		RequestTimeout:   5 * time.Second,
+		ID:                "west20_nvr",
+		BaseURL:           server.URL,
+		Username:          "assistant",
+		Password:          "secret",
+		ChannelAllowlist:  []int{5},
+		AllowConfigWrites: true,
+		RequestTimeout:    5 * time.Second,
 	}
 	metricsRegistry := metrics.New(buildinfo.Info())
 	driver := New(cfg, config.ImouConfig{}, nil, nil, zerolog.Nop(), metricsRegistry, cgi.New(cfg, metricsRegistry))
@@ -711,6 +761,9 @@ func TestDriverSetAudioMuteUsesEncodeAudioEnable(t *testing.T) {
 	if lastRequest.Get("table.Encode[4].MainFormat[0].AudioEnable") != "false" {
 		t.Fatalf("unexpected setConfig request: %+v", lastRequest)
 	}
+	if lastRequest.Get("table.Encode[4].ExtraFormat[0].AudioEnable") != "false" {
+		t.Fatalf("expected extra stream audio to be muted too: %+v", lastRequest)
+	}
 }
 
 func TestDriverSetAudioMuteUsesDirectIPCWhenConfigured(t *testing.T) {
@@ -721,7 +774,7 @@ func TestDriverSetAudioMuteUsesDirectIPCWhenConfigured(t *testing.T) {
 		directRequests = append(directRequests, r.URL.Query())
 		switch r.URL.Query().Get("action") {
 		case "getConfig":
-			_, _ = w.Write([]byte("table.Encode[0].MainFormat[0].Video.resolution=2560x1440\ntable.Encode[0].MainFormat[0].Audio.Compression=AAC\ntable.Encode[0].MainFormat[0].AudioEnable=true\n"))
+			_, _ = w.Write([]byte("table.Encode[0].MainFormat[0].Video.resolution=2560x1440\ntable.Encode[0].MainFormat[0].Audio.Compression=AAC\ntable.Encode[0].MainFormat[0].AudioEnable=true\ntable.Encode[0].ExtraFormat[0].AudioEnable=true\n"))
 		case "setConfig":
 			_, _ = w.Write([]byte("OK"))
 		default:
@@ -788,6 +841,109 @@ func TestDriverSetAudioMuteUsesDirectIPCWhenConfigured(t *testing.T) {
 	lastDirectRequest := directRequests[len(directRequests)-1]
 	if lastDirectRequest.Get("table.Encode[0].MainFormat[0].AudioEnable") != "false" {
 		t.Fatalf("unexpected direct ipc setConfig request: %+v", lastDirectRequest)
+	}
+	if lastDirectRequest.Get("table.Encode[0].ExtraFormat[0].AudioEnable") != "false" {
+		t.Fatalf("expected direct ipc extra stream audio to be muted too: %+v", lastDirectRequest)
+	}
+}
+
+func TestSetDirectIPCLightingModeSetsDirectLightingScheme(t *testing.T) {
+	var directRequests []url.Values
+	directServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		directRequests = append(directRequests, r.URL.Query())
+		switch r.URL.Query().Get("action") {
+		case "getConfig":
+			switch r.URL.Query().Get("name") {
+			case "Lighting_V2":
+				_, _ = w.Write([]byte(
+					"table.Lighting_V2[0][0][0].LightType=InfraredLight\n" +
+						"table.Lighting_V2[0][0][0].Mode=Auto\n" +
+						"table.Lighting_V2[0][0][1].LightType=WhiteLight\n" +
+						"table.Lighting_V2[0][0][1].Mode=Auto\n" +
+						"table.Lighting_V2[0][0][2].LightType=AIMixLight\n" +
+						"table.Lighting_V2[0][0][2].Mode=Auto\n",
+				))
+			case "LightingScheme":
+				_, _ = w.Write([]byte(
+					"table.LightingScheme[0][0].LightingMode=AIMode\n" +
+						"table.LightingScheme[0][1].LightingMode=AIMode\n" +
+						"table.LightingScheme[0][2].LightingMode=AIMode\n",
+				))
+			default:
+				http.Error(w, "unexpected direct config query", http.StatusBadRequest)
+			}
+		case "setConfig":
+			_, _ = w.Write([]byte("OK"))
+		default:
+			http.Error(w, "unexpected direct action", http.StatusBadRequest)
+		}
+	}))
+	defer directServer.Close()
+
+	directHost := strings.TrimPrefix(directServer.URL, "http://")
+	metricsRegistry := metrics.New(buildinfo.Info())
+	driver := &Driver{
+		cfg: config.DeviceConfig{
+			ID:             "west20_nvr",
+			RequestTimeout: 5 * time.Second,
+			DirectIPCCredentials: []config.ChannelDirectIPCCredential{
+				{
+					NVRChannel:        8,
+					DirectIPCIP:       directHost,
+					DirectIPCUser:     "admin",
+					DirectIPCPassword: "secret",
+				},
+			},
+		},
+		metrics: metricsRegistry,
+		logger:  zerolog.Nop(),
+		cachedInventory: &inventorySnapshot{
+			Channels: []channelInventory{
+				{
+					Index: 7,
+					RemoteDevice: remoteDeviceInventory{
+						Address:    directHost,
+						DeviceType: "DH-T4A-PV",
+						HTTPPort:   80,
+					},
+				},
+			},
+		},
+		inventoryExpires: time.Now().Add(time.Minute),
+	}
+
+	if err := driver.setDirectIPCLightingMode(context.Background(), 8, dahua.NVRAuxActionStart); err != nil {
+		t.Fatalf("setDirectIPCLightingMode start returned error: %v", err)
+	}
+	if err := driver.setDirectIPCLightingMode(context.Background(), 8, dahua.NVRAuxActionStop); err != nil {
+		t.Fatalf("setDirectIPCLightingMode stop returned error: %v", err)
+	}
+
+	var setRequests []url.Values
+	for _, request := range directRequests {
+		if request.Get("action") == "setConfig" {
+			setRequests = append(setRequests, request)
+		}
+	}
+	if len(setRequests) != 4 {
+		t.Fatalf("expected 4 direct setConfig requests, got %d (%+v)", len(setRequests), setRequests)
+	}
+
+	if setRequests[0].Get("Lighting_V2[0][0][1].Mode") != "Auto" {
+		t.Fatalf("expected white-light profile to stay Auto, got %+v", setRequests[0])
+	}
+	if setRequests[1].Get("LightingScheme[0][0].LightingMode") != "WhiteMode" ||
+		setRequests[1].Get("LightingScheme[0][1].LightingMode") != "AIMode" ||
+		setRequests[1].Get("LightingScheme[0][2].LightingMode") != "AIMode" {
+		t.Fatalf("unexpected white-light scheme request: %+v", setRequests[1])
+	}
+	if setRequests[2].Get("Lighting_V2[0][0][2].Mode") != "Auto" {
+		t.Fatalf("expected smart-light profile to stay Auto, got %+v", setRequests[2])
+	}
+	if setRequests[3].Get("LightingScheme[0][0].LightingMode") != "AIMode" ||
+		setRequests[3].Get("LightingScheme[0][1].LightingMode") != "AIMode" ||
+		setRequests[3].Get("LightingScheme[0][2].LightingMode") != "AIMode" {
+		t.Fatalf("unexpected smart-light scheme request: %+v", setRequests[3])
 	}
 }
 

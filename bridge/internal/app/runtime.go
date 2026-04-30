@@ -178,16 +178,7 @@ func (r *runtimeServices) NVRRecordings(ctx context.Context, deviceID string, qu
 	if result.DeviceID == "" {
 		result.DeviceID = deviceID
 	}
-	for index := range result.Items {
-		if result.Items[index].DownloadURL == "" && strings.TrimSpace(result.Items[index].FilePath) != "" {
-			result.Items[index].DownloadURL = buildNVRRecordingDownloadURL(
-				r.cfg.HomeAssistant.PublicBaseURL,
-				deviceID,
-				result.Items[index].FilePath,
-			)
-		}
-	}
-	if mediaReader != nil {
+	if mediaReader != nil && isAllRecordingEventFilter(query.EventCode) {
 		clips, clipsErr := mediaReader.FindClips(media.ClipQuery{
 			RootDeviceID: deviceID,
 			Channel:      query.Channel,
@@ -212,6 +203,15 @@ func (r *runtimeServices) NVRRecordings(ctx context.Context, deviceID string, qu
 		}
 	}
 	return result, nil
+}
+
+func isAllRecordingEventFilter(eventCode string) bool {
+	switch strings.ToLower(strings.TrimSpace(eventCode)) {
+	case "", "*", "all", "any", "__all__":
+		return true
+	default:
+		return false
+	}
 }
 
 func (r *runtimeServices) NVRDownloadRecording(ctx context.Context, deviceID string, filePath string) (dahua.NVRRecordingDownload, error) {
@@ -497,15 +497,6 @@ func buildCaptureSummary(publicBaseURL string, entry streams.Entry, mediaReader 
 		summary.StopRecordingURL = buildMediaRecordingStopURL(publicBaseURL, clip.ID)
 	}
 	return summary
-}
-
-func buildNVRRecordingDownloadURL(publicBaseURL string, deviceID string, filePath string) string {
-	publicBaseURL = strings.TrimRight(strings.TrimSpace(publicBaseURL), "/")
-	path := "/api/v1/nvr/" + url.PathEscape(deviceID) + "/recordings/download?file_path=" + url.QueryEscape(filePath)
-	if publicBaseURL == "" {
-		return path
-	}
-	return publicBaseURL + path
 }
 
 func buildMediaSnapshotURL(publicBaseURL string, streamID string, profile string) string {

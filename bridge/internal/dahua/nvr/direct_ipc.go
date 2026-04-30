@@ -262,7 +262,7 @@ func (d *Driver) directIPCClient(target *directIPCTarget) *cgi.Client {
 		RequestTimeout:  requestTimeout,
 		InsecureSkipTLS: target.InsecureTLS,
 		Manufacturer:    "Dahua",
-	}, d.metrics)
+	}, d.metrics, d.logger.With().Int("channel", target.Channel).Logger())
 }
 
 func (d *Driver) directIPCAudioWritable(ctx context.Context, channel int) bool {
@@ -314,8 +314,8 @@ func directIPCAudioEnableKeys(values map[string]string) []string {
 	keys := make([]string, 0, 3)
 	seen := make(map[string]struct{}, 3)
 	for key := range values {
-		matches := encodeAudioEnablePattern.FindStringSubmatch(key)
-		if len(matches) != 2 {
+		matches := encodeAnyAudioEnablePattern.FindStringSubmatch(key)
+		if len(matches) != 3 {
 			continue
 		}
 		index, ok := parseInt(matches[1])
@@ -374,43 +374,63 @@ func (d *Driver) setDirectIPCLightingMode(ctx context.Context, channel int, acti
 		return err
 	}
 
-	profile, ok := directIPCLightProfileForValues(values)
-	if !ok {
-		return fmt.Errorf("%w: direct ipc lighting config is not exposed on channel %d", dahua.ErrUnsupportedOperation, channel)
-	}
-
-	mode := "Off"
-	brightness := "100"
+	targetLightType := "WhiteLight"
+	targetScheme := "WhiteMode"
 	switch action {
 	case dahua.NVRAuxActionStart:
-		mode = "Manual"
 	case dahua.NVRAuxActionStop:
-		mode = "Off"
+		targetLightType = "AIMixLight"
+		targetScheme = "AIMode"
 	default:
 		return fmt.Errorf("%w: direct ipc lighting mode only supports start and stop actions", dahua.ErrUnsupportedOperation)
 	}
 
-	query := url.Values{
-		"action": []string{"setConfig"},
-		fmt.Sprintf("Lighting_V2[%d][%d][%d].Mode", profile.Channel, profile.ProfileMode, profile.Index):                 []string{mode},
-		fmt.Sprintf("Lighting_V2[%d][%d][%d].MiddleLight[0].Light", profile.Channel, profile.ProfileMode, profile.Index): []string{brightness},
+	profile, ok := directIPCLightProfileForValues(values, targetLightType)
+	if !ok {
+		return fmt.Errorf("%w: direct ipc lighting config is not exposed on channel %d", dahua.ErrUnsupportedOperation, channel)
 	}
+
+	schemeValues, err := client.GetKeyValues(ctx, "/cgi-bin/configManager.cgi", url.Values{
+		"action": []string{"getConfig"},
+		"name":   []string{"LightingScheme"},
+	})
+	if err != nil {
+		return err
+	}
+	schemeQuery := directIPCLightingSchemeQuery(schemeValues, targetScheme)
+	if len(schemeQuery) == 0 {
+		return fmt.Errorf("%w: direct ipc lighting scheme is not exposed on channel %d", dahua.ErrUnsupportedOperation, channel)
+	}
+
+	profileQuery := url.Values{
+		"action": []string{"setConfig"},
+		fmt.Sprintf("Lighting_V2[%d][%d][%d].Mode", profile.Channel, profile.ProfileMode, profile.Index): []string{"Auto"},
+	}
+	if err := setDirectIPCConfigValues(ctx, client, profileQuery); err != nil {
+		return err
+	}
+	return setDirectIPCConfigValues(ctx, client, schemeQuery)
+}
+
+func setDirectIPCConfigValues(ctx context.Context, client *cgi.Client, query url.Values) error {
+	query.Set("action", "setConfig")
 	body, err := client.GetText(ctx, "/cgi-bin/configManager.cgi", query)
 	if err != nil {
 		return err
 	}
 	if !strings.EqualFold(strings.TrimSpace(body), "OK") {
-		return fmt.Errorf("direct ipc light action returned %q", strings.TrimSpace(body))
+		return fmt.Errorf("direct ipc config action returned %q", strings.TrimSpace(body))
 	}
 	return nil
 }
 
-func directIPCLightProfileForValues(values map[string]string) (directIPCLightProfile, bool) {
+func directIPCLightProfileForValues(values map[string]string, preferredLightType string) (directIPCLightProfile, bool) {
 	type candidate struct {
 		directIPCLightProfile
 		priority int
 	}
 	candidates := make([]candidate, 0, 4)
+	preferredLightType = strings.TrimSpace(preferredLightType)
 	for key, value := range values {
 		if !strings.HasPrefix(key, "table.Lighting_V2[") || !strings.HasSuffix(key, "].LightType") {
 			continue
@@ -420,12 +440,16 @@ func directIPCLightProfileForValues(values map[string]string) (directIPCLightPro
 			continue
 		}
 		profile.LightType = strings.TrimSpace(value)
-		priority := 10
-		switch profile.LightType {
-		case "WhiteLight":
+		priority := 20
+		if preferredLightType != "" && strings.EqualFold(profile.LightType, preferredLightType) {
 			priority = 0
-		case "AIMixLight":
-			priority = 1
+		} else {
+			switch profile.LightType {
+			case "WhiteLight":
+				priority = 10
+			case "AIMixLight":
+				priority = 11
+			}
 		}
 		candidates = append(candidates, candidate{directIPCLightProfile: profile, priority: priority})
 	}
@@ -442,6 +466,30 @@ func directIPCLightProfileForValues(values map[string]string) (directIPCLightPro
 		return candidates[i].Index < candidates[j].Index
 	})
 	return candidates[0].directIPCLightProfile, true
+}
+
+func directIPCLightingSchemeQuery(values map[string]string, targetMode string) url.Values {
+	keys := make([]string, 0, 3)
+	for key := range values {
+		if !strings.HasPrefix(key, "table.LightingScheme[") || !strings.HasSuffix(key, ".LightingMode") {
+			continue
+		}
+		keys = append(keys, strings.TrimPrefix(key, "table."))
+	}
+	if len(keys) == 0 {
+		return nil
+	}
+	sort.Strings(keys)
+
+	query := url.Values{"action": []string{"setConfig"}}
+	for index, key := range keys {
+		mode := "AIMode"
+		if index == 0 && targetMode != "AIMode" {
+			mode = targetMode
+		}
+		query.Set(key, mode)
+	}
+	return query
 }
 
 func parseDirectIPCLightProfileKey(key string) (directIPCLightProfile, bool) {

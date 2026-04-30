@@ -226,15 +226,14 @@ function renderCameraTile({
               )}
             </div>
             <div class="tile-controls">
-              ${renderIconButton(
-                "Snapshot",
-                "mdi:camera",
-                () => onOpenSnapshot(camera),
-                renderIcon,
-                {
-                  disabled: !canOpenSnapshot(camera),
-                },
-              )}
+              ${canOpenSnapshot(camera)
+                ? renderIconButton(
+                    "Snapshot",
+                    "mdi:camera",
+                    () => onOpenSnapshot(camera),
+                    renderIcon,
+                  )
+                : null}
               ${camera.supportsRecording
                 ? renderIconButton(
                     bridgeRecordingActive ? "Stop MP4" : "Start MP4",
@@ -404,37 +403,39 @@ function renderVtoTile({
               ${vto.tamper ? html`<span class="badge critical">Tamper</span>` : null}
             </div>
             <div class="tile-controls">
-              ${renderIconButton(
-                streamPlaying ? "Stop Stream" : "Play Stream",
-                streamPlaying ? "mdi:stop-circle-outline" : "mdi:play-circle-outline",
-                () => onToggleVtoStream(vto),
-                renderIcon,
-                {
-                  disabled: !hasPlayableVtoStream(vto),
-                  tone: streamPlaying ? "warning" : "primary",
-                  active: streamPlaying,
-                },
-              )}
-              ${renderIconButton(
-                "Snapshot",
-                "mdi:camera",
-                () => onOpenVtoSnapshot(vto),
-                renderIcon,
-                {
-                  disabled: !canOpenVtoSnapshot(vto),
-                },
-              )}
-              ${renderIconButton(
-                bridgeRecordingActive ? "Stop MP4" : "Start MP4",
-                bridgeRecordingActive ? "mdi:record-rec" : "mdi:record-circle-outline",
-                () => onToggleVtoRecording(vto),
-                renderIcon,
-                {
-                  disabled: isBusy("vto:bridge_recording"),
-                  tone: bridgeRecordingActive ? "danger" : "warning",
-                  active: bridgeRecordingActive,
-                },
-              )}
+              ${hasPlayableVtoStream(vto)
+                ? renderIconButton(
+                    streamPlaying ? "Stop Stream" : "Play Stream",
+                    streamPlaying ? "mdi:stop-circle-outline" : "mdi:play-circle-outline",
+                    () => onToggleVtoStream(vto),
+                    renderIcon,
+                    {
+                      tone: streamPlaying ? "warning" : "primary",
+                      active: streamPlaying,
+                    },
+                  )
+                : null}
+              ${canOpenVtoSnapshot(vto)
+                ? renderIconButton(
+                    "Snapshot",
+                    "mdi:camera",
+                    () => onOpenVtoSnapshot(vto),
+                    renderIcon,
+                  )
+                : null}
+              ${vto.recordingStartUrl || vto.recordingStopUrl
+                ? renderIconButton(
+                    bridgeRecordingActive ? "Stop MP4" : "Start MP4",
+                    bridgeRecordingActive ? "mdi:record-rec" : "mdi:record-circle-outline",
+                    () => onToggleVtoRecording(vto),
+                    renderIcon,
+                    {
+                      disabled: isBusy("vto:bridge_recording"),
+                      tone: bridgeRecordingActive ? "danger" : "warning",
+                      active: bridgeRecordingActive,
+                    },
+                  )
+                : null}
               ${callActionVisible && (vto.hasUnlockButtonEntity || Boolean(vto.unlockActionUrl))
                 ? renderIconButton(
                     "Unlock",
@@ -487,17 +488,18 @@ function renderVtoTile({
                     },
                   )
                 : null}
-              ${renderIconButton(
-                isVtoMicrophoneActive(vto) ? "Disable Mic" : "Enable Mic",
-                isVtoMicrophoneActive(vto) ? "mdi:microphone-off" : "mdi:microphone",
-                () => onToggleVtoMicrophone(vto),
-                renderIcon,
-                {
-                  disabled: !hasAvailableVtoIntercom(vto),
-                  tone: isVtoMicrophoneActive(vto) ? "warning" : undefined,
-                  active: isVtoMicrophoneActive(vto),
-                },
-              )}
+              ${vto.capabilities.browserMicrophoneSupported && hasAvailableVtoIntercom(vto)
+                ? renderIconButton(
+                    isVtoMicrophoneActive(vto) ? "Disable Mic" : "Enable Mic",
+                    isVtoMicrophoneActive(vto) ? "mdi:microphone-off" : "mdi:microphone",
+                    () => onToggleVtoMicrophone(vto),
+                    renderIcon,
+                    {
+                      tone: isVtoMicrophoneActive(vto) ? "warning" : undefined,
+                      active: isVtoMicrophoneActive(vto),
+                    },
+                  )
+                : null}
             </div>
           </div>
         </div>

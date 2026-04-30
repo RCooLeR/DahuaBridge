@@ -4,6 +4,7 @@ import {
   createPlaybackSession,
   createPlaybackSessionFromRecording,
   resolvePlaybackLaunchUrl,
+  seekPlaybackSession,
 } from "../src/ha/bridge-playback";
 
 describe("bridge playback", () => {
@@ -66,6 +67,7 @@ describe("bridge playback", () => {
       startTime: "2026-04-28T03:00:00Z",
       endTime: "2026-04-28T03:10:00Z",
       downloadUrl: null,
+      exportUrl: null,
       filePath: null,
       type: "Recording",
       videoStream: "main",
@@ -83,5 +85,41 @@ describe("bridge playback", () => {
       endTime: "2026-04-28T03:10:00Z",
       seekTime: "2026-04-28T03:00:00Z",
     });
+  });
+
+  it("seeks playback sessions when the session placeholder is URL-encoded", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        id: "nvrpb_next",
+        stream_id: "nvrpb_next",
+        device_id: "west20_nvr",
+        source_stream_id: "west20_nvr_channel_02",
+        name: "Lobby",
+        channel: 2,
+        start_time: "2026-04-28T00:00:00Z",
+        end_time: "2026-04-28T01:00:00Z",
+        seek_time: "2026-04-28T00:30:00Z",
+        recommended_profile: "stable",
+        profiles: {
+          stable: {
+            name: "stable",
+            hls_url: "/api/v1/media/hls/nvrpb_next/stable/index.m3u8",
+          },
+        },
+      }),
+    } as Response);
+
+    await seekPlaybackSession(
+      "nvrpb_test",
+      "https://ha.example.com/bridge/api/v1/nvr/playback/sessions/%7Bsession_id%7D/seek",
+      { seekTime: "2026-04-28T00:30:00Z" },
+      "https://ha.example.com/bridge",
+    );
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://ha.example.com/bridge/api/v1/nvr/playback/sessions/nvrpb_test/seek",
+      expect.objectContaining({ method: "POST" }),
+    );
   });
 });

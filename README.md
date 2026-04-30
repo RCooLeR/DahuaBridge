@@ -16,6 +16,7 @@ Most users need:
 ## Documentation
 
 - System overview: [docs/README.md](docs/README.md)
+- GitHub and deployment checklist: [docs/github-deploy.md](docs/github-deploy.md)
 - Bridge docs: [bridge/docs/README.md](bridge/docs/README.md)
 - Home Assistant integration docs: [integration/docs/README.md](integration/docs/README.md)
 - HA cards docs: [ha-cards/docs/README.md](ha-cards/docs/README.md)
@@ -23,8 +24,9 @@ Most users need:
 ## Recommended Path
 
 1. Read the system docs in [docs/deployment.md](docs/deployment.md).
-2. Set up the bridge with [bridge/docs/getting-started.md](bridge/docs/getting-started.md).
-3. Install the Home Assistant integration with [integration/docs/install.md](integration/docs/install.md).
+2. Check the GitHub/deploy checklist in [docs/github-deploy.md](docs/github-deploy.md).
+3. Set up the bridge with [bridge/docs/getting-started.md](bridge/docs/getting-started.md).
+4. Install the Home Assistant integration with [integration/docs/install.md](integration/docs/install.md).
 
 ## Repository Layout
 

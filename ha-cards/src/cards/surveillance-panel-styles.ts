@@ -3,21 +3,22 @@ import { css } from "lit";
 export const surveillancePanelBaseStyles = css`
   :host {
     display: block;
+    min-width: 0;
     height: 100%;
-    --db-bg: #07111b;
-    --db-panel: rgba(8, 20, 33, 0.88);
-    --db-panel-strong: rgba(10, 25, 41, 0.96);
-    --db-panel-soft: rgba(12, 29, 45, 0.72);
-    --db-border: rgba(106, 199, 255, 0.18);
-    --db-border-strong: rgba(106, 199, 255, 0.32);
-    --db-text: #ecf6ff;
-    --db-text-soft: rgba(215, 234, 250, 0.74);
-    --db-cyan: #34d8ff;
-    --db-blue: #4b81ff;
+    --db-bg: #0b1114;
+    --db-panel: rgba(14, 24, 28, 0.9);
+    --db-panel-strong: rgba(20, 31, 35, 0.96);
+    --db-panel-soft: rgba(24, 37, 41, 0.72);
+    --db-border: rgba(135, 164, 154, 0.22);
+    --db-border-strong: rgba(64, 178, 154, 0.38);
+    --db-text: #f1f5f2;
+    --db-text-soft: rgba(222, 231, 226, 0.74);
+    --db-cyan: #40b29a;
+    --db-blue: #5f8ee8;
     --db-green: #41d98c;
-    --db-amber: #f8a11d;
-    --db-purple: #bf7bff;
-    --db-red: #ff5f79;
+    --db-amber: #d89d2b;
+    --db-purple: #a175d8;
+    --db-red: #e5676f;
     --db-shadow: 0 22px 48px rgba(0, 0, 0, 0.36);
   }
 
@@ -27,14 +28,10 @@ export const surveillancePanelBaseStyles = css`
 
   ha-card {
     width: 100%;
-    height: auto;
-    aspect-ratio: 16 / 9;
-    max-height: calc(100vh - 96px);
-    min-height: min(760px, calc(100vh - 96px));
-    background:
-      radial-gradient(circle at top right, rgba(75, 129, 255, 0.12), transparent 36%),
-      radial-gradient(circle at top left, rgba(52, 216, 255, 0.12), transparent 32%),
-      linear-gradient(180deg, rgba(6, 16, 26, 0.98), rgba(5, 12, 20, 0.98));
+    height: 100%;
+    min-height: min(720px, 86vh);
+    max-height: none;
+    background: linear-gradient(180deg, rgba(13, 20, 23, 0.99), rgba(8, 13, 16, 0.99));
     color: var(--db-text);
     border: 1px solid var(--db-border);
     border-radius: 8px;
@@ -52,7 +49,8 @@ export const surveillancePanelBaseStyles = css`
     gap: 16px;
     height: 100%;
     padding: 16px;
-    background: rgba(4, 12, 20, 0.9);
+    min-height: 0;
+    background: rgba(9, 14, 17, 0.92);
   }
 
   .shell.sidebar-collapsed {
@@ -133,7 +131,7 @@ export const surveillancePanelBaseStyles = css`
     font-size: 11px;
     text-transform: uppercase;
     color: var(--db-text-soft);
-    letter-spacing: 0.08em;
+    letter-spacing: 0;
   }
 
   .muted {
@@ -152,7 +150,7 @@ export const surveillancePanelBaseStyles = css`
   .segment {
     height: 32px;
     padding: 0 12px;
-    border-radius: 999px;
+    border-radius: 8px;
     border: 1px solid var(--db-border);
     background: rgba(8, 20, 33, 0.72);
     color: var(--db-text-soft);
@@ -176,7 +174,7 @@ export const surveillancePanelBaseStyles = css`
     gap: 6px;
     min-height: 24px;
     padding: 0 10px;
-    border-radius: 999px;
+    border-radius: 8px;
     border: 1px solid rgba(106, 199, 255, 0.2);
     background: rgba(8, 24, 38, 0.92);
     color: var(--db-text);
@@ -397,7 +395,7 @@ export const surveillancePanelBaseStyles = css`
     font-size: 11px;
     text-transform: uppercase;
     color: var(--db-text-soft);
-    letter-spacing: 0.08em;
+    letter-spacing: 0;
   }
 
   .kv-value {
@@ -776,6 +774,17 @@ export const surveillancePanelBaseStyles = css`
     justify-content: flex-start;
   }
 
+  .archive-filter-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    align-items: end;
+  }
+
+  .archive-event-filter {
+    width: min(100%, 240px);
+  }
+
   .archive-panel {
     flex: 1 1 auto;
     min-height: 220px;
@@ -863,6 +872,7 @@ export const surveillancePanelBaseStyles = css`
   }
 
   .header-logo {
+    flex: 0 0 auto;
     min-width: 0;
   }
 
@@ -870,10 +880,13 @@ export const surveillancePanelBaseStyles = css`
     display: inline-flex;
     align-items: center;
     justify-content: center;
+    width: 72px;
+    height: 50px;
     padding: 0;
     border: 0;
     background: transparent;
     cursor: pointer;
+    overflow: hidden;
   }
 
   .header-logo-button:hover {
@@ -883,6 +896,11 @@ export const surveillancePanelBaseStyles = css`
   .header-logo img {
     display: block;
     flex: 0 0 auto;
+    width: 100%;
+    height: 100%;
+    max-width: 72px;
+    max-height: 50px;
+    object-fit: contain;
   }
 
   .logo-copy {
@@ -929,7 +947,7 @@ export const surveillancePanelBaseStyles = css`
   .header-chip-icon {
     width: 40px;
     height: 40px;
-    border-radius: 10px;
+    border-radius: 8px;
     border: 1px solid rgba(106, 199, 255, 0.18);
     background: rgba(9, 24, 38, 0.9);
     display: inline-flex;
@@ -1390,7 +1408,7 @@ export const surveillancePanelDetailStyles = css`
     font-size: 11px;
     text-transform: uppercase;
     color: var(--db-text-soft);
-    letter-spacing: 0.08em;
+    letter-spacing: 0;
   }
 
   .event-filter-select {
@@ -1491,6 +1509,7 @@ export const surveillancePanelResponsiveStyles = css`
         "sidebar"
         "main"
         "inspector";
+      height: auto;
     }
 
     .header {
@@ -1526,6 +1545,7 @@ export const surveillancePanelResponsiveStyles = css`
 
   @media (max-width: 720px) {
     .shell {
+      display:block
       padding: 12px;
       gap: 12px;
     }

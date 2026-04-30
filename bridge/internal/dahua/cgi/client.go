@@ -13,11 +13,13 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"RCooLeR/DahuaBridge/internal/config"
 	"RCooLeR/DahuaBridge/internal/dahua"
 	dahuatransport "RCooLeR/DahuaBridge/internal/dahua/transport"
 	"RCooLeR/DahuaBridge/internal/metrics"
+	"github.com/rs/zerolog"
 )
 
 type Client struct {
@@ -28,13 +30,18 @@ type Client struct {
 	http     *http.Client
 	stream   *http.Client
 	metrics  *metrics.Registry
+	logger   zerolog.Logger
 
 	mu        sync.Mutex
 	challenge map[string]string
 	nonceSeq  int
 }
 
-func New(cfg config.DeviceConfig, metricsRegistry *metrics.Registry) *Client {
+func New(cfg config.DeviceConfig, metricsRegistry *metrics.Registry, loggers ...zerolog.Logger) *Client {
+	logger := zerolog.Nop()
+	if len(loggers) > 0 {
+		logger = loggers[0]
+	}
 	return &Client{
 		deviceID: cfg.ID,
 		baseURL:  cfg.BaseURL,
@@ -43,6 +50,7 @@ func New(cfg config.DeviceConfig, metricsRegistry *metrics.Registry) *Client {
 		http:     newHTTPClient(cfg),
 		stream:   newStreamClient(cfg),
 		metrics:  metricsRegistry,
+		logger:   logger.With().Str("component", "dahua_cgi").Str("device_id", cfg.ID).Logger(),
 	}
 }
 
@@ -164,6 +172,13 @@ func (c *Client) OpenStream(ctx context.Context, path string, query url.Values) 
 }
 
 func (c *Client) do(req *http.Request, client *http.Client) (*http.Response, error) {
+	started := time.Now()
+	resp, err := c.doWithDigest(req, client)
+	c.logHTTPRequest(req, resp, err, time.Since(started))
+	return resp, err
+}
+
+func (c *Client) doWithDigest(req *http.Request, client *http.Client) (*http.Response, error) {
 	req1 := req.Clone(req.Context())
 
 	if auth := c.authorizationHeader(req1); auth != "" {
@@ -205,6 +220,58 @@ func (c *Client) do(req *http.Request, client *http.Client) (*http.Response, err
 	req2.Header.Set("Authorization", c.authorizationHeader(req2))
 
 	return client.Do(req2)
+}
+
+func (c *Client) logHTTPRequest(req *http.Request, resp *http.Response, err error, duration time.Duration) {
+	if req == nil {
+		return
+	}
+	event := c.logger.Debug().
+		Str("method", req.Method).
+		Str("path", req.URL.Path).
+		Dur("duration", duration)
+	if req.URL.RawQuery != "" {
+		event.Str("query", redactQuery(req.URL.Query()))
+	}
+	if resp != nil {
+		event.Int("status", resp.StatusCode)
+		if contentLength := strings.TrimSpace(resp.Header.Get("Content-Length")); contentLength != "" {
+			event.Str("content_length", contentLength)
+		}
+		if contentType := strings.TrimSpace(resp.Header.Get("Content-Type")); contentType != "" {
+			event.Str("content_type", contentType)
+		}
+	}
+	if err != nil {
+		event.Err(err)
+	}
+	event.Msg("dahua cgi request")
+}
+
+func redactQuery(query url.Values) string {
+	if len(query) == 0 {
+		return ""
+	}
+	redacted := make(url.Values, len(query))
+	for key, values := range query {
+		nextValues := append([]string(nil), values...)
+		if shouldRedactQueryKey(key) {
+			for index := range nextValues {
+				nextValues[index] = "[redacted]"
+			}
+		}
+		redacted[key] = nextValues
+	}
+	return encodeQuery(redacted)
+}
+
+func shouldRedactQueryKey(key string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(key))
+	return strings.Contains(normalized, "password") ||
+		strings.Contains(normalized, "passwd") ||
+		strings.Contains(normalized, "pwd") ||
+		strings.Contains(normalized, "token") ||
+		strings.Contains(normalized, "secret")
 }
 
 func shouldRetryDigestChallenge(resp *http.Response) bool {

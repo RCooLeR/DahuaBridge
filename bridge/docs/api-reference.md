@@ -49,6 +49,12 @@ Unless noted otherwise, endpoints return JSON and are safe to call from browser-
 - Shows probe results, stream catalog, runtime settings, event stats, and media worker state.
 - Good first-stop diagnostic surface before looking at Home Assistant.
 
+### `GET /admin/test-bridge`
+
+- Built-in NVR channel test bench.
+- Provides channel/profile selection, snapshot/MJPEG/HLS/preview/WebRTC stream switching, normal bridge controls, and diagnostic control buttons.
+- Uses bridge-side API calls so device credentials never need to be exposed to the browser.
+
 ## 🗂️ Device Inventory
 
 ### `GET /api/v1/devices`
@@ -351,17 +357,43 @@ Example catalog skeleton:
   - `end`
 - Optional query param:
   - `limit`, default `25`, max `200`
+  - `event` or `event_type`, optional Dahua event filter. Friendly values such as `motion`, `human`, `vehicle`, `tripwire`, `intrusion`, and `access` are normalized to recorder event codes.
+  - When an event filter is supplied, the bridge uses the recorder RPC2 event log (`log.startFind` / `log.doSeekFind`) and returns `source: "nvr_event"` playback windows around matching events.
 - Example:
 
 ```text
-/api/v1/nvr/west20_nvr/recordings?channel=1&start=2026-04-28T00:00:00Z&end=2026-04-28T01:00:00Z&limit=25
+/api/v1/nvr/west20_nvr/recordings?channel=1&start=2026-04-28T00:00:00Z&end=2026-04-28T01:00:00Z&limit=25&event=motion
 ```
 
 - Returns a normalized search result with `items`.
 - The final `items` list can include:
   - native NVR archive items
-  - bridge-owned MP4 clip items merged into the same time range
+  - bridge-owned MP4 clip items merged into the same time range for unfiltered searches
 - Bridge-owned items are the ones that can include `clip_id`, `stream_id`, and `download_url`.
+- Native NVR archive items are intended for playback sessions and MP4 export. They expose `export_url`, not `download_url`, because the generic Dahua HTTP file endpoint is not reliable across tested firmware.
+
+### `POST /api/v1/nvr/{deviceID}/recordings/export`
+
+- Exports a native NVR archive window by creating a playback session and recording that playback stream into a bridge-owned MP4 clip.
+- Accepts query params or JSON body fields:
+
+```json
+{
+  "channel": 5,
+  "start_time": "2026-04-30 10:04:12",
+  "end_time": "2026-04-30 10:30:03",
+  "seek_time": "2026-04-30 10:04:12",
+  "profile": "stable",
+  "duration_seconds": 4
+}
+```
+
+- `seek_time`, `profile`, `duration_seconds`, and `duration_ms` are optional.
+- If no duration is supplied, the bridge records from `seek_time` or `start_time` until `end_time`.
+- Returns:
+  - `session`: playback session metadata
+  - `clip`: bridge MP4 clip metadata with `self_url` and `download_url`
+- Poll `clip.self_url` until `clip.status` is `completed`, then download from `clip.download_url`.
 
 ### `POST /api/v1/nvr/{deviceID}/playback/sessions`
 
@@ -467,7 +499,7 @@ Example catalog skeleton:
 
 ### `POST /api/v1/nvr/{deviceID}/channels/{channel}/recording`
 
-- Starts or stops recorder-side manual recording mode for one NVR channel.
+- Sets recorder-side recording mode for one NVR channel.
 - Request body:
 
 ```json
@@ -479,7 +511,32 @@ Example catalog skeleton:
 - Supported `action` values:
   - `start`
   - `stop`
+  - `auto`
 - This is device-side recording control, not bridge-owned MP4 clip capture.
+- Use `auto` to return the channel to schedule-controlled recording after a manual start/stop action.
+
+### `POST /api/v1/nvr/{deviceID}/channels/{channel}/diagnostics`
+
+- Runs one explicit diagnostic control strategy against an NVR channel.
+- This endpoint is intended for `/admin/test-bridge` and field diagnostics, not routine automations.
+- Request body:
+
+```json
+{
+  "method": "direct_ipc_lighting",
+  "action": "start",
+  "duration_ms": 500
+}
+```
+
+- Supported method groups include:
+  - bridge-selected strategies: `bridge_light`, `bridge_warning_light`, `bridge_siren`, `bridge_wiper`, `bridge_audio`
+  - raw NVR PTZ CGI: `nvr_ptz_aux`, `nvr_ptz_light`, `nvr_ptz_wiper`
+  - NVR config/RPC lighting: `nvr_lighting_config`, `nvr_video_input_light_param`
+  - direct IPC lighting/PTZ/audio: `direct_ipc_lighting`, `direct_ipc_ptz_light`, `direct_ipc_ptz_light_ch0`, `direct_ipc_ptz_aux`, `direct_ipc_ptz_aux_ch0`, `direct_ipc_ptz_wiper`, `direct_ipc_ptz_wiper_ch0`, `direct_ipc_audio`
+  - recorder mode: `record_mode`
+- Config-writing methods require `allow_config_writes: true` on the NVR.
+- Direct IPC methods require `direct_ipc` credentials for the selected NVR channel.
 
 ### `GET /api/v1/nvr/{deviceID}/channels/{channel}/snapshot`
 

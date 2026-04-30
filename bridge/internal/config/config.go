@@ -175,6 +175,7 @@ type DeviceConfig struct {
 	ChannelRecordingOverrides  []ChannelRecordingControlOverride `yaml:"channel_recording_control_overrides"`
 	ChannelImouOverrides       []ChannelImouOverride             `yaml:"channel_imou_overrides"`
 	DirectIPCCredentials       []ChannelDirectIPCCredential      `yaml:"direct_ipc_credentials"`
+	AllowConfigWrites          bool                              `yaml:"allow_config_writes"`
 	LockAllowlist              []int                             `yaml:"lock_allowlist"`
 	AlarmAllowlist             []int                             `yaml:"alarm_allowlist"`
 	PollInterval               time.Duration                     `yaml:"poll_interval"`

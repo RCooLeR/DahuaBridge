@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -77,6 +78,7 @@ type ActionReader interface {
 	ControlNVRAux(context.Context, string, dahua.NVRAuxRequest) error
 	ControlNVRAudio(context.Context, string, dahua.NVRAudioRequest) error
 	ControlNVRRecording(context.Context, string, dahua.NVRRecordingRequest) error
+	NVRDiagnosticAction(context.Context, string, dahua.NVRDiagnosticActionRequest) (dahua.NVRDiagnosticActionResult, error)
 	ProbeDevice(context.Context, string) (*dahua.ProbeResult, error)
 	ProbeAllDevices(context.Context) []dahua.ProbeActionResult
 	RotateDeviceCredentials(context.Context, string, dahua.DeviceConfigUpdate) (*dahua.ProbeResult, error)
@@ -121,8 +123,10 @@ func New(
 		writeTimeout = 60 * time.Second
 	}
 
+	httpLogger := logger.With().Str("component", "http").Logger()
 	router := chi.NewRouter()
 	router.Use(corsMiddleware)
+	router.Use(debugAccessLogMiddleware(httpLogger))
 	router.Get(cfg.HealthPath, func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		w.WriteHeader(http.StatusOK)
@@ -170,6 +174,17 @@ func New(
 			cfg.HealthPath,
 			cfg.MetricsPath,
 		)
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-store")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(body))
+	})
+	router.Get("/admin/test-bridge", func(w http.ResponseWriter, r *http.Request) {
+		mediaEnabled := false
+		if media != nil {
+			mediaEnabled = media.Enabled()
+		}
+		body := renderAdminTestBridgePage(snapshots.ListStreams(false), actions != nil, mediaEnabled)
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.Header().Set("Cache-Control", "no-store")
 		w.WriteHeader(http.StatusOK)
@@ -305,7 +320,42 @@ func New(
 			return
 		}
 
+		attachNVRRecordingExportURLs(r, chi.URLParam(r, "deviceID"), &result)
 		writeJSON(w, http.StatusOK, result)
+	})
+	router.With(rateLimitMiddleware(mediaLimiter)).Post("/api/v1/nvr/{deviceID}/recordings/export", func(w http.ResponseWriter, r *http.Request) {
+		if media == nil || !media.Enabled() {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "media layer is disabled"})
+			return
+		}
+
+		playbackRequest, profile, duration, err := parseNVRRecordingExportRequest(r)
+		if err != nil {
+			writeInvalidRequestError(w, err)
+			return
+		}
+
+		session, err := snapshots.CreateNVRPlaybackSession(r.Context(), chi.URLParam(r, "deviceID"), playbackRequest)
+		if err != nil {
+			writeClassifiedActionError(w, err, http.StatusBadRequest)
+			return
+		}
+
+		clip, err := media.StartClip(r.Context(), mediaapi.ClipStartRequest{
+			StreamID:    session.StreamID,
+			ProfileName: profile,
+			Duration:    duration,
+		})
+		if err != nil {
+			writeClassifiedActionError(w, err, http.StatusBadGateway)
+			return
+		}
+
+		writeJSON(w, http.StatusOK, map[string]any{
+			"status":  "ok",
+			"session": session,
+			"clip":    clipAPIResponse(r, clip),
+		})
 	})
 	router.With(rateLimitMiddleware(mediaLimiter)).Get("/api/v1/nvr/{deviceID}/recordings/download", func(w http.ResponseWriter, r *http.Request) {
 		filePath := strings.TrimSpace(r.URL.Query().Get("file_path"))
@@ -499,6 +549,35 @@ func New(
 			"channel":   channel,
 			"action":    request.Action,
 		})
+	})
+	router.With(rateLimitMiddleware(adminLimiter)).Post("/api/v1/nvr/{deviceID}/channels/{channel}/diagnostics", func(w http.ResponseWriter, r *http.Request) {
+		if actions == nil {
+			writeServiceUnavailableError(w, "action layer is not configured")
+			return
+		}
+
+		request, err := parseNVRDiagnosticActionRequest(r)
+		if err != nil {
+			writeInvalidRequestError(w, err)
+			return
+		}
+
+		channel, err := strconv.Atoi(chi.URLParam(r, "channel"))
+		if err != nil || channel <= 0 {
+			writeErrorPayload(w, http.StatusBadRequest, "invalid_request", "invalid channel")
+			return
+		}
+		request.Channel = channel
+
+		controlCtx, cancel := context.WithTimeout(r.Context(), 25*time.Second)
+		defer cancel()
+
+		result, err := actions.NVRDiagnosticAction(controlCtx, chi.URLParam(r, "deviceID"), request)
+		if err != nil {
+			writeClassifiedActionError(w, err, http.StatusBadGateway)
+			return
+		}
+		writeJSON(w, http.StatusOK, result)
 	})
 	router.With(rateLimitMiddleware(mediaLimiter)).Post("/api/v1/nvr/{deviceID}/playback/sessions", func(w http.ResponseWriter, r *http.Request) {
 		request, err := parseNVRPlaybackSessionRequest(r)
@@ -1266,7 +1345,7 @@ func New(
 			WriteTimeout: writeTimeout,
 			IdleTimeout:  cfg.IdleTimeout,
 		},
-		logger: logger.With().Str("component", "http").Logger(),
+		logger: httpLogger,
 	}
 }
 
@@ -1283,6 +1362,96 @@ func (s *Server) Start() error {
 
 func (s *Server) Shutdown(ctx context.Context) error {
 	return s.httpServer.Shutdown(ctx)
+}
+
+type debugResponseWriter struct {
+	http.ResponseWriter
+	status int
+	bytes  int64
+}
+
+func (w *debugResponseWriter) WriteHeader(status int) {
+	if w.status != 0 {
+		return
+	}
+	w.status = status
+	w.ResponseWriter.WriteHeader(status)
+}
+
+func (w *debugResponseWriter) Write(body []byte) (int, error) {
+	if w.status == 0 {
+		w.WriteHeader(http.StatusOK)
+	}
+	n, err := w.ResponseWriter.Write(body)
+	w.bytes += int64(n)
+	return n, err
+}
+
+func (w *debugResponseWriter) Flush() {
+	if w.status == 0 {
+		w.status = http.StatusOK
+	}
+	if flusher, ok := w.ResponseWriter.(http.Flusher); ok {
+		flusher.Flush()
+	}
+}
+
+func (w *debugResponseWriter) Unwrap() http.ResponseWriter {
+	return w.ResponseWriter
+}
+
+func debugAccessLogMiddleware(logger zerolog.Logger) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			started := time.Now()
+			debugWriter := &debugResponseWriter{ResponseWriter: w}
+			next.ServeHTTP(debugWriter, r)
+
+			status := debugWriter.status
+			if status == 0 {
+				status = http.StatusOK
+			}
+			event := logger.Debug().
+				Str("method", r.Method).
+				Str("path", r.URL.Path).
+				Int("status", status).
+				Int64("bytes", debugWriter.bytes).
+				Dur("duration", time.Since(started))
+			if routePattern := chi.RouteContext(r.Context()).RoutePattern(); routePattern != "" {
+				event.Str("route", routePattern)
+			}
+			if r.URL.RawQuery != "" {
+				event.Str("query", redactHTTPQuery(r.URL.Query()))
+			}
+			event.Msg("bridge http request")
+		})
+	}
+}
+
+func redactHTTPQuery(query url.Values) string {
+	if len(query) == 0 {
+		return ""
+	}
+	redacted := make(url.Values, len(query))
+	for key, values := range query {
+		nextValues := append([]string(nil), values...)
+		if shouldRedactHTTPQueryKey(key) {
+			for index := range nextValues {
+				nextValues[index] = "[redacted]"
+			}
+		}
+		redacted[key] = nextValues
+	}
+	return redacted.Encode()
+}
+
+func shouldRedactHTTPQueryKey(key string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(key))
+	return strings.Contains(normalized, "password") ||
+		strings.Contains(normalized, "passwd") ||
+		strings.Contains(normalized, "pwd") ||
+		strings.Contains(normalized, "token") ||
+		strings.Contains(normalized, "secret")
 }
 
 func writeJSON(w http.ResponseWriter, status int, payload any) {
@@ -1483,7 +1652,17 @@ func parseNVRRecordingQuery(r *http.Request) (dahua.NVRRecordingQuery, error) {
 		StartTime: startTime,
 		EndTime:   endTime,
 		Limit:     limit,
+		EventCode: firstNonEmptyQueryValue(r.URL.Query(), "event", "event_type", "event_code"),
 	}, nil
+}
+
+func firstNonEmptyQueryValue(values url.Values, keys ...string) string {
+	for _, key := range keys {
+		if value := strings.TrimSpace(values.Get(key)); value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func parseNVRPlaybackSessionRequest(r *http.Request) (dahua.NVRPlaybackSessionRequest, error) {
@@ -1545,6 +1724,135 @@ func parseNVRPlaybackSeekTime(r *http.Request) (time.Time, error) {
 	}
 
 	return parseFlexibleTimestamp(strings.TrimSpace(request.SeekTime), "seek_time")
+}
+
+func parseNVRRecordingExportRequest(r *http.Request) (dahua.NVRPlaybackSessionRequest, string, time.Duration, error) {
+	values := r.URL.Query()
+	request := struct {
+		Channel         int
+		StartTime       string
+		EndTime         string
+		SeekTime        string
+		Profile         string
+		DurationSeconds *int
+		DurationMS      *int
+	}{
+		StartTime: firstNonEmptyQueryValue(values, "start_time", "start"),
+		EndTime:   firstNonEmptyQueryValue(values, "end_time", "end"),
+		SeekTime:  firstNonEmptyQueryValue(values, "seek_time", "seek"),
+		Profile:   strings.TrimSpace(values.Get("profile")),
+	}
+	if rawChannel := strings.TrimSpace(values.Get("channel")); rawChannel != "" {
+		channel, err := strconv.Atoi(rawChannel)
+		if err != nil {
+			return dahua.NVRPlaybackSessionRequest{}, "", 0, fmt.Errorf("invalid channel")
+		}
+		request.Channel = channel
+	}
+	if rawDurationMS := strings.TrimSpace(values.Get("duration_ms")); rawDurationMS != "" {
+		durationMS, err := strconv.Atoi(rawDurationMS)
+		if err != nil {
+			return dahua.NVRPlaybackSessionRequest{}, "", 0, fmt.Errorf("invalid duration_ms")
+		}
+		request.DurationMS = &durationMS
+	}
+	if rawDurationSeconds := strings.TrimSpace(values.Get("duration_seconds")); rawDurationSeconds != "" {
+		durationSeconds, err := strconv.Atoi(rawDurationSeconds)
+		if err != nil {
+			return dahua.NVRPlaybackSessionRequest{}, "", 0, fmt.Errorf("invalid duration_seconds")
+		}
+		request.DurationSeconds = &durationSeconds
+	}
+
+	if r.Body != nil {
+		var bodyRequest struct {
+			Channel         int    `json:"channel"`
+			StartTime       string `json:"start_time"`
+			EndTime         string `json:"end_time"`
+			SeekTime        string `json:"seek_time"`
+			Profile         string `json:"profile"`
+			DurationSeconds *int   `json:"duration_seconds"`
+			DurationMS      *int   `json:"duration_ms"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&bodyRequest); err != nil {
+			if !errors.Is(err, io.EOF) {
+				return dahua.NVRPlaybackSessionRequest{}, "", 0, fmt.Errorf("invalid json body")
+			}
+		} else {
+			if bodyRequest.Channel != 0 {
+				request.Channel = bodyRequest.Channel
+			}
+			if strings.TrimSpace(bodyRequest.StartTime) != "" {
+				request.StartTime = strings.TrimSpace(bodyRequest.StartTime)
+			}
+			if strings.TrimSpace(bodyRequest.EndTime) != "" {
+				request.EndTime = strings.TrimSpace(bodyRequest.EndTime)
+			}
+			if strings.TrimSpace(bodyRequest.SeekTime) != "" {
+				request.SeekTime = strings.TrimSpace(bodyRequest.SeekTime)
+			}
+			if strings.TrimSpace(bodyRequest.Profile) != "" {
+				request.Profile = strings.TrimSpace(bodyRequest.Profile)
+			}
+			if bodyRequest.DurationSeconds != nil {
+				request.DurationSeconds = bodyRequest.DurationSeconds
+			}
+			if bodyRequest.DurationMS != nil {
+				request.DurationMS = bodyRequest.DurationMS
+			}
+		}
+	}
+
+	startTime, err := parseFlexibleTimestamp(strings.TrimSpace(request.StartTime), "start_time")
+	if err != nil {
+		return dahua.NVRPlaybackSessionRequest{}, "", 0, err
+	}
+	endTime, err := parseFlexibleTimestamp(strings.TrimSpace(request.EndTime), "end_time")
+	if err != nil {
+		return dahua.NVRPlaybackSessionRequest{}, "", 0, err
+	}
+	var seekTime time.Time
+	if strings.TrimSpace(request.SeekTime) != "" {
+		seekTime, err = parseFlexibleTimestamp(strings.TrimSpace(request.SeekTime), "seek_time")
+		if err != nil {
+			return dahua.NVRPlaybackSessionRequest{}, "", 0, err
+		}
+	}
+
+	duration := time.Duration(0)
+	switch {
+	case request.DurationMS != nil:
+		if *request.DurationMS <= 0 {
+			return dahua.NVRPlaybackSessionRequest{}, "", 0, fmt.Errorf("duration_ms must be positive")
+		}
+		duration = time.Duration(*request.DurationMS) * time.Millisecond
+	case request.DurationSeconds != nil:
+		if *request.DurationSeconds <= 0 {
+			return dahua.NVRPlaybackSessionRequest{}, "", 0, fmt.Errorf("duration_seconds must be positive")
+		}
+		duration = time.Duration(*request.DurationSeconds) * time.Second
+	default:
+		effectiveStart := startTime
+		if !seekTime.IsZero() {
+			effectiveStart = seekTime
+		}
+		duration = endTime.Sub(effectiveStart)
+		if duration <= 0 {
+			return dahua.NVRPlaybackSessionRequest{}, "", 0, fmt.Errorf("export duration must be positive")
+		}
+	}
+
+	profile := strings.TrimSpace(request.Profile)
+	if profile == "" {
+		profile = "quality"
+	}
+
+	return dahua.NVRPlaybackSessionRequest{
+		Channel:   request.Channel,
+		StartTime: startTime,
+		EndTime:   endTime,
+		SeekTime:  seekTime,
+	}, profile, duration, nil
 }
 
 func parseNVRPTZRequest(r *http.Request) (dahua.NVRPTZRequest, error) {
@@ -1680,12 +1988,48 @@ func parseNVRRecordingRequest(r *http.Request) (dahua.NVRRecordingRequest, error
 
 	action := dahua.NVRRecordingAction(strings.ToLower(strings.TrimSpace(request.Action)))
 	switch action {
-	case dahua.NVRRecordingActionStart, dahua.NVRRecordingActionStop:
+	case dahua.NVRRecordingActionStart, dahua.NVRRecordingActionStop, dahua.NVRRecordingActionAuto:
 	default:
 		return dahua.NVRRecordingRequest{}, fmt.Errorf("invalid action")
 	}
 
 	return dahua.NVRRecordingRequest{Action: action}, nil
+}
+
+func parseNVRDiagnosticActionRequest(r *http.Request) (dahua.NVRDiagnosticActionRequest, error) {
+	if r.Body == nil {
+		return dahua.NVRDiagnosticActionRequest{}, fmt.Errorf("json body is required")
+	}
+
+	var request struct {
+		Method     string `json:"method"`
+		Action     string `json:"action"`
+		DurationMS int    `json:"duration_ms"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		if errors.Is(err, io.EOF) {
+			return dahua.NVRDiagnosticActionRequest{}, fmt.Errorf("json body is required")
+		}
+		return dahua.NVRDiagnosticActionRequest{}, fmt.Errorf("invalid json body")
+	}
+
+	method := strings.ToLower(strings.TrimSpace(request.Method))
+	if method == "" {
+		return dahua.NVRDiagnosticActionRequest{}, fmt.Errorf("method is required")
+	}
+	action := strings.ToLower(strings.TrimSpace(request.Action))
+	if action == "" {
+		return dahua.NVRDiagnosticActionRequest{}, fmt.Errorf("action is required")
+	}
+	if request.DurationMS < 0 {
+		return dahua.NVRDiagnosticActionRequest{}, fmt.Errorf("invalid duration_ms")
+	}
+
+	return dahua.NVRDiagnosticActionRequest{
+		Method:   method,
+		Action:   action,
+		Duration: time.Duration(request.DurationMS) * time.Millisecond,
+	}, nil
 }
 
 func parseVTOVolumeRequest(r *http.Request) (int, int, error) {
@@ -1811,6 +2155,42 @@ func clipAPIResponse(r *http.Request, clip mediaapi.ClipInfo) map[string]any {
 	return payload
 }
 
+func attachNVRRecordingExportURLs(r *http.Request, deviceID string, result *dahua.NVRRecordingSearchResult) {
+	if result == nil {
+		return
+	}
+	for index := range result.Items {
+		item := &result.Items[index]
+		if strings.EqualFold(strings.TrimSpace(item.Source), "bridge") || item.ClipID != "" {
+			continue
+		}
+		if strings.TrimSpace(item.Source) == "" {
+			item.Source = "nvr"
+		}
+		channel := item.Channel
+		if channel <= 0 {
+			channel = result.Channel
+		}
+		startTime := firstNonEmpty(item.StartTime, result.StartTime)
+		endTime := firstNonEmpty(item.EndTime, result.EndTime)
+		if channel <= 0 || strings.TrimSpace(startTime) == "" || strings.TrimSpace(endTime) == "" {
+			continue
+		}
+		item.ExportURL = buildNVRRecordingExportURL(r, deviceID, channel, startTime, endTime)
+	}
+}
+
+func buildNVRRecordingExportURL(r *http.Request, deviceID string, channel int, startTime string, endTime string) string {
+	query := url.Values{
+		"channel":    []string{strconv.Itoa(channel)},
+		"start_time": []string{startTime},
+		"end_time":   []string{endTime},
+		"profile":    []string{"quality"},
+	}
+	path := "/api/v1/nvr/" + url.PathEscape(deviceID) + "/recordings/export?" + query.Encode()
+	return buildAbsoluteRequestURL(r, path)
+}
+
 func buildAbsoluteRequestURL(r *http.Request, path string) string {
 	if r == nil {
 		return path
@@ -1863,6 +2243,33 @@ type adminEndpoint struct {
 	Linkable    bool
 }
 
+type testBridgeChannel struct {
+	ID                 string                         `json:"id"`
+	DeviceID           string                         `json:"device_id"`
+	Name               string                         `json:"name"`
+	Channel            int                            `json:"channel"`
+	SnapshotURL        string                         `json:"snapshot_url"`
+	RecommendedProfile string                         `json:"recommended_profile"`
+	MainVideo          string                         `json:"main_video,omitempty"`
+	SubVideo           string                         `json:"sub_video,omitempty"`
+	AudioCodec         string                         `json:"audio_codec,omitempty"`
+	Profiles           []testBridgeProfile            `json:"profiles"`
+	Controls           *streams.ChannelControlSummary `json:"controls,omitempty"`
+	Features           []streams.FeatureSummary       `json:"features,omitempty"`
+}
+
+type testBridgeProfile struct {
+	Name        string `json:"name"`
+	Label       string `json:"label"`
+	SnapshotURL string `json:"snapshot_url"`
+	MJPEGURL    string `json:"mjpeg_url"`
+	HLSURL      string `json:"hls_url"`
+	PreviewURL  string `json:"preview_url"`
+	WebRTCURL   string `json:"webrtc_url"`
+	Width       int    `json:"width,omitempty"`
+	Height      int    `json:"height,omitempty"`
+}
+
 func renderAdminPage(
 	status httpStatus,
 	probeResults []*dahua.ProbeResult,
@@ -1897,17 +2304,17 @@ func renderAdminPage(
   <style>
     :root {
       color-scheme: dark;
-      --bg: #0a1318;
-      --bg-soft: #102028;
-      --panel: rgba(15, 29, 37, 0.96);
-      --line: rgba(157, 200, 189, 0.18);
-      --text: #edf6f2;
-      --muted: #9ab7ad;
-      --accent: #96f0cb;
-      --accent-soft: rgba(150, 240, 203, 0.14);
-      --warm: #ffd278;
-      --danger: #ff8c94;
-      --shadow: 0 20px 54px rgba(0, 0, 0, 0.28);
+      --bg: #0c1114;
+      --bg-soft: #151e21;
+      --panel: #111a1d;
+      --line: rgba(153, 174, 166, 0.2);
+      --text: #f1f5f2;
+      --muted: #a8b8b2;
+      --accent: #5ed0ac;
+      --accent-soft: rgba(94, 208, 172, 0.14);
+      --warm: #d9a441;
+      --danger: #ef747b;
+      --shadow: 0 12px 32px rgba(0, 0, 0, 0.24);
     }
     * { box-sizing: border-box; }
     body {
@@ -1915,10 +2322,7 @@ func renderAdminPage(
       min-height: 100vh;
       font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
       color: var(--text);
-      background:
-        radial-gradient(circle at top right, rgba(150, 240, 203, 0.12), transparent 28%%),
-        radial-gradient(circle at top left, rgba(255, 210, 120, 0.10), transparent 22%%),
-        linear-gradient(180deg, #13242d 0%%, #0a1318 72%%);
+      background: linear-gradient(180deg, #151e21 0%%, #0c1114 72%%);
     }
     main {
       max-width: 1320px;
@@ -1933,10 +2337,8 @@ func renderAdminPage(
       grid-template-columns: auto minmax(0, 1fr);
       align-items: center;
       padding: 26px 28px;
-      border-radius: 26px;
-      background:
-        linear-gradient(135deg, rgba(150, 240, 203, 0.12), transparent 34%%),
-        linear-gradient(180deg, rgba(19,36,45,0.98), rgba(10,19,24,0.95));
+      border-radius: 8px;
+      background: #121d20;
       border: 1px solid var(--line);
       box-shadow: var(--shadow);
     }
@@ -1944,7 +2346,7 @@ func renderAdminPage(
       width: 104px;
       height: 104px;
       padding: 12px;
-      border-radius: 28px;
+      border-radius: 8px;
       display: flex;
       align-items: center;
       justify-content: center;
@@ -1966,10 +2368,10 @@ func renderAdminPage(
       display: inline-flex;
       width: fit-content;
       padding: 6px 12px;
-      border-radius: 999px;
+      border-radius: 8px;
       background: var(--accent-soft);
       color: var(--accent);
-      letter-spacing: 0.08em;
+      letter-spacing: 0;
       text-transform: uppercase;
       font-size: 12px;
     }
@@ -1978,7 +2380,7 @@ func renderAdminPage(
       font-size: clamp(34px, 5vw, 60px);
       line-height: 0.94;
       font-weight: 700;
-      letter-spacing: -0.04em;
+      letter-spacing: 0;
     }
     .lead {
       margin: 0;
@@ -1999,9 +2401,8 @@ func renderAdminPage(
     .summary-card, .panel {
       background: var(--panel);
       border: 1px solid var(--line);
-      border-radius: 22px;
+      border-radius: 8px;
       box-shadow: var(--shadow);
-      backdrop-filter: blur(14px);
     }
     .summary-card {
       padding: 18px;
@@ -2011,7 +2412,7 @@ func renderAdminPage(
     .summary-label {
       color: var(--muted);
       text-transform: uppercase;
-      letter-spacing: 0.08em;
+      letter-spacing: 0;
       font-size: 12px;
     }
     .summary-value {
@@ -2054,7 +2455,7 @@ func renderAdminPage(
     }
     .action-row .btn {
       appearance: none;
-      border-radius: 14px;
+      border-radius: 8px;
       padding: 12px 16px;
       font-weight: 600;
       box-shadow: 0 12px 28px rgba(0, 0, 0, 0.18);
@@ -2084,7 +2485,7 @@ func renderAdminPage(
     .result-box, pre {
       margin: 0;
       padding: 14px 16px;
-      border-radius: 16px;
+      border-radius: 8px;
       background: rgba(0,0,0,0.22);
       border: 1px solid rgba(255,255,255,0.06);
       color: var(--text);
@@ -2107,7 +2508,7 @@ func renderAdminPage(
       display: grid;
       gap: 8px;
       padding: 14px 16px;
-      border-radius: 18px;
+      border-radius: 8px;
       background: rgba(255,255,255,0.02);
       border: 1px solid rgba(255,255,255,0.06);
     }
@@ -2122,11 +2523,11 @@ func renderAdminPage(
       justify-content: center;
       min-width: 64px;
       padding: 6px 8px;
-      border-radius: 999px;
+      border-radius: 8px;
       background: rgba(255,255,255,0.07);
       color: var(--accent);
       font-size: 12px;
-      letter-spacing: 0.06em;
+      letter-spacing: 0;
       text-transform: uppercase;
     }
     .endpoint-main {
@@ -2167,7 +2568,7 @@ func renderAdminPage(
       align-items: center;
       gap: 6px;
       padding: 8px 10px;
-      border-radius: 999px;
+      border-radius: 8px;
       background: rgba(150, 240, 203, 0.08);
       border: 1px solid rgba(150, 240, 203, 0.12);
       font-size: 13px;
@@ -2258,6 +2659,7 @@ func renderAdminPage(
           <h2>Admin Actions</h2>
           <p>These buttons call the same authenticated bridge endpoints the rest of the system uses. Responses are shown inline exactly as the API returns them.</p>
             <div class="action-row">
+              <a class="btn btn-outline-light" href="/admin/test-bridge">Open Bridge Test Page</a>
               <button type="button" class="btn btn-success" data-method="POST" data-url="/api/v1/devices/probe-all" data-success="Probe-all requested." %s>Probe All Devices</button>
               <button type="button" class="btn btn-outline-danger" data-method="DELETE" data-url="/api/v1/events" data-success="Event buffer clear requested." %s>Clear Event Buffer</button>
             </div>
@@ -2366,6 +2768,826 @@ func renderAdminPage(
 	)
 }
 
+func renderAdminTestBridgePage(streamEntries []streams.Entry, actionsAvailable bool, mediaEnabled bool) string {
+	channels := buildTestBridgeChannels(streamEntries)
+	channelsJSON := marshalJSONForScript(channels)
+
+	return fmt.Sprintf(`<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>DahuaBridge Bridge Test</title>
+  <link rel="stylesheet" href="/admin/assets/bootstrap.min.css">
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #101316;
+      --panel: #171d20;
+      --panel-soft: #20272b;
+      --line: rgba(220, 230, 224, 0.16);
+      --text: #f4f7f5;
+      --muted: #aeb8b3;
+      --accent: #62d0aa;
+      --accent-2: #d7a64a;
+      --danger: #eb747a;
+      --ok: rgba(98, 208, 170, 0.16);
+      --warn: rgba(215, 166, 74, 0.16);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+      background: #101316;
+      color: var(--text);
+    }
+    main {
+      max-width: 1480px;
+      margin: 0 auto;
+      padding: 24px;
+      display: grid;
+      gap: 16px;
+    }
+    .topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+    .topbar a {
+      color: var(--text);
+      text-decoration: none;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 8px 12px;
+      background: rgba(255,255,255,0.03);
+    }
+    .hero {
+      display: grid;
+      gap: 10px;
+      padding: 22px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel);
+    }
+    .eyebrow {
+      color: var(--accent);
+      text-transform: uppercase;
+      letter-spacing: 0;
+      font-size: 12px;
+    }
+    h1, h2, h3, p {
+      margin: 0;
+    }
+    h1 {
+      font-size: clamp(30px, 4vw, 52px);
+      line-height: 1;
+      letter-spacing: 0;
+      font-weight: 700;
+    }
+    h2 {
+      font-size: 19px;
+      line-height: 1.2;
+      font-weight: 650;
+    }
+    h3 {
+      font-size: 15px;
+      line-height: 1.2;
+      font-weight: 650;
+      color: var(--accent);
+    }
+    .muted {
+      color: var(--muted);
+      line-height: 1.45;
+    }
+    .status-strip {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      min-height: 32px;
+      padding: 7px 10px;
+      border-radius: 8px;
+      border: 1px solid var(--line);
+      background: rgba(255,255,255,0.035);
+      color: var(--muted);
+      font-size: 13px;
+    }
+    .pill.good {
+      color: var(--accent);
+      background: var(--ok);
+    }
+    .pill.warn {
+      color: var(--accent-2);
+      background: var(--warn);
+    }
+    .workspace {
+      display: grid;
+      grid-template-columns: minmax(280px, 360px) minmax(0, 1fr);
+      gap: 16px;
+      align-items: start;
+    }
+    .panel {
+      display: grid;
+      gap: 14px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel);
+      padding: 16px;
+      min-width: 0;
+    }
+    .sidebar {
+      position: sticky;
+      top: 16px;
+    }
+    label {
+      display: grid;
+      gap: 6px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+    select, input {
+      width: 100%%;
+      min-height: 40px;
+      border-radius: 8px;
+      border: 1px solid var(--line);
+      background: #0f1416;
+      color: var(--text);
+      padding: 8px 10px;
+      font: inherit;
+    }
+    .viewer {
+      min-height: 360px;
+      aspect-ratio: 16 / 9;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+      border-radius: 8px;
+      border: 1px solid rgba(255,255,255,0.09);
+      background: #050607;
+    }
+    .viewer img, .viewer video, .viewer iframe {
+      width: 100%%;
+      height: 100%%;
+      border: 0;
+      object-fit: contain;
+      background: #050607;
+    }
+    .viewer iframe {
+      object-fit: unset;
+    }
+    .viewer-empty {
+      color: var(--muted);
+      padding: 20px;
+      text-align: center;
+    }
+    .button-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+    button {
+      min-height: 38px;
+      border: 1px solid rgba(255,255,255,0.16);
+      border-radius: 8px;
+      background: var(--panel-soft);
+      color: var(--text);
+      padding: 8px 11px;
+      font: inherit;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    button.primary {
+      background: var(--accent);
+      color: #07110d;
+      border-color: rgba(160, 240, 205, 0.3);
+    }
+    button.warn {
+      background: var(--accent-2);
+      color: #1d1300;
+      border-color: rgba(255, 220, 150, 0.3);
+    }
+    button.danger {
+      border-color: rgba(235, 116, 122, 0.45);
+      color: #ffd7da;
+    }
+    button:disabled {
+      cursor: not-allowed;
+      opacity: 0.5;
+    }
+    .control-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+      gap: 16px;
+    }
+    pre {
+      margin: 0;
+      min-height: 120px;
+      max-height: 420px;
+      overflow: auto;
+      padding: 12px;
+      border-radius: 8px;
+      border: 1px solid rgba(255,255,255,0.08);
+      background: #0a0d0e;
+      color: var(--text);
+      font: 13px/1.45 Consolas, "Courier New", monospace;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    .log {
+      min-height: 260px;
+    }
+    @media (max-width: 980px) {
+      main {
+        padding: 16px;
+      }
+      .workspace {
+        grid-template-columns: 1fr;
+      }
+      .sidebar {
+        position: static;
+      }
+      .viewer {
+        min-height: 240px;
+      }
+    }
+  </style>
+</head>
+<body data-bs-theme="dark">
+  <main>
+    <nav class="topbar">
+      <a href="/admin">Admin</a>
+      <a href="/api/v1/streams">Streams JSON</a>
+    </nav>
+
+    <section class="hero">
+      <div class="eyebrow">DahuaBridge Admin</div>
+      <h1>Bridge Test Bench</h1>
+      <p class="muted">Select one NVR channel, switch stream transports, then run bridge, NVR CGI, NVR RPC, and direct IPC control attempts from the same page.</p>
+      <div class="status-strip">
+        <span class="pill good">%d NVR channels</span>
+        <span class="pill %s">media %s</span>
+        <span class="pill %s">actions %s</span>
+      </div>
+    </section>
+
+    <section class="workspace">
+      <aside class="panel sidebar">
+        <h2>Channel</h2>
+        <label>Camera channel
+          <select id="channel-select"></select>
+        </label>
+        <label>Stream profile
+          <select id="profile-select"></select>
+        </label>
+        <pre id="channel-meta">No channel selected.</pre>
+      </aside>
+
+      <section class="panel">
+        <h2>Video</h2>
+        <div class="button-row">
+          <button type="button" data-stream-mode="snapshot" class="primary">Snapshot</button>
+          <button type="button" data-stream-mode="mjpeg">MJPEG</button>
+          <button type="button" data-stream-mode="hls">HLS</button>
+          <button type="button" data-stream-mode="preview">Preview Page</button>
+          <button type="button" data-stream-mode="webrtc">WebRTC Page</button>
+        </div>
+        <div id="viewer" class="viewer"><div class="viewer-empty">Select a channel to load video.</div></div>
+      </section>
+    </section>
+
+    <section class="control-grid">
+      <section class="panel">
+        <h2>Bridge Controls</h2>
+        <div class="button-row">
+          <button type="button" data-call="controls">Read Capabilities</button>
+          <button type="button" data-call="probe">Probe Device</button>
+          <button type="button" data-call="refresh">Refresh NVR Inventory</button>
+        </div>
+        <div class="button-row">
+          <button type="button" data-call="ptz" data-command="left">PTZ Left Pulse</button>
+          <button type="button" data-call="ptz" data-command="right">PTZ Right Pulse</button>
+          <button type="button" data-call="ptz" data-command="up">PTZ Up Pulse</button>
+          <button type="button" data-call="ptz" data-command="down">PTZ Down Pulse</button>
+        </div>
+        <div class="button-row">
+          <button type="button" data-call="aux" data-output="light" data-action="start" class="warn">White Light On</button>
+          <button type="button" data-call="aux" data-output="light" data-action="stop">White Light Off</button>
+          <button type="button" data-call="aux" data-output="warning_light" data-action="start" class="warn">Warning Light On</button>
+          <button type="button" data-call="aux" data-output="warning_light" data-action="stop">Warning Light Off</button>
+        </div>
+        <div class="button-row">
+          <button type="button" data-call="aux" data-output="aux" data-action="pulse" data-duration="800" class="danger">Siren Pulse</button>
+          <button type="button" data-call="aux" data-output="aux" data-action="stop">Siren Stop</button>
+          <button type="button" data-call="aux" data-output="wiper" data-action="pulse">Wiper Pulse</button>
+          <button type="button" data-call="aux" data-output="wiper" data-action="stop">Wiper Stop</button>
+        </div>
+        <div class="button-row">
+          <button type="button" data-call="audio" data-muted="true">Mute Stream Audio</button>
+          <button type="button" data-call="audio" data-muted="false">Unmute Stream Audio</button>
+          <button type="button" data-call="recording" data-action="start">Recording Start</button>
+          <button type="button" data-call="recording" data-action="stop">Recording Stop</button>
+          <button type="button" data-call="recording" data-action="auto">Recording Auto</button>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>Raw NVR PTZ CGI</h2>
+        <div class="button-row">
+          <button type="button" data-call="diagnostic" data-method="nvr_ptz_aux" data-action="start" class="danger">Aux Start</button>
+          <button type="button" data-call="diagnostic" data-method="nvr_ptz_aux" data-action="stop">Aux Stop</button>
+          <button type="button" data-call="diagnostic" data-method="nvr_ptz_aux" data-action="pulse" data-duration="800" class="danger">Aux Pulse</button>
+        </div>
+        <div class="button-row">
+          <button type="button" data-call="diagnostic" data-method="nvr_ptz_light" data-action="start" class="warn">Light Start</button>
+          <button type="button" data-call="diagnostic" data-method="nvr_ptz_light" data-action="stop">Light Stop</button>
+          <button type="button" data-call="diagnostic" data-method="nvr_ptz_light" data-action="pulse" data-duration="800">Light Pulse</button>
+        </div>
+        <div class="button-row">
+          <button type="button" data-call="diagnostic" data-method="nvr_ptz_wiper" data-action="start">Wiper Start</button>
+          <button type="button" data-call="diagnostic" data-method="nvr_ptz_wiper" data-action="stop">Wiper Stop</button>
+          <button type="button" data-call="diagnostic" data-method="nvr_ptz_wiper" data-action="pulse">Wiper Pulse</button>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>Lighting APIs</h2>
+        <div class="button-row">
+          <button type="button" data-call="diagnostic" data-method="bridge_light" data-action="start" class="warn">Bridge Light On</button>
+          <button type="button" data-call="diagnostic" data-method="bridge_light" data-action="stop">Bridge Light Off</button>
+          <button type="button" data-call="diagnostic" data-method="bridge_warning_light" data-action="start" class="warn">Bridge Warning On</button>
+          <button type="button" data-call="diagnostic" data-method="bridge_warning_light" data-action="stop">Bridge Warning Off</button>
+        </div>
+        <div class="button-row">
+          <button type="button" data-call="diagnostic" data-method="nvr_lighting_config" data-action="start" class="warn">NVR Lighting_V2 On</button>
+          <button type="button" data-call="diagnostic" data-method="nvr_lighting_config" data-action="stop">NVR Lighting_V2 Off</button>
+          <button type="button" data-call="diagnostic" data-method="nvr_video_input_light_param" data-action="start" class="warn">VideoIn Light On</button>
+          <button type="button" data-call="diagnostic" data-method="nvr_video_input_light_param" data-action="stop">VideoIn Light Off</button>
+        </div>
+        <div class="button-row">
+          <button type="button" data-call="diagnostic" data-method="direct_ipc_lighting" data-action="start" class="warn">Direct IPC Lighting On</button>
+          <button type="button" data-call="diagnostic" data-method="direct_ipc_lighting" data-action="stop">Direct IPC Lighting Off</button>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>Direct IPC PTZ CGI</h2>
+        <div class="button-row">
+          <button type="button" data-call="diagnostic" data-method="direct_ipc_ptz_light" data-action="start" class="warn">Light ch1 Start</button>
+          <button type="button" data-call="diagnostic" data-method="direct_ipc_ptz_light" data-action="stop">Light ch1 Stop</button>
+          <button type="button" data-call="diagnostic" data-method="direct_ipc_ptz_light_ch0" data-action="start" class="warn">Light ch0 Start</button>
+          <button type="button" data-call="diagnostic" data-method="direct_ipc_ptz_light_ch0" data-action="stop">Light ch0 Stop</button>
+        </div>
+        <div class="button-row">
+          <button type="button" data-call="diagnostic" data-method="direct_ipc_ptz_aux" data-action="pulse" data-duration="800" class="danger">Aux ch1 Pulse</button>
+          <button type="button" data-call="diagnostic" data-method="direct_ipc_ptz_aux_ch0" data-action="pulse" data-duration="800" class="danger">Aux ch0 Pulse</button>
+          <button type="button" data-call="diagnostic" data-method="direct_ipc_ptz_wiper" data-action="pulse">Wiper ch1 Pulse</button>
+          <button type="button" data-call="diagnostic" data-method="direct_ipc_ptz_wiper_ch0" data-action="pulse">Wiper ch0 Pulse</button>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>Audio And Recording APIs</h2>
+        <div class="button-row">
+          <button type="button" data-call="diagnostic" data-method="bridge_audio" data-action="mute">Bridge Audio Mute</button>
+          <button type="button" data-call="diagnostic" data-method="bridge_audio" data-action="unmute">Bridge Audio Unmute</button>
+          <button type="button" data-call="diagnostic" data-method="nvr_audio_config" data-action="off">NVR Audio Off</button>
+          <button type="button" data-call="diagnostic" data-method="nvr_audio_config" data-action="on">NVR Audio On</button>
+          <button type="button" data-call="diagnostic" data-method="direct_ipc_audio" data-action="off">Direct IPC Audio Off</button>
+          <button type="button" data-call="diagnostic" data-method="direct_ipc_audio" data-action="on">Direct IPC Audio On</button>
+        </div>
+        <div class="button-row">
+          <button type="button" data-call="diagnostic" data-method="record_mode" data-action="start">RecordMode Manual</button>
+          <button type="button" data-call="diagnostic" data-method="record_mode" data-action="stop">RecordMode Stop</button>
+          <button type="button" data-call="diagnostic" data-method="record_mode" data-action="auto">RecordMode Auto</button>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>Result Log</h2>
+        <pre id="result-log" class="log">No test action has run yet.</pre>
+      </section>
+    </section>
+  </main>
+
+  <script>
+    const CHANNELS = %s;
+    const ACTIONS_AVAILABLE = %t;
+    const MEDIA_ENABLED = %t;
+    const channelSelect = document.getElementById('channel-select');
+    const profileSelect = document.getElementById('profile-select');
+    const channelMeta = document.getElementById('channel-meta');
+    const viewer = document.getElementById('viewer');
+    const resultLog = document.getElementById('result-log');
+    const streamButtons = Array.from(document.querySelectorAll('[data-stream-mode]'));
+    const actionButtons = Array.from(document.querySelectorAll('[data-call]'));
+    let lastStreamMode = 'snapshot';
+
+    function selectedChannel() {
+      const index = Number(channelSelect.value);
+      if (!Number.isFinite(index) || index < 0 || index >= CHANNELS.length) {
+        return null;
+      }
+      return CHANNELS[index];
+    }
+
+    function selectedProfile() {
+      const channel = selectedChannel();
+      if (!channel || !channel.profiles || channel.profiles.length === 0) {
+        return null;
+      }
+      return channel.profiles.find(function(profile) {
+        return profile.name === profileSelect.value;
+      }) || channel.profiles[0];
+    }
+
+    function pretty(value) {
+      return JSON.stringify(value, null, 2);
+    }
+
+    function setViewerMessage(message) {
+      viewer.innerHTML = '';
+      const node = document.createElement('div');
+      node.className = 'viewer-empty';
+      node.textContent = message;
+      viewer.appendChild(node);
+    }
+
+    function renderViewer(mode) {
+      const channel = selectedChannel();
+      const profile = selectedProfile();
+      lastStreamMode = mode;
+      viewer.innerHTML = '';
+      if (!channel) {
+        setViewerMessage('No channel selected.');
+        return;
+      }
+      if (mode !== 'snapshot' && !MEDIA_ENABLED) {
+        setViewerMessage('Media layer is disabled for stream transports.');
+        return;
+      }
+      if (mode !== 'snapshot' && !profile) {
+        setViewerMessage('No stream profile is available for this channel.');
+        return;
+      }
+
+      if (mode === 'snapshot') {
+        const img = document.createElement('img');
+        img.alt = channel.name + ' snapshot';
+        img.src = channel.snapshot_url + '?_=' + Date.now();
+        viewer.appendChild(img);
+        return;
+      }
+      if (mode === 'mjpeg') {
+        const img = document.createElement('img');
+        img.alt = channel.name + ' MJPEG';
+        img.src = profile.mjpeg_url;
+        viewer.appendChild(img);
+        return;
+      }
+      if (mode === 'hls') {
+        const video = document.createElement('video');
+        video.controls = true;
+        video.autoplay = true;
+        video.muted = true;
+        video.playsInline = true;
+        video.src = profile.hls_url;
+        viewer.appendChild(video);
+        video.play().catch(function() {});
+        return;
+      }
+      if (mode === 'preview' || mode === 'webrtc') {
+        const iframe = document.createElement('iframe');
+        iframe.title = channel.name + ' ' + mode;
+        iframe.src = mode === 'preview' ? profile.preview_url : profile.webrtc_url;
+        viewer.appendChild(iframe);
+        return;
+      }
+      setViewerMessage('Unknown stream mode.');
+    }
+
+    function updateChannelMeta() {
+      const channel = selectedChannel();
+      if (!channel) {
+        channelMeta.textContent = 'No channel selected.';
+        return;
+      }
+      channelMeta.textContent = pretty({
+        name: channel.name,
+        stream_id: channel.id,
+        device_id: channel.device_id,
+        channel: channel.channel,
+        recommended_profile: channel.recommended_profile,
+        main_video: channel.main_video || '',
+        sub_video: channel.sub_video || '',
+        audio_codec: channel.audio_codec || '',
+        controls: channel.controls || null,
+        features: channel.features || [],
+      });
+    }
+
+    function populateProfiles() {
+      const channel = selectedChannel();
+      profileSelect.innerHTML = '';
+      if (!channel || !channel.profiles) {
+        profileSelect.disabled = true;
+        return;
+      }
+      channel.profiles.forEach(function(profile) {
+        const option = document.createElement('option');
+        option.value = profile.name;
+        option.textContent = profile.label;
+        if (profile.name === channel.recommended_profile) {
+          option.selected = true;
+        }
+        profileSelect.appendChild(option);
+      });
+      profileSelect.disabled = channel.profiles.length === 0;
+    }
+
+    function populateChannels() {
+      channelSelect.innerHTML = '';
+      CHANNELS.forEach(function(channel, index) {
+        const option = document.createElement('option');
+        option.value = String(index);
+        option.textContent = 'ch ' + channel.channel + ' - ' + channel.name + ' (' + channel.device_id + ')';
+        channelSelect.appendChild(option);
+      });
+      const hasChannels = CHANNELS.length > 0;
+      channelSelect.disabled = !hasChannels;
+      actionButtons.forEach(function(button) {
+        button.disabled = !hasChannels || !ACTIONS_AVAILABLE;
+      });
+      streamButtons.forEach(function(button) {
+        button.disabled = !hasChannels;
+      });
+      populateProfiles();
+      updateChannelMeta();
+      renderViewer('snapshot');
+      if (!hasChannels) {
+        setViewerMessage('No NVR channel streams are currently in the catalog.');
+      }
+    }
+
+    function logResult(title, payload, isError) {
+      const stamp = new Date().toISOString();
+      const body = typeof payload === 'string' ? payload : pretty(payload);
+      const prior = resultLog.textContent === 'No test action has run yet.' ? '' : '\n\n' + resultLog.textContent;
+      resultLog.textContent = '[' + stamp + '] ' + title + '\n' + body + prior;
+      resultLog.style.borderColor = isError ? 'rgba(235, 116, 122, 0.45)' : 'rgba(98, 208, 170, 0.28)';
+    }
+
+    function channelURL(channel, suffix) {
+      return '/api/v1/nvr/' + encodeURIComponent(channel.device_id) + '/channels/' + channel.channel + suffix;
+    }
+
+    async function requestJSON(method, path, payload) {
+      const init = { method: method };
+      if (payload !== undefined && payload !== null) {
+        init.headers = { 'Content-Type': 'application/json' };
+        init.body = JSON.stringify(payload);
+      }
+      const response = await fetch(path, init);
+      const text = await response.text();
+      let body = text;
+      try {
+        body = text ? JSON.parse(text) : {};
+      } catch (error) {
+        body = text;
+      }
+      if (!response.ok) {
+        const message = typeof body === 'string' ? body : pretty(body);
+        throw new Error(message || response.statusText || 'request failed');
+      }
+      return body;
+    }
+
+    async function runAction(button) {
+      const channel = selectedChannel();
+      if (!channel) {
+        logResult('No channel selected', 'Select a channel first.', true);
+        return;
+      }
+      const call = button.dataset.call;
+      const previous = button.textContent;
+      button.disabled = true;
+      button.textContent = 'Running...';
+      try {
+        let method = 'POST';
+        let path = '';
+        let payload = null;
+        if (call === 'controls') {
+          method = 'GET';
+          path = channelURL(channel, '/controls');
+        } else if (call === 'probe') {
+          path = '/api/v1/devices/' + encodeURIComponent(channel.device_id) + '/probe';
+        } else if (call === 'refresh') {
+          path = '/api/v1/nvr/' + encodeURIComponent(channel.device_id) + '/inventory/refresh';
+        } else if (call === 'ptz') {
+          path = channelURL(channel, '/ptz');
+          payload = { action: 'pulse', command: button.dataset.command, speed: 3, duration_ms: 350 };
+        } else if (call === 'aux') {
+          path = channelURL(channel, '/aux');
+          payload = {
+            action: button.dataset.action,
+            output: button.dataset.output,
+            duration_ms: Number(button.dataset.duration || 300),
+          };
+        } else if (call === 'audio') {
+          path = channelURL(channel, '/audio/mute');
+          payload = { muted: button.dataset.muted === 'true' };
+        } else if (call === 'recording') {
+          path = channelURL(channel, '/recording');
+          payload = { action: button.dataset.action };
+        } else if (call === 'diagnostic') {
+          path = channelURL(channel, '/diagnostics');
+          payload = {
+            method: button.dataset.method,
+            action: button.dataset.action,
+            duration_ms: Number(button.dataset.duration || 300),
+          };
+        } else {
+          throw new Error('unknown action ' + call);
+        }
+        const result = await requestJSON(method, path, payload);
+        logResult(method + ' ' + path, result, false);
+      } catch (error) {
+        logResult('Action failed', error && error.message ? error.message : String(error), true);
+      } finally {
+        button.disabled = !ACTIONS_AVAILABLE;
+        button.textContent = previous;
+      }
+    }
+
+    channelSelect.addEventListener('change', function() {
+      populateProfiles();
+      updateChannelMeta();
+      renderViewer(lastStreamMode);
+    });
+    profileSelect.addEventListener('change', function() {
+      updateChannelMeta();
+      renderViewer(lastStreamMode);
+    });
+    streamButtons.forEach(function(button) {
+      button.addEventListener('click', function() {
+        renderViewer(button.dataset.streamMode);
+      });
+    });
+    actionButtons.forEach(function(button) {
+      button.addEventListener('click', function() {
+        runAction(button);
+      });
+    });
+    populateChannels();
+  </script>
+</body>
+</html>`,
+		len(channels),
+		boolText(mediaEnabled, "good", "warn"),
+		boolText(mediaEnabled, "enabled", "disabled"),
+		boolText(actionsAvailable, "good", "warn"),
+		boolText(actionsAvailable, "enabled", "disabled"),
+		channelsJSON,
+		actionsAvailable,
+		mediaEnabled,
+	)
+}
+
+func buildTestBridgeChannels(streamEntries []streams.Entry) []testBridgeChannel {
+	channels := make([]testBridgeChannel, 0)
+	for _, entry := range streamEntries {
+		if entry.DeviceKind != dahua.DeviceKindNVRChannel || entry.Channel <= 0 || strings.TrimSpace(entry.RootDeviceID) == "" {
+			continue
+		}
+		profiles := buildTestBridgeProfiles(entry)
+		channels = append(channels, testBridgeChannel{
+			ID:                 entry.ID,
+			DeviceID:           entry.RootDeviceID,
+			Name:               firstNonEmpty(entry.Name, entry.ID),
+			Channel:            entry.Channel,
+			SnapshotURL:        buildTestNVRChannelSnapshotURL(entry.RootDeviceID, entry.Channel),
+			RecommendedProfile: firstNonEmpty(entry.RecommendedProfile, firstTestBridgeProfileName(profiles)),
+			MainVideo:          strings.TrimSpace(firstNonEmpty(entry.MainCodec+" "+entry.MainResolution, entry.MainCodec, entry.MainResolution)),
+			SubVideo:           strings.TrimSpace(firstNonEmpty(entry.SubCodec+" "+entry.SubResolution, entry.SubCodec, entry.SubResolution)),
+			AudioCodec:         entry.AudioCodec,
+			Profiles:           profiles,
+			Controls:           entry.Controls,
+			Features:           entry.Features,
+		})
+	}
+	sort.Slice(channels, func(i, j int) bool {
+		if channels[i].DeviceID != channels[j].DeviceID {
+			return channels[i].DeviceID < channels[j].DeviceID
+		}
+		if channels[i].Channel != channels[j].Channel {
+			return channels[i].Channel < channels[j].Channel
+		}
+		return channels[i].ID < channels[j].ID
+	})
+	return channels
+}
+
+func buildTestBridgeProfiles(entry streams.Entry) []testBridgeProfile {
+	names := orderedTestBridgeProfileNames(entry.Profiles, entry.RecommendedProfile)
+	profiles := make([]testBridgeProfile, 0, len(names))
+	for _, name := range names {
+		profile := entry.Profiles[name]
+		label := name
+		if profile.Recommended || name == entry.RecommendedProfile {
+			label += " (recommended)"
+		}
+		profiles = append(profiles, testBridgeProfile{
+			Name:        name,
+			Label:       label,
+			SnapshotURL: buildTestMediaSnapshotURL(entry.ID, name),
+			MJPEGURL:    buildTestMediaMJPEGURL(entry.ID, name),
+			HLSURL:      buildTestMediaHLSURL(entry.ID, name),
+			PreviewURL:  buildTestMediaPreviewURL(entry.ID, name),
+			WebRTCURL:   buildTestMediaWebRTCURL(entry.ID, name),
+			Width:       profile.SourceWidth,
+			Height:      profile.SourceHeight,
+		})
+	}
+	return profiles
+}
+
+func orderedTestBridgeProfileNames(profiles map[string]streams.Profile, recommended string) []string {
+	if len(profiles) == 0 {
+		return nil
+	}
+
+	ordered := make([]string, 0, len(profiles))
+	seen := make(map[string]struct{}, len(profiles))
+	appendName := func(name string) {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			return
+		}
+		if _, ok := profiles[name]; !ok {
+			return
+		}
+		if _, ok := seen[name]; ok {
+			return
+		}
+		seen[name] = struct{}{}
+		ordered = append(ordered, name)
+	}
+
+	appendName(recommended)
+	for _, name := range []string{"stable", "substream", "quality", "default"} {
+		appendName(name)
+	}
+	extras := make([]string, 0, len(profiles))
+	for name := range profiles {
+		if _, ok := seen[name]; ok {
+			continue
+		}
+		extras = append(extras, name)
+	}
+	sort.Strings(extras)
+	for _, name := range extras {
+		appendName(name)
+	}
+	return ordered
+}
+
+func firstTestBridgeProfileName(profiles []testBridgeProfile) string {
+	if len(profiles) == 0 {
+		return ""
+	}
+	return profiles[0].Name
+}
+
+func buildTestNVRChannelSnapshotURL(deviceID string, channel int) string {
+	return "/api/v1/nvr/" + url.PathEscape(deviceID) + "/channels/" + strconv.Itoa(channel) + "/snapshot"
+}
+
+func buildTestMediaSnapshotURL(streamID string, profile string) string {
+	return "/api/v1/media/snapshot/" + url.PathEscape(streamID) + "?profile=" + url.QueryEscape(profile) + "&width=960"
+}
+
+func buildTestMediaMJPEGURL(streamID string, profile string) string {
+	return "/api/v1/media/mjpeg/" + url.PathEscape(streamID) + "?profile=" + url.QueryEscape(profile) + "&width=960"
+}
+
+func buildTestMediaHLSURL(streamID string, profile string) string {
+	return "/api/v1/media/hls/" + url.PathEscape(streamID) + "/" + url.PathEscape(profile) + "/index.m3u8"
+}
+
+func buildTestMediaPreviewURL(streamID string, profile string) string {
+	return "/api/v1/media/preview/" + url.PathEscape(streamID) + "?profile=" + url.QueryEscape(profile)
+}
+
+func buildTestMediaWebRTCURL(streamID string, profile string) string {
+	return "/api/v1/media/webrtc/" + url.PathEscape(streamID) + "/" + url.PathEscape(profile)
+}
+
 func buildAdminEndpointSections(healthPath string, metricsPath string) string {
 	sections := []struct {
 		Title string
@@ -2375,6 +3597,7 @@ func buildAdminEndpointSections(healthPath string, metricsPath string) string {
 			Title: "Status And Inventory",
 			Items: []adminEndpoint{
 				{Method: "GET", Path: "/admin", Description: "Operator page", Linkable: true},
+				{Method: "GET", Path: "/admin/test-bridge", Description: "NVR channel stream and control diagnostics page", Linkable: true},
 				{Method: "GET", Path: healthPath, Description: "Liveness probe", Linkable: true},
 				{Method: "GET", Path: "/readyz", Description: "Readiness probe", Linkable: true},
 				{Method: "GET", Path: metricsPath, Description: "Prometheus metrics", Linkable: true},
@@ -2400,10 +3623,12 @@ func buildAdminEndpointSections(healthPath string, metricsPath string) string {
 				{Method: "POST", Path: "/api/v1/devices/{deviceID}/credentials", Description: "Rotate bridge-side device credentials", Linkable: false},
 				{Method: "POST", Path: "/api/v1/nvr/{deviceID}/inventory/refresh", Description: "Refresh NVR channel/disk inventory", Linkable: false},
 				{Method: "GET", Path: "/api/v1/nvr/{deviceID}/recordings?channel=1&start=2026-04-28T00:00:00Z&end=2026-04-28T01:00:00Z&limit=25", Description: "Search NVR archive recordings by channel and time range", Linkable: false},
+				{Method: "POST", Path: "/api/v1/nvr/{deviceID}/recordings/export", Description: "Export an NVR archive playback window as a bridge MP4 clip", Linkable: false},
 				{Method: "GET", Path: "/api/v1/nvr/{deviceID}/channels/{channel}/controls", Description: "Read NVR per-channel PTZ capability data", Linkable: false},
 				{Method: "POST", Path: "/api/v1/nvr/{deviceID}/channels/{channel}/ptz", Description: "Send PTZ start/stop/pulse command to an NVR channel", Linkable: false},
 				{Method: "POST", Path: "/api/v1/nvr/{deviceID}/channels/{channel}/aux", Description: "Send aux/light/wiper start/stop/pulse command to an NVR channel", Linkable: false},
 				{Method: "POST", Path: "/api/v1/nvr/{deviceID}/channels/{channel}/recording", Description: "Set manual recording mode for an NVR channel", Linkable: false},
+				{Method: "POST", Path: "/api/v1/nvr/{deviceID}/channels/{channel}/diagnostics", Description: "Run one NVR/direct-IPC diagnostic control strategy for a channel", Linkable: false},
 				{Method: "POST", Path: "/api/v1/nvr/{deviceID}/playback/sessions", Description: "Create an NVR archive playback session backed by bridge media endpoints", Linkable: false},
 				{Method: "GET", Path: "/api/v1/nvr/playback/sessions/{sessionID}", Description: "Inspect an active NVR archive playback session", Linkable: false},
 				{Method: "POST", Path: "/api/v1/nvr/playback/sessions/{sessionID}/seek", Description: "Create a new playback session starting from a different archive timestamp", Linkable: false},
@@ -2866,6 +4091,14 @@ func marshalIndentedJSON(payload any) string {
 	return string(body)
 }
 
+func marshalJSONForScript(payload any) string {
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return "null"
+	}
+	return string(body)
+}
+
 func boolText(value bool, trueText string, falseText string) string {
 	if value {
 		return trueText
@@ -2897,20 +4130,20 @@ func renderMediaPreviewPage(entry streams.Entry, profileName string, profile str
   <style>
     :root {
       color-scheme: dark;
-      --bg: #09111a;
-      --panel: #132232;
-      --panel-alt: #0d1a29;
-      --text: #f4f7fb;
-      --muted: #9db0c3;
-      --line: #294055;
-      --accent: #47d7ac;
-      --accent-soft: rgba(71, 215, 172, 0.16);
+      --bg: #0c1114;
+      --panel: #111a1d;
+      --panel-alt: #151e21;
+      --text: #f1f5f2;
+      --muted: #a8b8b2;
+      --line: rgba(153, 174, 166, 0.2);
+      --accent: #5ed0ac;
+      --accent-soft: rgba(94, 208, 172, 0.14);
     }
     * { box-sizing: border-box; }
     body {
       margin: 0;
       font-family: "Segoe UI", Tahoma, sans-serif;
-      background: radial-gradient(circle at top, #17304a 0, var(--bg) 52%%);
+      background: linear-gradient(180deg, #151e21 0, var(--bg) 72%%);
       color: var(--text);
       min-height: 100vh;
     }
@@ -2929,11 +4162,11 @@ func renderMediaPreviewPage(entry streams.Entry, profileName string, profile str
       width: fit-content;
       gap: 8px;
       padding: 6px 10px;
-      border-radius: 999px;
+      border-radius: 8px;
       background: var(--accent-soft);
       color: var(--accent);
       font-size: 13px;
-      letter-spacing: 0.04em;
+      letter-spacing: 0;
       text-transform: uppercase;
     }
     h1 {
@@ -2952,9 +4185,9 @@ func renderMediaPreviewPage(entry streams.Entry, profileName string, profile str
       gap: 18px;
     }
     .panel {
-      background: linear-gradient(180deg, rgba(19,34,50,0.96), rgba(13,26,41,0.98));
+      background: var(--panel);
       border: 1px solid var(--line);
-      border-radius: 18px;
+      border-radius: 8px;
       overflow: hidden;
       box-shadow: 0 18px 60px rgba(0, 0, 0, 0.28);
     }
@@ -2974,7 +4207,7 @@ func renderMediaPreviewPage(entry streams.Entry, profileName string, profile str
       position: absolute;
       inset: auto 16px 16px 16px;
       padding: 12px 14px;
-      border-radius: 14px;
+      border-radius: 8px;
       background: rgba(4, 10, 16, 0.74);
       border: 1px solid rgba(255,255,255,0.08);
       color: var(--muted);
@@ -2993,7 +4226,7 @@ func renderMediaPreviewPage(entry streams.Entry, profileName string, profile str
     }
     .profile-links a {
       padding: 10px 12px;
-      border-radius: 12px;
+      border-radius: 8px;
       text-decoration: none;
       color: var(--text);
       background: rgba(255,255,255,0.04);
@@ -3129,18 +4362,18 @@ func renderWebRTCPage(entry streams.Entry, profileName string, profile streams.P
   <style>
     :root {
       color-scheme: dark;
-      --bg: #08131d;
-      --panel: #0f1f2f;
-      --line: #27435b;
-      --text: #eff5fb;
-      --muted: #9db2c5;
-      --accent: #68d9ff;
+      --bg: #0c1114;
+      --panel: #111a1d;
+      --line: rgba(153, 174, 166, 0.2);
+      --text: #f1f5f2;
+      --muted: #a8b8b2;
+      --accent: #5ed0ac;
     }
     * { box-sizing: border-box; }
     body {
       margin: 0;
       font-family: "Segoe UI", Tahoma, sans-serif;
-      background: linear-gradient(180deg, #102132 0, #08131d 72%%);
+      background: linear-gradient(180deg, #151e21 0, var(--bg) 72%%);
       color: var(--text);
       min-height: 100vh;
     }
@@ -3152,9 +4385,9 @@ func renderWebRTCPage(entry streams.Entry, profileName string, profile streams.P
       gap: 18px;
     }
     .panel {
-      background: rgba(15, 31, 47, 0.95);
+      background: var(--panel);
       border: 1px solid var(--line);
-      border-radius: 18px;
+      border-radius: 8px;
       overflow: hidden;
     }
     .hero {
@@ -3165,7 +4398,7 @@ func renderWebRTCPage(entry streams.Entry, profileName string, profile streams.P
     .eyebrow {
       color: var(--accent);
       text-transform: uppercase;
-      letter-spacing: 0.06em;
+      letter-spacing: 0;
       font-size: 12px;
     }
     h1 {
@@ -3456,24 +4689,22 @@ func renderVTOIntercomPage(entry streams.Entry, profileName string, profile stre
   <style>
     :root {
       color-scheme: dark;
-      --bg: #08111a;
-      --panel: #102130;
-      --panel-alt: #0b1a28;
-      --line: #284255;
-      --text: #eff6fb;
-      --muted: #9cb2c7;
-      --accent: #5be3bd;
-      --accent-soft: rgba(91, 227, 189, 0.15);
-      --danger: #ff7f8f;
-      --danger-soft: rgba(255, 127, 143, 0.16);
+      --bg: #0c1114;
+      --panel: #111a1d;
+      --panel-alt: #151e21;
+      --line: rgba(153, 174, 166, 0.2);
+      --text: #f1f5f2;
+      --muted: #a8b8b2;
+      --accent: #5ed0ac;
+      --accent-soft: rgba(94, 208, 172, 0.14);
+      --danger: #ef747b;
+      --danger-soft: rgba(239, 116, 123, 0.16);
     }
     * { box-sizing: border-box; }
     body {
       margin: 0;
       font-family: "Segoe UI", Tahoma, sans-serif;
-      background:
-        radial-gradient(circle at top left, rgba(91, 227, 189, 0.15), transparent 34%%),
-        linear-gradient(180deg, #112334 0%%, #08111a 74%%);
+      background: linear-gradient(180deg, #151e21 0%%, var(--bg) 74%%);
       color: var(--text);
       min-height: 100vh;
     }
@@ -3492,11 +4723,11 @@ func renderVTOIntercomPage(entry streams.Entry, profileName string, profile stre
       display: inline-flex;
       width: fit-content;
       padding: 6px 10px;
-      border-radius: 999px;
+      border-radius: 8px;
       background: var(--accent-soft);
       color: var(--accent);
       font-size: 13px;
-      letter-spacing: 0.04em;
+      letter-spacing: 0;
       text-transform: uppercase;
     }
     h1 {
@@ -3515,9 +4746,9 @@ func renderVTOIntercomPage(entry streams.Entry, profileName string, profile stre
       gap: 18px;
     }
     .panel {
-      background: linear-gradient(180deg, rgba(16,33,48,0.96), rgba(11,26,40,0.98));
+      background: var(--panel);
       border: 1px solid var(--line);
-      border-radius: 20px;
+      border-radius: 8px;
       overflow: hidden;
       box-shadow: 0 18px 52px rgba(0, 0, 0, 0.28);
     }
@@ -3536,7 +4767,7 @@ func renderVTOIntercomPage(entry streams.Entry, profileName string, profile stre
       top: 16px;
       left: 16px;
       padding: 8px 12px;
-      border-radius: 999px;
+      border-radius: 8px;
       background: rgba(4, 10, 16, 0.82);
       border: 1px solid rgba(255,255,255,0.08);
       color: var(--text);
@@ -3551,7 +4782,7 @@ func renderVTOIntercomPage(entry streams.Entry, profileName string, profile stre
     .section-title {
       margin: 0;
       font-size: 15px;
-      letter-spacing: 0.03em;
+      letter-spacing: 0;
       text-transform: uppercase;
       color: var(--muted);
     }
@@ -3562,7 +4793,7 @@ func renderVTOIntercomPage(entry streams.Entry, profileName string, profile stre
     }
     .profile-links a {
       padding: 10px 12px;
-      border-radius: 12px;
+      border-radius: 8px;
       border: 1px solid var(--line);
       background: rgba(255,255,255,0.02);
       color: var(--text);
@@ -3585,7 +4816,7 @@ func renderVTOIntercomPage(entry streams.Entry, profileName string, profile stre
     .action-button {
       appearance: none;
       border: 0;
-      border-radius: 14px;
+      border-radius: 8px;
       padding: 12px 16px;
       font: inherit;
       cursor: pointer;
@@ -3626,7 +4857,7 @@ func renderVTOIntercomPage(entry streams.Entry, profileName string, profile stre
     .call-state {
       font-weight: 700;
       text-transform: uppercase;
-      letter-spacing: 0.04em;
+      letter-spacing: 0;
     }
     .call-state.ringing { color: var(--accent); }
     .call-state.idle { color: var(--muted); }
@@ -3646,7 +4877,7 @@ func renderVTOIntercomPage(entry streams.Entry, profileName string, profile stre
     }
     .empty-note {
       padding: 12px 14px;
-      border-radius: 14px;
+      border-radius: 8px;
       border: 1px dashed rgba(255,255,255,0.16);
       color: var(--muted);
     }

@@ -12,9 +12,11 @@ import (
 	"net/http/cookiejar"
 	"strings"
 	"sync"
+	"time"
 
 	"RCooLeR/DahuaBridge/internal/config"
 	dahuatransport "RCooLeR/DahuaBridge/internal/dahua/transport"
+	"github.com/rs/zerolog"
 )
 
 const (
@@ -27,6 +29,7 @@ type rpcClient struct {
 	username string
 	password string
 	http     *http.Client
+	logger   zerolog.Logger
 
 	mu      sync.Mutex
 	nextID  int64
@@ -64,10 +67,14 @@ func (e *rpcError) Error() string {
 	return fmt.Sprintf("rpc error code %d: %s", e.Code, e.Message)
 }
 
-func newRPCClient(cfg config.DeviceConfig) (*rpcClient, error) {
+func newRPCClient(cfg config.DeviceConfig, loggers ...zerolog.Logger) (*rpcClient, error) {
 	jar, err := cookiejar.New(nil)
 	if err != nil {
 		return nil, err
+	}
+	logger := zerolog.Nop()
+	if len(loggers) > 0 {
+		logger = loggers[0]
 	}
 
 	return &rpcClient{
@@ -75,6 +82,7 @@ func newRPCClient(cfg config.DeviceConfig) (*rpcClient, error) {
 		username: cfg.Username,
 		password: cfg.Password,
 		http:     newRPCHTTPClient(cfg, jar),
+		logger:   logger.With().Str("component", "dahua_vto_rpc").Str("device_id", cfg.ID).Logger(),
 		nextID:   1,
 	}, nil
 }
@@ -237,25 +245,51 @@ func (c *rpcClient) post(ctx context.Context, path string, req rpcRequest, targe
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 
+	started := time.Now()
 	resp, err := client.Do(httpReq)
 	if err != nil {
+		c.logRPCRequest(path, req.Method, req.ID, 0, 0, time.Since(started), err)
 		return err
 	}
 	defer resp.Body.Close()
 
 	payload, err := io.ReadAll(resp.Body)
 	if err != nil {
+		c.logRPCRequest(path, req.Method, req.ID, resp.StatusCode, 0, time.Since(started), err)
 		return err
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("unexpected status %s: %s", resp.Status, strings.TrimSpace(string(payload)))
+		err := fmt.Errorf("unexpected status %s: %s", resp.Status, strings.TrimSpace(string(payload)))
+		c.logRPCRequest(path, req.Method, req.ID, resp.StatusCode, len(payload), time.Since(started), err)
+		return err
 	}
 
 	if err := json.Unmarshal(payload, target); err != nil {
-		return fmt.Errorf("decode rpc response: %w", err)
+		err = fmt.Errorf("decode rpc response: %w", err)
+		c.logRPCRequest(path, req.Method, req.ID, resp.StatusCode, len(payload), time.Since(started), err)
+		return err
 	}
+	c.logRPCRequest(path, req.Method, req.ID, resp.StatusCode, len(payload), time.Since(started), nil)
 	return nil
+}
+
+func (c *rpcClient) logRPCRequest(path string, method string, requestID int64, status int, payloadBytes int, duration time.Duration, err error) {
+	event := c.logger.Debug().
+		Str("path", path).
+		Str("rpc_method", method).
+		Int64("request_id", requestID).
+		Dur("duration", duration)
+	if status > 0 {
+		event.Int("status", status)
+	}
+	if payloadBytes > 0 {
+		event.Int("payload_bytes", payloadBytes)
+	}
+	if err != nil {
+		event.Err(err)
+	}
+	event.Msg("dahua vto rpc request")
 }
 
 func (c *rpcClient) buildRequest(method string, params any, object any) rpcRequest {

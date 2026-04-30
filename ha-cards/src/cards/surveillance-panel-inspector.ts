@@ -621,6 +621,14 @@ function renderVtoInspector(
     fallbackUrl: string | null,
   ) => Promise<void>,
 ): TemplateResult {
+  const outputVolumeAvailable = vto.hasOutputVolumeEntity || Boolean(vto.outputVolumeActionUrl);
+  const inputVolumeAvailable = vto.hasInputVolumeEntity || Boolean(vto.inputVolumeActionUrl);
+  const autoRecordAvailable = vto.hasAutoRecordEntity || Boolean(vto.autoRecordActionUrl);
+  const externalUplinkAvailable = Boolean(
+    vto.capabilities.enableExternalUplinkUrl || vto.capabilities.disableExternalUplinkUrl,
+  );
+  const sessionResetAvailable = Boolean(vto.capabilities.resetUrl);
+
   return html`
     <div class="detail-header">
       <div class="detail-title">${vto.label}</div>
@@ -676,50 +684,56 @@ function renderVtoInspector(
         ? html`
             <div class="panel">
               <div class="panel-title">Audio Controls</div>
-              <div class="slider-wrap">
-                <div class="split-row">
-                  <span class="muted">Speaker Volume</span>
-                  <strong>${vto.outputVolume ?? 0}</strong>
-                </div>
-                <input
-                  type="range"
-                  min="0"
-                  max="100"
-                  step="1"
-                  .value=${String(vto.outputVolume ?? 0)}
-                  ?disabled=${isBusy("vto:output-volume") ||
-                  (!vto.hasOutputVolumeEntity && !vto.outputVolumeActionUrl)}
-                  @change=${(event: Event) =>
-                    onVtoRangeChange(
-                      event,
-                      "vto:output-volume",
-                      vto.outputVolumeEntityId,
-                      vto.outputVolumeActionUrl,
-                    )}
-                />
-              </div>
-              <div class="slider-wrap">
-                <div class="split-row">
-                  <span class="muted">Microphone Volume</span>
-                  <strong>${vto.inputVolume ?? 0}</strong>
-                </div>
-                <input
-                  type="range"
-                  min="0"
-                  max="100"
-                  step="1"
-                  .value=${String(vto.inputVolume ?? 0)}
-                  ?disabled=${isBusy("vto:input-volume") ||
-                  (!vto.hasInputVolumeEntity && !vto.inputVolumeActionUrl)}
-                  @change=${(event: Event) =>
-                    onVtoRangeChange(
-                      event,
-                      "vto:input-volume",
-                      vto.inputVolumeEntityId,
-                      vto.inputVolumeActionUrl,
-                    )}
-                />
-              </div>
+              ${outputVolumeAvailable
+                ? html`
+                    <div class="slider-wrap">
+                      <div class="split-row">
+                        <span class="muted">Speaker Volume</span>
+                        <strong>${vto.outputVolume ?? 0}</strong>
+                      </div>
+                      <input
+                        type="range"
+                        min="0"
+                        max="100"
+                        step="1"
+                        .value=${String(vto.outputVolume ?? 0)}
+                        ?disabled=${isBusy("vto:output-volume")}
+                        @change=${(event: Event) =>
+                          onVtoRangeChange(
+                            event,
+                            "vto:output-volume",
+                            vto.outputVolumeEntityId,
+                            vto.outputVolumeActionUrl,
+                          )}
+                      />
+                    </div>
+                  `
+                : nothing}
+              ${inputVolumeAvailable
+                ? html`
+                    <div class="slider-wrap">
+                      <div class="split-row">
+                        <span class="muted">Microphone Volume</span>
+                        <strong>${vto.inputVolume ?? 0}</strong>
+                      </div>
+                      <input
+                        type="range"
+                        min="0"
+                        max="100"
+                        step="1"
+                        .value=${String(vto.inputVolume ?? 0)}
+                        ?disabled=${isBusy("vto:input-volume")}
+                        @change=${(event: Event) =>
+                          onVtoRangeChange(
+                            event,
+                            "vto:input-volume",
+                            vto.inputVolumeEntityId,
+                            vto.inputVolumeActionUrl,
+                          )}
+                      />
+                    </div>
+                  `
+                : nothing}
               <div class="chip-row">
                 <span class="badge ${vto.capabilities.outputVolumeSupported ? "success" : "warning"}">
                   Speaker control ${vto.capabilities.outputVolumeSupported ? "ready" : "unavailable"}
@@ -731,27 +745,29 @@ function renderVtoInspector(
                   ${vto.capabilities.muteSupported ? "Mute on video controls" : "Mute unavailable"}
                 </span>
               </div>
-              <div class="control-row">
-                ${renderControlButton(
-                  vto.autoRecordEnabled ? "Auto Record On" : "Auto Record Off",
-                  "mdi:record-rec",
-                  () =>
-                    void onVtoSwitchAction(
-                      "vto:auto-record",
-                      vto.autoRecordEntityId,
-                      !vto.autoRecordEnabled,
-                      vto.autoRecordActionUrl,
-                      "auto_record_enabled",
-                    ),
-                  renderIcon,
-                  {
-                    tone: vto.autoRecordEnabled ? "warning" : "neutral",
-                    disabled:
-                      isBusy("vto:auto-record") ||
-                      (!vto.hasAutoRecordEntity && !vto.autoRecordActionUrl),
-                  },
-                )}
-              </div>
+              ${autoRecordAvailable
+                ? html`
+                    <div class="control-row">
+                      ${renderControlButton(
+                        vto.autoRecordEnabled ? "Auto Record On" : "Auto Record Off",
+                        "mdi:record-rec",
+                        () =>
+                          void onVtoSwitchAction(
+                            "vto:auto-record",
+                            vto.autoRecordEntityId,
+                            !vto.autoRecordEnabled,
+                            vto.autoRecordActionUrl,
+                            "auto_record_enabled",
+                          ),
+                        renderIcon,
+                        {
+                          tone: vto.autoRecordEnabled ? "warning" : "neutral",
+                          disabled: isBusy("vto:auto-record"),
+                        },
+                      )}
+                    </div>
+                  `
+                : nothing}
             </div>
             <div class="panel">
               <div class="panel-title">Intercom Controls</div>
@@ -766,45 +782,49 @@ function renderVtoInspector(
                   ${vto.capabilities.bridgeAudioOutputSupported ? "Bridge output supported" : "Bridge output unavailable"}
                 </span>
               </div>
-              <div class="control-row">
-                ${renderControlButton(
-                  vto.intercom.externalUplinkEnabled ? "Disable External Uplink" : "Enable External Uplink",
-                  vto.intercom.externalUplinkEnabled ? "mdi:upload-off-outline" : "mdi:upload-network-outline",
-                  () =>
-                    void onVtoButtonAction(
-                      "vto:external-uplink",
-                      "",
-                      vto.intercom.externalUplinkEnabled
-                        ? vto.capabilities.disableExternalUplinkUrl
-                        : vto.capabilities.enableExternalUplinkUrl,
-                    ),
-                  renderIcon,
-                  {
-                    tone: vto.intercom.externalUplinkEnabled ? "warning" : "primary",
-                    disabled:
-                      isBusy("vto:external-uplink") ||
-                      (!vto.capabilities.enableExternalUplinkUrl &&
-                        !vto.capabilities.disableExternalUplinkUrl),
-                    active: vto.intercom.externalUplinkEnabled,
-                  },
-                )}
-                ${renderControlButton(
-                  "Reset Bridge Session",
-                  "mdi:restart",
-                  () =>
-                    void onVtoButtonAction(
-                      "vto:session-reset",
-                      "",
-                      vto.capabilities.resetUrl,
-                    ),
-                  renderIcon,
-                  {
-                    tone: "warning",
-                    disabled:
-                      isBusy("vto:session-reset") || !vto.capabilities.resetUrl,
-                  },
-                )}
-              </div>
+              ${externalUplinkAvailable || sessionResetAvailable
+                ? html`
+                    <div class="control-row">
+                      ${externalUplinkAvailable
+                        ? renderControlButton(
+                            vto.intercom.externalUplinkEnabled ? "Disable External Uplink" : "Enable External Uplink",
+                            vto.intercom.externalUplinkEnabled ? "mdi:upload-off-outline" : "mdi:upload-network-outline",
+                            () =>
+                              void onVtoButtonAction(
+                                "vto:external-uplink",
+                                "",
+                                vto.intercom.externalUplinkEnabled
+                                  ? vto.capabilities.disableExternalUplinkUrl
+                                  : vto.capabilities.enableExternalUplinkUrl,
+                              ),
+                            renderIcon,
+                            {
+                              tone: vto.intercom.externalUplinkEnabled ? "warning" : "primary",
+                              disabled: isBusy("vto:external-uplink"),
+                              active: vto.intercom.externalUplinkEnabled,
+                            },
+                          )
+                        : nothing}
+                      ${sessionResetAvailable
+                        ? renderControlButton(
+                            "Reset Bridge Session",
+                            "mdi:restart",
+                            () =>
+                              void onVtoButtonAction(
+                                "vto:session-reset",
+                                "",
+                                vto.capabilities.resetUrl,
+                              ),
+                            renderIcon,
+                            {
+                              tone: "warning",
+                              disabled: isBusy("vto:session-reset"),
+                            },
+                          )
+                        : nothing}
+                    </div>
+                  `
+                : nothing}
             </div>
           `
         : nothing}

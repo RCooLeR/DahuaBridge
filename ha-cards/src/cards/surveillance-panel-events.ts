@@ -60,11 +60,7 @@ export function renderSurveillancePanelEvents({
   onHistoryPageInput,
   renderIcon,
 }: RenderSurveillancePanelEventsArgs): TemplateResult {
-  const filtersActive =
-    selectedFilters.roomLabel !== EVENT_FILTER_ALL ||
-    selectedFilters.deviceKind !== EVENT_FILTER_ALL ||
-    selectedFilters.severity !== EVENT_FILTER_ALL ||
-    selectedFilters.eventCode !== EVENT_FILTER_ALL;
+  const filtersActive = selectedFilters.eventCode !== EVENT_FILTER_ALL;
 
   return html`
     <section class="events">
@@ -119,28 +115,7 @@ export function renderSurveillancePanelEvents({
       </div>
       <div class="event-filter-grid">
         ${renderFilterSelect(
-          "Room",
-          "roomLabel",
-          selectedFilters.roomLabel,
-          filterOptions.rooms,
-          onSelectFilter,
-        )}
-        ${renderFilterSelect(
-          "Device",
-          "deviceKind",
-          selectedFilters.deviceKind,
-          filterOptions.deviceKinds,
-          onSelectFilter,
-        )}
-        ${renderFilterSelect(
-          "Severity",
-          "severity",
-          selectedFilters.severity,
-          filterOptions.severities,
-          onSelectFilter,
-        )}
-        ${renderFilterSelect(
-          "Event",
+          "Event type",
           "eventCode",
           selectedFilters.eventCode,
           filterOptions.eventCodes,

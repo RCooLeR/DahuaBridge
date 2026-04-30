@@ -89,6 +89,10 @@ That final result can include:
 - native NVR archive items
 - bridge MP4 clip items
 
+Native NVR archive items are playable through archive playback sessions. Bridge-owned MP4 clips can include direct download URLs. Native NVR archive items do not expose direct download URLs because the generic Dahua HTTP download path was not reliable on tested firmware.
+
+Native NVR archive items now expose `export_url`. Calling that URL with `POST` makes the bridge create an archive playback session, capture the playback stream with FFmpeg, and save the result as a bridge-owned MP4 clip. Clients should poll the returned clip `self_url` until the clip is `completed`, then open its `download_url`.
+
 ## Playback Sessions
 
 For NVR archive playback, the bridge supports:
@@ -97,6 +101,7 @@ For NVR archive playback, the bridge supports:
 - session lookup
 - session seek
 - playback stream helpers
+- MP4 export by recording an archive playback stream
 
 These are for archive playback, not for bridge clip capture.
 

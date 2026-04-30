@@ -16,9 +16,6 @@ export type VtoBadgeTone = "neutral" | "success" | "warning" | "info" | "critica
 export const EVENT_FILTER_ALL = "__all__";
 
 export interface TimelineEventFilters {
-  roomLabel: string;
-  deviceKind: string;
-  severity: string;
   eventCode: string;
 }
 
@@ -28,9 +25,6 @@ export interface EventFilterOption {
 }
 
 export interface TimelineEventFilterOptions {
-  rooms: EventFilterOption[];
-  deviceKinds: EventFilterOption[];
-  severities: EventFilterOption[];
   eventCodes: EventFilterOption[];
 }
 
@@ -195,9 +189,6 @@ export function overviewLayoutForCount(tileCount: number): SurveillanceOverviewL
 
 export function defaultTimelineEventFilters(): TimelineEventFilters {
   return {
-    roomLabel: EVENT_FILTER_ALL,
-    deviceKind: EVENT_FILTER_ALL,
-    severity: EVENT_FILTER_ALL,
     eventCode: EVENT_FILTER_ALL,
   };
 }
@@ -207,21 +198,6 @@ export function filterTimelineEvents(
   filters: TimelineEventFilters,
 ): TimelineEvent[] {
   return events.filter((event) => {
-    if (
-      filters.roomLabel !== EVENT_FILTER_ALL &&
-      (event.roomLabel ?? "Unassigned") !== filters.roomLabel
-    ) {
-      return false;
-    }
-    if (
-      filters.deviceKind !== EVENT_FILTER_ALL &&
-      normalizeEventDeviceKind(event.deviceKind) !== filters.deviceKind
-    ) {
-      return false;
-    }
-    if (filters.severity !== EVENT_FILTER_ALL && event.severity !== filters.severity) {
-      return false;
-    }
     if (
       filters.eventCode !== EVENT_FILTER_ALL &&
       normalizeEventCode(event.sourceCode ?? event.title) !== filters.eventCode
@@ -235,37 +211,13 @@ export function filterTimelineEvents(
 export function buildTimelineEventFilterOptions(
   events: TimelineEvent[],
 ): TimelineEventFilterOptions {
-  const roomLabels = new Set<string>();
-  const deviceKinds = new Set<string>();
-  const severities = new Set<string>();
   const eventCodes = new Set<string>();
 
   for (const event of events) {
-    roomLabels.add(event.roomLabel ?? "Unassigned");
-    deviceKinds.add(normalizeEventDeviceKind(event.deviceKind));
-    severities.add(event.severity);
     eventCodes.add(normalizeEventCode(event.sourceCode ?? event.title));
   }
 
   return {
-    rooms: [
-      { value: EVENT_FILTER_ALL, label: "All rooms" },
-      ...sortStrings(roomLabels).map((value) => ({ value, label: value })),
-    ],
-    deviceKinds: [
-      { value: EVENT_FILTER_ALL, label: "All devices" },
-      ...sortStrings(deviceKinds).map((value) => ({
-        value,
-        label: humanizeEventDeviceKind(value),
-      })),
-    ],
-    severities: [
-      { value: EVENT_FILTER_ALL, label: "All severities" },
-      ...sortStrings(severities).map((value) => ({
-        value,
-        label: humanizeSeverity(value),
-      })),
-    ],
     eventCodes: [
       { value: EVENT_FILTER_ALL, label: "All event codes" },
       ...sortStrings(eventCodes).map((value) => ({
@@ -274,35 +226,6 @@ export function buildTimelineEventFilterOptions(
       })),
     ],
   };
-}
-
-function normalizeEventDeviceKind(deviceKind: string | null): string {
-  const normalized = (deviceKind ?? "").trim().toLowerCase();
-  switch (normalized) {
-    case "nvr_channel":
-      return "channel";
-    case "ipc":
-    case "vto":
-    case "nvr":
-      return normalized;
-    default:
-      return normalized || "unknown";
-  }
-}
-
-function humanizeEventDeviceKind(deviceKind: string): string {
-  switch (deviceKind) {
-    case "channel":
-      return "Channels";
-    case "ipc":
-      return "IPC Cameras";
-    case "vto":
-      return "Door Stations";
-    case "nvr":
-      return "Recorders";
-    default:
-      return "Unknown";
-  }
 }
 
 function normalizeEventCode(value: string): string {
@@ -332,10 +255,6 @@ function humanizeEventCode(value: string): string {
   return value
     .replace(/_/g, " ")
     .replace(/\b\w/g, (match) => match.toUpperCase());
-}
-
-function humanizeSeverity(value: string): string {
-  return value.replace(/\b\w/g, (match) => match.toUpperCase());
 }
 
 function sortStrings(values: Set<string>): string[] {

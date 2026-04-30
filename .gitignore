@@ -4,9 +4,17 @@
 __pycache__/
 *.py[cod]
 .tmp-*
+dahua-pdf/
 .pytest_cache/
 .venv/
 .coverage
+todo.txt
+test-ui.txt
+.env
+.env.*
+!.env.example
+*.local.yaml
+*.local.yml
 bridge/bin/
 bridge/dist/
 bridge/var/

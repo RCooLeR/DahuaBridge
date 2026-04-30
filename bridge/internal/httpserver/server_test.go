@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -134,23 +135,24 @@ type stubMediaReader struct {
 }
 
 type stubActionReader struct {
-	unlock       func(context.Context, string, int) error
-	answer       func(context.Context, string) error
-	hangup       func(context.Context, string) error
-	vtoControls  func(context.Context, string) (dahua.VTOControlCapabilities, error)
-	vtoOutputVol func(context.Context, string, int, int) error
-	vtoInputVol  func(context.Context, string, int, int) error
-	vtoMute      func(context.Context, string, bool) error
-	vtoRecord    func(context.Context, string, bool) error
-	nvrControls  func(context.Context, string, int) (dahua.NVRChannelControlCapabilities, error)
-	nvrPTZ       func(context.Context, string, dahua.NVRPTZRequest) error
-	nvrAux       func(context.Context, string, dahua.NVRAuxRequest) error
-	nvrAudio     func(context.Context, string, dahua.NVRAudioRequest) error
-	nvrRecording func(context.Context, string, dahua.NVRRecordingRequest) error
-	probe        func(context.Context, string) (*dahua.ProbeResult, error)
-	probeAll     func(context.Context) []dahua.ProbeActionResult
-	rotate       func(context.Context, string, dahua.DeviceConfigUpdate) (*dahua.ProbeResult, error)
-	refreshNVR   func(context.Context, string) (*dahua.ProbeResult, error)
+	unlock        func(context.Context, string, int) error
+	answer        func(context.Context, string) error
+	hangup        func(context.Context, string) error
+	vtoControls   func(context.Context, string) (dahua.VTOControlCapabilities, error)
+	vtoOutputVol  func(context.Context, string, int, int) error
+	vtoInputVol   func(context.Context, string, int, int) error
+	vtoMute       func(context.Context, string, bool) error
+	vtoRecord     func(context.Context, string, bool) error
+	nvrControls   func(context.Context, string, int) (dahua.NVRChannelControlCapabilities, error)
+	nvrPTZ        func(context.Context, string, dahua.NVRPTZRequest) error
+	nvrAux        func(context.Context, string, dahua.NVRAuxRequest) error
+	nvrAudio      func(context.Context, string, dahua.NVRAudioRequest) error
+	nvrRecording  func(context.Context, string, dahua.NVRRecordingRequest) error
+	nvrDiagnostic func(context.Context, string, dahua.NVRDiagnosticActionRequest) (dahua.NVRDiagnosticActionResult, error)
+	probe         func(context.Context, string) (*dahua.ProbeResult, error)
+	probeAll      func(context.Context) []dahua.ProbeActionResult
+	rotate        func(context.Context, string, dahua.DeviceConfigUpdate) (*dahua.ProbeResult, error)
+	refreshNVR    func(context.Context, string) (*dahua.ProbeResult, error)
 }
 
 type stubEventReader struct {
@@ -400,6 +402,13 @@ func (s stubActionReader) ControlNVRRecording(ctx context.Context, deviceID stri
 		return nil
 	}
 	return s.nvrRecording(ctx, deviceID, request)
+}
+
+func (s stubActionReader) NVRDiagnosticAction(ctx context.Context, deviceID string, request dahua.NVRDiagnosticActionRequest) (dahua.NVRDiagnosticActionResult, error) {
+	if s.nvrDiagnostic == nil {
+		return dahua.NVRDiagnosticActionResult{}, nil
+	}
+	return s.nvrDiagnostic(ctx, deviceID, request)
 }
 
 func (s stubActionReader) ProbeDevice(ctx context.Context, deviceID string) (*dahua.ProbeResult, error) {
@@ -1560,6 +1569,9 @@ func TestAdminPageEndpoint(t *testing.T) {
 	if !strings.Contains(body, `/api/v1/devices/probe-all`) || !strings.Contains(body, "Clear Event Buffer") {
 		t.Fatalf("missing admin action controls:\n%s", body)
 	}
+	if !strings.Contains(body, `/admin/test-bridge`) {
+		t.Fatalf("missing bridge test page link:\n%s", body)
+	}
 	if !strings.Contains(body, `/api/v1/vto/front_vto/intercom?profile=stable`) || !strings.Contains(body, `/api/v1/media/webrtc/front_vto/stable`) {
 		t.Fatalf("missing concrete stream links:\n%s", body)
 	}
@@ -1574,6 +1586,72 @@ func TestAdminPageEndpoint(t *testing.T) {
 	}
 	if strings.Contains(body, `"password":"secret"`) || strings.Contains(body, `"access_token":"token"`) {
 		t.Fatalf("unexpected secret disclosure:\n%s", body)
+	}
+}
+
+func TestAdminTestBridgePageEndpoint(t *testing.T) {
+	server := newTestServerWithConfig(config.HTTPConfig{
+		ListenAddress: ":0",
+		MetricsPath:   "/metrics",
+		HealthPath:    "/healthz",
+	}, stubSnapshotReader{
+		listStreams: func(includeCredentials bool) []streams.Entry {
+			if includeCredentials {
+				t.Fatal("test bridge page should not request credentialed stream inventory")
+			}
+			return []streams.Entry{{
+				ID:                 "west20_nvr_channel_05",
+				Name:               "Driveway",
+				RootDeviceID:       "west20_nvr",
+				DeviceKind:         dahua.DeviceKindNVRChannel,
+				Channel:            5,
+				SnapshotURL:        "/api/v1/nvr/west20_nvr/channels/5/snapshot",
+				RecommendedProfile: "stable",
+				MainCodec:          "H.265",
+				MainResolution:     "2560x1440",
+				SubCodec:           "H.264",
+				SubResolution:      "704x576",
+				Controls: &streams.ChannelControlSummary{
+					Aux: &streams.AuxControlSummary{
+						Supported: true,
+						Outputs:   []string{"aux", "light"},
+						Features:  []string{"siren", "warning_light"},
+					},
+				},
+				Profiles: map[string]streams.Profile{
+					"stable": {
+						Name:         "stable",
+						SourceWidth:  704,
+						SourceHeight: 576,
+						Recommended:  true,
+					},
+					"quality": {
+						Name:         "quality",
+						SourceWidth:  2560,
+						SourceHeight: 1440,
+					},
+				},
+			}}
+		},
+	}, stubMediaReader{enabled: true}, stubActionReader{}, stubEventReader{})
+
+	req := httptest.NewRequest(http.MethodGet, "/admin/test-bridge", nil)
+	rec := httptest.NewRecorder()
+
+	server.httpServer.Handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "Bridge Test Bench") || !strings.Contains(body, "west20_nvr_channel_05") {
+		t.Fatalf("missing test bridge page content:\n%s", body)
+	}
+	if !strings.Contains(body, `/api/v1/nvr/west20_nvr/channels/5/snapshot`) || !strings.Contains(body, `/api/v1/media/webrtc/west20_nvr_channel_05/stable`) {
+		t.Fatalf("missing local stream URLs:\n%s", body)
+	}
+	if !strings.Contains(body, `data-method="direct_ipc_lighting"`) || !strings.Contains(body, `data-method="nvr_lighting_config"`) || !strings.Contains(body, `data-method="direct_ipc_ptz_light_ch0"`) {
+		t.Fatalf("missing diagnostic control buttons:\n%s", body)
 	}
 }
 
@@ -2443,6 +2521,9 @@ func TestNVRRecordingsEndpoint(t *testing.T) {
 			if query.Limit != 5 {
 				t.Fatalf("unexpected limit %d", query.Limit)
 			}
+			if query.EventCode != "VideoMotion" {
+				t.Fatalf("unexpected event code %q", query.EventCode)
+			}
 			return dahua.NVRRecordingSearchResult{
 				DeviceID:      deviceID,
 				Channel:       query.Channel,
@@ -2463,7 +2544,7 @@ func TestNVRRecordingsEndpoint(t *testing.T) {
 		},
 	}, nil, stubActionReader{}, stubEventReader{})
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/nvr/west20_nvr/recordings?channel=1&start=2026-04-28T00:00:00Z&end=2026-04-28T01:00:00Z&limit=5", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/nvr/west20_nvr/recordings?channel=1&start=2026-04-28T00:00:00Z&end=2026-04-28T01:00:00Z&limit=5&event=VideoMotion", nil)
 	rec := httptest.NewRecorder()
 
 	server.httpServer.Handler.ServeHTTP(rec, req)
@@ -2476,6 +2557,10 @@ func TestNVRRecordingsEndpoint(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), `"returned_count":1`) {
 		t.Fatalf("expected returned_count in response: %s", rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"source":"nvr"`) ||
+		!strings.Contains(rec.Body.String(), `"export_url":"http://example.com/api/v1/nvr/west20_nvr/recordings/export?`) {
+		t.Fatalf("expected native recording export URL in response: %s", rec.Body.String())
 	}
 }
 
@@ -2493,6 +2578,76 @@ func TestNVRRecordingsEndpointRejectsInvalidQuery(t *testing.T) {
 
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("expected status 400, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestNVRRecordingExportEndpointCreatesPlaybackClip(t *testing.T) {
+	start := time.Date(2026, 4, 29, 0, 0, 0, 0, time.UTC)
+	end := start.Add(4 * time.Second)
+
+	server := newTestServerWithConfig(config.HTTPConfig{
+		ListenAddress: ":0",
+		MetricsPath:   "/metrics",
+		HealthPath:    "/healthz",
+	}, stubSnapshotReader{
+		createNVRPlaybackSession: func(_ context.Context, deviceID string, request dahua.NVRPlaybackSessionRequest) (dahua.NVRPlaybackSession, error) {
+			if deviceID != "west20_nvr" {
+				t.Fatalf("unexpected device id %q", deviceID)
+			}
+			if request.Channel != 5 || !request.StartTime.Equal(start) || !request.EndTime.Equal(end) {
+				t.Fatalf("unexpected playback request %+v", request)
+			}
+			return dahua.NVRPlaybackSession{
+				ID:                 "nvrpb_test",
+				StreamID:           "nvrpb_test",
+				DeviceID:           deviceID,
+				Name:               "Channel 5",
+				Channel:            request.Channel,
+				StartTime:          request.StartTime.Format(time.RFC3339),
+				EndTime:            request.EndTime.Format(time.RFC3339),
+				SeekTime:           request.StartTime.Format(time.RFC3339),
+				RecommendedProfile: "quality",
+				CreatedAt:          start.Format(time.RFC3339),
+				ExpiresAt:          start.Add(30 * time.Minute).Format(time.RFC3339),
+				Profiles:           map[string]dahua.NVRPlaybackProfile{},
+			}, nil
+		},
+	}, stubMediaReader{
+		enabled: true,
+		startClip: func(_ context.Context, request mediaapi.ClipStartRequest) (mediaapi.ClipInfo, error) {
+			if request.StreamID != "nvrpb_test" {
+				t.Fatalf("unexpected stream id %q", request.StreamID)
+			}
+			if request.ProfileName != "quality" {
+				t.Fatalf("unexpected profile %q", request.ProfileName)
+			}
+			if request.Duration != 4*time.Second {
+				t.Fatalf("unexpected duration %s", request.Duration)
+			}
+			return mediaapi.ClipInfo{
+				ID:        "clip_archive",
+				StreamID:  request.StreamID,
+				Profile:   request.ProfileName,
+				Status:    mediaapi.ClipStatusRecording,
+				StartedAt: start,
+				Duration:  request.Duration,
+				FileName:  "clip_archive.mp4",
+			}, nil
+		},
+	}, stubActionReader{}, stubEventReader{})
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/nvr/west20_nvr/recordings/export?channel=5&start_time=2026-04-29T00:00:00Z&end_time=2026-04-29T00:00:04Z", nil)
+	rec := httptest.NewRecorder()
+
+	server.httpServer.Handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"status":"ok"`) ||
+		!strings.Contains(rec.Body.String(), `"id":"clip_archive"`) ||
+		!strings.Contains(rec.Body.String(), `"download_url":"http://example.com/api/v1/media/recordings/clip_archive/download"`) {
+		t.Fatalf("unexpected export response: %s", rec.Body.String())
 	}
 }
 
@@ -2661,6 +2816,7 @@ func TestNVRChannelAuxEndpoint(t *testing.T) {
 }
 
 func TestNVRChannelRecordingEndpoint(t *testing.T) {
+	actions := make([]dahua.NVRRecordingAction, 0, 2)
 	server := newTestServerWithConfig(config.HTTPConfig{
 		ListenAddress: ":0",
 		MetricsPath:   "/metrics",
@@ -2673,14 +2829,66 @@ func TestNVRChannelRecordingEndpoint(t *testing.T) {
 			if request.Channel != 11 {
 				t.Fatalf("unexpected channel %d", request.Channel)
 			}
-			if request.Action != dahua.NVRRecordingActionStart {
-				t.Fatalf("unexpected action %q", request.Action)
-			}
+			actions = append(actions, request.Action)
 			return nil
 		},
 	}, stubEventReader{})
 
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/nvr/west20_nvr/channels/11/recording", strings.NewReader(`{"action":"start"}`))
+	for _, action := range []dahua.NVRRecordingAction{dahua.NVRRecordingActionStart, dahua.NVRRecordingActionAuto} {
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/nvr/west20_nvr/channels/11/recording", strings.NewReader(fmt.Sprintf(`{"action":%q}`, action)))
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+
+		server.httpServer.Handler.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected status 200, got %d: %s", rec.Code, rec.Body.String())
+		}
+		if !strings.Contains(rec.Body.String(), fmt.Sprintf(`"action":%q`, action)) || !strings.Contains(rec.Body.String(), `"channel":11`) {
+			t.Fatalf("unexpected response body: %s", rec.Body.String())
+		}
+	}
+	if !reflect.DeepEqual(actions, []dahua.NVRRecordingAction{dahua.NVRRecordingActionStart, dahua.NVRRecordingActionAuto}) {
+		t.Fatalf("unexpected actions %+v", actions)
+	}
+}
+
+func TestNVRDiagnosticEndpoint(t *testing.T) {
+	server := newTestServerWithConfig(config.HTTPConfig{
+		ListenAddress: ":0",
+		MetricsPath:   "/metrics",
+		HealthPath:    "/healthz",
+	}, stubSnapshotReader{}, nil, stubActionReader{
+		nvrDiagnostic: func(_ context.Context, deviceID string, request dahua.NVRDiagnosticActionRequest) (dahua.NVRDiagnosticActionResult, error) {
+			if deviceID != "west20_nvr" {
+				t.Fatalf("unexpected device id %q", deviceID)
+			}
+			if request.Channel != 5 {
+				t.Fatalf("unexpected channel %d", request.Channel)
+			}
+			if request.Method != "direct_ipc_lighting" {
+				t.Fatalf("unexpected method %q", request.Method)
+			}
+			if request.Action != "start" {
+				t.Fatalf("unexpected action %q", request.Action)
+			}
+			if request.Duration != 500*time.Millisecond {
+				t.Fatalf("unexpected duration %s", request.Duration)
+			}
+			return dahua.NVRDiagnosticActionResult{
+				Status:      "ok",
+				DeviceID:    deviceID,
+				Channel:     request.Channel,
+				Method:      request.Method,
+				Action:      request.Action,
+				DurationMS:  request.Duration.Milliseconds(),
+				Endpoint:    "/cgi-bin/configManager.cgi?action=setConfig&Lighting_V2...",
+				Description: "Direct IPC Lighting_V2 configManager setConfig path.",
+			}, nil
+		},
+	}, stubEventReader{})
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/nvr/west20_nvr/channels/5/diagnostics", strings.NewReader(`{"method":"direct_ipc_lighting","action":"start","duration_ms":500}`))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 
@@ -2689,7 +2897,7 @@ func TestNVRChannelRecordingEndpoint(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected status 200, got %d: %s", rec.Code, rec.Body.String())
 	}
-	if !strings.Contains(rec.Body.String(), `"action":"start"`) || !strings.Contains(rec.Body.String(), `"channel":11`) {
+	if !strings.Contains(rec.Body.String(), `"method":"direct_ipc_lighting"`) || !strings.Contains(rec.Body.String(), `"duration_ms":500`) {
 		t.Fatalf("unexpected response body: %s", rec.Body.String())
 	}
 }

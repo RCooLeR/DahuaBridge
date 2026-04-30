@@ -50,6 +50,8 @@ func (d *Driver) Recording(ctx context.Context, request dahua.NVRRecordingReques
 		return d.setChannelRecordMode(ctx, request.Channel, 1, state)
 	case dahua.NVRRecordingActionStop:
 		return d.setChannelRecordMode(ctx, request.Channel, 2, state)
+	case dahua.NVRRecordingActionAuto:
+		return d.setChannelRecordMode(ctx, request.Channel, 0, state)
 	default:
 		return fmt.Errorf("unsupported recording action %q", request.Action)
 	}

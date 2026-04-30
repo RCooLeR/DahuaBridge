@@ -8,6 +8,7 @@ import (
 	"path"
 	"sort"
 	"strings"
+	"time"
 
 	"RCooLeR/DahuaBridge/internal/dahua"
 	dahuarpc "RCooLeR/DahuaBridge/internal/dahua/rpc"
@@ -50,12 +51,12 @@ type remoteFileInfo struct {
 func (d *Driver) audioCapabilities(ctx context.Context, channel int) (dahua.NVRChannelAudioCapabilities, []string) {
 	capabilities := dahua.NVRChannelAudioCapabilities{}
 	notes := make([]string, 0, 4)
-	nvrConfigWritable := false
-	nvrConfigReason := ""
+	nvrAudioWritable := false
+	nvrAudioReason := ""
 	directIPCWritable := d.directIPCAudioWritable(ctx, channel)
 	_, imouConfigured := d.imouOverride(channel)
 	if !directIPCWritable && !imouConfigured {
-		nvrConfigWritable, nvrConfigReason = d.nvrConfigWriteStatus(ctx)
+		nvrAudioWritable, nvrAudioReason = d.nvrAudioWriteStatus(ctx, channel)
 	}
 
 	if enabled, known, codec := d.channelAudioStreamState(ctx, channel); known {
@@ -73,12 +74,12 @@ func (d *Driver) audioCapabilities(ctx context.Context, channel int) (dahua.NVRC
 		capabilities.Mute = true
 		capabilities.Supported = true
 		notes = append(notes, "channel_imou_audio_encode_control_configured")
-	} else if _, known, codec := d.channelAudioStreamState(ctx, channel); known && nvrConfigWritable {
+	} else if _, known, codec := d.channelAudioStreamState(ctx, channel); known && nvrAudioWritable {
 		capabilities.Mute = true
 		capabilities.Supported = strings.TrimSpace(codec) != ""
-		notes = append(notes, "channel_main_stream_audio_toggle_available")
+		notes = append(notes, "channel_stream_audio_toggle_available")
 	} else if known {
-		if nvrConfigReason == "permission_denied" {
+		if nvrAudioReason == "permission_denied" {
 			notes = append(notes, "channel_nvr_audio_config_write_permission_denied")
 		} else {
 			notes = append(notes, "channel_nvr_audio_config_write_unavailable")
@@ -217,7 +218,7 @@ func (d *Driver) audioControlAuthority(ctx context.Context, channel int) string 
 	if _, ok := d.imouOverride(channel); ok {
 		return "imou_override"
 	}
-	if allowed, _ := d.nvrConfigWriteStatus(ctx); !allowed {
+	if allowed, _ := d.nvrAudioWriteStatus(ctx, channel); !allowed {
 		return "nvr_read_only"
 	}
 	return "nvr"
@@ -261,8 +262,15 @@ func (d *Driver) channelAudioStreamState(ctx context.Context, channel int) (bool
 }
 
 func (d *Driver) setChannelMainAudioEnabled(ctx context.Context, channel int, enabled bool) error {
-	if err := d.requireNVRConfigWrite(ctx, channel, "stream-audio control"); err != nil {
-		return err
+	if allowed, reason := d.nvrAudioWriteStatus(ctx, channel); !allowed {
+		switch strings.TrimSpace(reason) {
+		case "permission_denied":
+			return fmt.Errorf("%w: stream-audio control requires nvr audio config-write permission on channel %d", dahua.ErrUnsupportedOperation, channel)
+		case "disabled_by_config":
+			return fmt.Errorf("%w: stream-audio control requires allow_config_writes=true on channel %d", dahua.ErrUnsupportedOperation, channel)
+		default:
+			return fmt.Errorf("%w: stream-audio control requires a writable nvr audio config surface on channel %d", dahua.ErrUnsupportedOperation, channel)
+		}
 	}
 	if d.client == nil {
 		return fmt.Errorf("%w: audio mute control is not supported on channel %d", dahua.ErrUnsupportedOperation, channel)
@@ -297,13 +305,105 @@ func (d *Driver) setChannelMainAudioEnabled(ctx context.Context, channel int, en
 	return dahua.ErrUnsupportedOperation
 }
 
+func (d *Driver) nvrAudioWriteStatus(ctx context.Context, channel int) (bool, string) {
+	if channel <= 0 {
+		return false, "invalid_channel"
+	}
+
+	d.audioWriteMu.RLock()
+	if d.audioWriteStatus != nil {
+		if cached, ok := d.audioWriteStatus[channel]; ok && time.Since(cached.Checked) < nvrConfigWriteCacheTTL {
+			d.audioWriteMu.RUnlock()
+			return cached.Allowed, cached.Reason
+		}
+	}
+	d.audioWriteMu.RUnlock()
+
+	allowed, reason := d.probeNVRAudioWriteStatus(ctx, channel)
+
+	d.audioWriteMu.Lock()
+	if d.audioWriteStatus == nil {
+		d.audioWriteStatus = make(map[int]channelWriteStatus)
+	}
+	d.audioWriteStatus[channel] = channelWriteStatus{
+		Checked: time.Now(),
+		Allowed: allowed,
+		Reason:  reason,
+	}
+	d.audioWriteMu.Unlock()
+	return allowed, reason
+}
+
+func (d *Driver) probeNVRAudioWriteStatus(ctx context.Context, channel int) (bool, string) {
+	if d.client == nil {
+		return false, "client_unavailable"
+	}
+	if allowed, reason := d.nvrConfigWriteStatus(ctx); !allowed {
+		return false, reason
+	}
+	values, err := d.client.GetKeyValues(ctx, "/cgi-bin/configManager.cgi", url.Values{
+		"action": []string{"getConfig"},
+		"name":   []string{"Encode"},
+	})
+	if err != nil {
+		return false, "probe_failed"
+	}
+
+	keys := channelAudioEnableKeys(channel, values)
+	if _, ok := firstKnownAudioEnabled(keys, values); !ok {
+		return false, "audio_key_unavailable"
+	}
+
+	for _, tablePrefix := range []bool{true, false} {
+		query, ok := channelAudioCurrentValueQuery(keys, values, tablePrefix)
+		if !ok {
+			continue
+		}
+		body, err := d.client.GetText(ctx, "/cgi-bin/configManager.cgi", query)
+		if err != nil {
+			if isUnsupportedRecordConfigError(err) {
+				continue
+			}
+			if isAuthorityDeniedConfigError(err) {
+				return false, "permission_denied"
+			}
+			return false, "probe_failed"
+		}
+		if !strings.EqualFold(strings.TrimSpace(body), "OK") {
+			return false, "unexpected_response"
+		}
+		return true, "enabled_by_config"
+	}
+	return false, "audio_key_unavailable"
+}
+
+func firstKnownAudioEnabled(keys []string, values map[string]string) (bool, bool) {
+	for _, key := range keys {
+		if enabled, ok := parseOptionalBool(values[key]); ok {
+			return enabled, true
+		}
+	}
+	return false, false
+}
+
+func parseOptionalBool(value string) (bool, bool) {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "1", "true", "on", "yes":
+		return true, true
+	case "0", "false", "off", "no":
+		return false, true
+	default:
+		return false, false
+	}
+}
+
 func channelAudioEnableKeys(channel int, values map[string]string) []string {
 	channelIndex := channel - 1
 	keys := make([]string, 0, 3)
 	seen := make(map[string]struct{}, 3)
 	for key := range values {
-		matches := encodeAudioEnablePattern.FindStringSubmatch(key)
-		if len(matches) != 2 {
+		matches := encodeAnyAudioEnablePattern.FindStringSubmatch(key)
+		if len(matches) != 3 {
 			continue
 		}
 		index, ok := parseInt(matches[1])
@@ -321,6 +421,28 @@ func channelAudioEnableKeys(channel int, values map[string]string) []string {
 	}
 	sort.Strings(keys)
 	return keys
+}
+
+func channelAudioCurrentValueQuery(keys []string, values map[string]string, tablePrefix bool) (url.Values, bool) {
+	query := url.Values{
+		"action": []string{"setConfig"},
+	}
+	for _, key := range keys {
+		enabled, ok := parseOptionalBool(values[key])
+		if !ok {
+			continue
+		}
+		normalizedKey := key
+		if !tablePrefix {
+			normalizedKey = strings.TrimPrefix(normalizedKey, "table.")
+		}
+		if enabled {
+			query[normalizedKey] = []string{"true"}
+		} else {
+			query[normalizedKey] = []string{"false"}
+		}
+	}
+	return query, len(query) > 1
 }
 
 func channelAudioEnableQuery(keys []string, enabled bool, tablePrefix bool) url.Values {

@@ -108,6 +108,7 @@ type NVRRecordingQuery struct {
 	StartTime time.Time
 	EndTime   time.Time
 	Limit     int
+	EventCode string
 }
 
 type NVRRecording struct {
@@ -116,6 +117,7 @@ type NVRRecording struct {
 	ClipID         string   `json:"clip_id,omitempty"`
 	StreamID       string   `json:"stream_id,omitempty"`
 	DownloadURL    string   `json:"download_url,omitempty"`
+	ExportURL      string   `json:"export_url,omitempty"`
 	Channel        int      `json:"channel"`
 	StartTime      string   `json:"start_time"`
 	EndTime        string   `json:"end_time"`
@@ -316,11 +318,31 @@ type NVRRecordingAction string
 const (
 	NVRRecordingActionStart NVRRecordingAction = "start"
 	NVRRecordingActionStop  NVRRecordingAction = "stop"
+	NVRRecordingActionAuto  NVRRecordingAction = "auto"
 )
 
 type NVRRecordingRequest struct {
 	Channel int
 	Action  NVRRecordingAction
+}
+
+type NVRDiagnosticActionRequest struct {
+	Channel  int
+	Method   string
+	Action   string
+	Duration time.Duration
+}
+
+type NVRDiagnosticActionResult struct {
+	Status      string   `json:"status"`
+	DeviceID    string   `json:"device_id"`
+	Channel     int      `json:"channel"`
+	Method      string   `json:"method"`
+	Action      string   `json:"action"`
+	DurationMS  int64    `json:"duration_ms,omitempty"`
+	Endpoint    string   `json:"endpoint,omitempty"`
+	Description string   `json:"description,omitempty"`
+	Notes       []string `json:"notes,omitempty"`
 }
 
 type NVRChannelControlReader interface {
@@ -341,6 +363,10 @@ type NVRAudioController interface {
 
 type NVRRecordingController interface {
 	Recording(context.Context, NVRRecordingRequest) error
+}
+
+type NVRDiagnosticController interface {
+	DiagnosticAction(context.Context, NVRDiagnosticActionRequest) (NVRDiagnosticActionResult, error)
 }
 
 type EventSource interface {

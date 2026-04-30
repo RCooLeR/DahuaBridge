@@ -47,7 +47,11 @@ import type {
   NvrArchiveSearchResultModel,
   NvrPlaybackSessionModel,
 } from "../domain/archive";
-import { fetchArchiveRecordings } from "../ha/bridge-archive";
+import {
+  exportArchiveRecording,
+  fetchArchiveRecordings,
+  waitForArchiveExportCompletion,
+} from "../ha/bridge-archive";
 import {
   createPlaybackSession,
   createPlaybackSeekRequestFromRecording,
@@ -81,6 +85,7 @@ import type {
   LovelaceCardConfig,
 } from "../types/home-assistant";
 import {
+  EVENT_FILTER_ALL,
   type DetailTab,
   buildTimelineEventFilterOptions,
   type EventViewMode,
@@ -107,6 +112,16 @@ const EVENT_WINDOW_OPTIONS = [
   { hours: 6, label: "6H" },
   { hours: 24, label: "24H" },
   { hours: 168, label: "7D" },
+] as const;
+
+const ARCHIVE_EVENT_TYPE_OPTIONS = [
+  { value: EVENT_FILTER_ALL, label: "All event types" },
+  { value: "motion", label: "Motion" },
+  { value: "human", label: "Human" },
+  { value: "vehicle", label: "Vehicle" },
+  { value: "tripwire", label: "Tripwire" },
+  { value: "intrusion", label: "Intrusion" },
+  { value: "access", label: "Access" },
 ] as const;
 
 const ACTION_STATE_OVERRIDE_TTL_MS = 10_000;
@@ -156,10 +171,8 @@ export class DahuaBridgeSurveillancePanelCard
     _eventHistoryPage: { state: true },
     _eventViewMode: { state: true },
     _eventWindowHours: { state: true },
-    _eventRoomFilter: { state: true },
-    _eventDeviceKindFilter: { state: true },
-    _eventSeverityFilter: { state: true },
     _eventCodeFilter: { state: true },
+    _archiveEventCodeFilter: { state: true },
     _selection: { state: true },
     _sidebarFilter: { state: true },
     _searchText: { state: true },
@@ -197,10 +210,8 @@ export class DahuaBridgeSurveillancePanelCard
   private _eventHistoryPage = 0;
   private _eventViewMode: EventViewMode = "recent";
   private _eventWindowHours = 12;
-  private _eventRoomFilter = defaultTimelineEventFilters().roomLabel;
-  private _eventDeviceKindFilter = defaultTimelineEventFilters().deviceKind;
-  private _eventSeverityFilter = defaultTimelineEventFilters().severity;
   private _eventCodeFilter = defaultTimelineEventFilters().eventCode;
+  private _archiveEventCodeFilter = defaultTimelineEventFilters().eventCode;
   private _selection: PanelSelection = { kind: "overview" };
   private _sidebarFilter: SidebarFilter = "all";
   private _searchText = "";
@@ -279,6 +290,7 @@ export class DahuaBridgeSurveillancePanelCard
     this._eventViewMode = "recent";
     this._eventWindowHours = this._config.event_lookback_hours ?? 12;
     this.resetEventFilters();
+    this._archiveEventCodeFilter = defaultTimelineEventFilters().eventCode;
     this._selection = { kind: "overview" };
     this._detailTab = "overview";
     this._ptzAdjusting = false;
@@ -333,6 +345,7 @@ export class DahuaBridgeSurveillancePanelCard
       changedProperties.has("_selection") ||
       changedProperties.has("_config") ||
       changedProperties.has("_eventWindowHours") ||
+      changedProperties.has("_archiveEventCodeFilter") ||
       changedProperties.has("_nvrArchiveChannelNumber")
     ) {
       void this.refreshArchiveRecordings();
@@ -607,119 +620,123 @@ export class DahuaBridgeSurveillancePanelCard
                             tone: "primary",
                           },
                         )}
-                        ${selectedPlayback.recording.downloadUrl
+                        ${selectedPlayback.recording.downloadUrl ||
+                        selectedPlayback.recording.exportUrl
                           ? this.renderControlButton(
-                              "Download",
+                              selectedPlayback.recording.downloadUrl ? "Download" : "Export MP4",
                               "mdi:download",
-                              () => this.downloadArchiveRecording(selectedPlayback.recording),
+                              () => void this.downloadArchiveRecording(selectedPlayback.recording),
                               {
                                 compact: true,
+                                disabled: this.isBusy(
+                                  this.archiveDownloadBusyKey(selectedPlayback.recording),
+                                ),
                               },
                             )
                           : nothing}
                       `
                     : html`
-                        ${this.renderControlButton(
-                          "Snapshot",
-                          "mdi:camera",
-                          () => this.openSnapshot(camera),
-                          {
-                            disabled: !this.hasSnapshot(camera),
-                            compact: true,
-                          },
-                        )}
-                        ${this.renderControlButton(
-                          bridgeRecordingActive ? "Stop MP4" : "MP4 Recording",
-                          "mdi:record-rec",
-                          () =>
-                            this.triggerRecordingAction(
-                              camera,
-                              bridgeRecordingActive ? "stop" : "start",
-                            ),
-                          {
-                            tone: bridgeRecordingActive ? "danger" : "warning",
-                            disabled:
-                              !camera.supportsRecording ||
-                              this.isBusy(
-                                `${camera.deviceId}:recording:${bridgeRecordingActive ? "stop" : "start"}`,
-                              ),
-                            compact: true,
-                            active: bridgeRecordingActive,
-                          },
-                        )}
-                        ${this.renderControlButton(
-                          lightActive ? "Smart Light" : "White Light",
-                          "mdi:lightbulb-on-outline",
-                          () => this.triggerAuxAction(camera, "light"),
-                          {
-                            disabled:
-                              !camera.supportsAux ||
-                              !lightAvailable ||
-                              this.isBusy(`${camera.deviceId}:aux:light`),
-                            compact: true,
-                            tone: lightActive ? "primary" : undefined,
-                            active: lightActive,
-                          },
-                        )}
-                        ${this.renderControlButton(
-                          warningLightActive ? "Warning Off" : "Warning On",
-                          "mdi:alarm-light-outline",
-                          () => this.triggerAuxAction(camera, "warning_light"),
-                          {
-                            disabled:
-                              !camera.supportsAux ||
-                              !warningLightAvailable ||
-                              this.isBusy(`${camera.deviceId}:aux:warning_light`),
-                            compact: true,
-                            tone: warningLightActive ? "warning" : undefined,
-                            active: warningLightActive,
-                          },
-                        )}
-                        ${this.renderControlButton(
-                          sirenActive ? "Siren Off" : "Siren On",
-                          "mdi:bullhorn",
-                          () => this.triggerAuxAction(camera, "siren"),
-                          {
-                            tone: "warning",
-                            disabled:
-                              !camera.supportsAux ||
-                              !sirenAvailable ||
-                              this.isBusy(`${camera.deviceId}:aux:siren`),
-                            compact: true,
-                            active: sirenActive,
-                          },
-                        )}
-                        ${this.renderControlButton(
-                          this._selectedCameraAudioMuted
-                            ? "Enable Stream Audio"
-                            : "Disable Stream Audio",
-                          this._selectedCameraAudioMuted ? "mdi:volume-high" : "mdi:volume-off",
-                          () => void this.toggleSelectedCameraAudio(camera),
-                          {
-                            tone: this._selectedCameraAudioMuted ? "neutral" : "primary",
-                            disabled:
-                              !cameraAudioAvailable ||
-                              (camera.audioMuteSupported &&
-                                this.isBusy(`${camera.deviceId}:audio:mute`)),
-                            compact: true,
-                            active: !this._selectedCameraAudioMuted,
-                          },
-                        )}
-                        ${this.renderControlButton(
-                          this._ptzAdjusting ? "Close PTZ" : "PTZ Controls",
-                          "mdi:axis-arrow",
-                          () => {
-                            const previousPtzAdjusting = this._ptzAdjusting;
-                            this._ptzAdjusting = !this._ptzAdjusting;
-                            this.requestUpdate("_ptzAdjusting", previousPtzAdjusting);
-                          },
-                          {
-                            tone: this._ptzAdjusting ? "primary" : "neutral",
-                            disabled: !camera.supportsPtz,
-                            compact: true,
-                            active: this._ptzAdjusting,
-                          },
-                        )}
+                        ${this.hasSnapshot(camera)
+                          ? this.renderControlButton(
+                              "Snapshot",
+                              "mdi:camera",
+                              () => this.openSnapshot(camera),
+                              {
+                                compact: true,
+                              },
+                            )
+                          : nothing}
+                        ${camera.supportsRecording
+                          ? this.renderControlButton(
+                              bridgeRecordingActive ? "Stop MP4" : "MP4 Recording",
+                              "mdi:record-rec",
+                              () =>
+                                this.triggerRecordingAction(
+                                  camera,
+                                  bridgeRecordingActive ? "stop" : "start",
+                                ),
+                              {
+                                tone: bridgeRecordingActive ? "danger" : "warning",
+                                disabled: this.isBusy(
+                                  `${camera.deviceId}:recording:${bridgeRecordingActive ? "stop" : "start"}`,
+                                ),
+                                compact: true,
+                                active: bridgeRecordingActive,
+                              },
+                            )
+                          : nothing}
+                        ${camera.supportsAux && lightAvailable
+                          ? this.renderControlButton(
+                              lightActive ? "Smart Light" : "White Light",
+                              "mdi:lightbulb-on-outline",
+                              () => this.triggerAuxAction(camera, "light"),
+                              {
+                                disabled: this.isBusy(`${camera.deviceId}:aux:light`),
+                                compact: true,
+                                tone: lightActive ? "primary" : undefined,
+                                active: lightActive,
+                              },
+                            )
+                          : nothing}
+                        ${camera.supportsAux && warningLightAvailable
+                          ? this.renderControlButton(
+                              warningLightActive ? "Warning Off" : "Warning On",
+                              "mdi:alarm-light-outline",
+                              () => this.triggerAuxAction(camera, "warning_light"),
+                              {
+                                disabled: this.isBusy(`${camera.deviceId}:aux:warning_light`),
+                                compact: true,
+                                tone: warningLightActive ? "warning" : undefined,
+                                active: warningLightActive,
+                              },
+                            )
+                          : nothing}
+                        ${camera.supportsAux && sirenAvailable
+                          ? this.renderControlButton(
+                              sirenActive ? "Siren Off" : "Siren On",
+                              "mdi:bullhorn",
+                              () => this.triggerAuxAction(camera, "siren"),
+                              {
+                                tone: "warning",
+                                disabled: this.isBusy(`${camera.deviceId}:aux:siren`),
+                                compact: true,
+                                active: sirenActive,
+                              },
+                            )
+                          : nothing}
+                        ${cameraAudioAvailable
+                          ? this.renderControlButton(
+                              this._selectedCameraAudioMuted
+                                ? "Enable Stream Audio"
+                                : "Disable Stream Audio",
+                              this._selectedCameraAudioMuted ? "mdi:volume-high" : "mdi:volume-off",
+                              () => void this.toggleSelectedCameraAudio(camera),
+                              {
+                                tone: this._selectedCameraAudioMuted ? "neutral" : "primary",
+                                disabled:
+                                  camera.audioMuteSupported &&
+                                  this.isBusy(`${camera.deviceId}:audio:mute`),
+                                compact: true,
+                                active: !this._selectedCameraAudioMuted,
+                              },
+                            )
+                          : nothing}
+                        ${camera.supportsPtz
+                          ? this.renderControlButton(
+                              this._ptzAdjusting ? "Close PTZ" : "PTZ Controls",
+                              "mdi:axis-arrow",
+                              () => {
+                                const previousPtzAdjusting = this._ptzAdjusting;
+                                this._ptzAdjusting = !this._ptzAdjusting;
+                                this.requestUpdate("_ptzAdjusting", previousPtzAdjusting);
+                              },
+                              {
+                                tone: this._ptzAdjusting ? "primary" : "neutral",
+                                compact: true,
+                                active: this._ptzAdjusting,
+                              },
+                            )
+                          : nothing}
                       `}
                 </div>
               </div>
@@ -825,65 +842,68 @@ export class DahuaBridgeSurveillancePanelCard
                   this._selectedVtoStreamSource,
                 )}
                 <div class="viewport-controls">
-                  ${this.renderControlButton(
-                    "Snapshot",
-                    "mdi:camera",
-                    () => this.openVtoSnapshot(vto),
-                    {
-                      disabled: !this.hasVtoSnapshot(vto),
-                      compact: true,
-                    },
-                  )}
-                  ${this.renderControlButton(
-                    vto.bridgeRecordingActive ? "Stop MP4" : "MP4 Recording",
-                    "mdi:record-rec",
-                    () => void this.triggerVtoBridgeRecording(vto),
-                    {
-                      tone: vto.bridgeRecordingActive ? "danger" : "warning",
-                      disabled:
-                        this.isBusy("vto:bridge_recording") ||
-                        (!vto.recordingStartUrl && !vto.recordingStopUrl),
-                      compact: true,
-                      active: vto.bridgeRecordingActive,
-                    },
-                  )}
-                  ${this.renderControlButton(
-                    this._selectedVtoStreamPlaying ? "Stop Stream" : "Play Stream",
-                    this._selectedVtoStreamPlaying
-                      ? "mdi:stop-circle-outline"
-                      : "mdi:play-circle-outline",
-                    () => {
-                      const previousPlaying = this._selectedVtoStreamPlaying;
-                      this._selectedVtoStreamPlaying = !this._selectedVtoStreamPlaying;
-                      this.requestUpdate("_selectedVtoStreamPlaying", previousPlaying);
-                    },
-                    {
-                      tone: this._selectedVtoStreamPlaying ? "warning" : "primary",
-                      disabled: !this.hasPlayableVtoStream(vto),
-                      compact: true,
-                      active: this._selectedVtoStreamPlaying,
-                    },
-                  )}
-                  ${this.renderControlButton(
-                    this._selectedVtoMicrophoneState.enabled ? "Disable Mic" : "Enable Mic",
-                    this._selectedVtoMicrophoneState.enabled ? "mdi:microphone-off" : "mdi:microphone",
-                    () => {
-                      void (this._selectedVtoMicrophoneState.enabled
-                        ? this.stopSelectedVtoMicrophone()
-                        : this.startSelectedVtoMicrophone(vto));
-                    },
-                    {
-                      tone: this._selectedVtoMicrophoneState.enabled ? "warning" : "neutral",
-                      disabled:
-                        !vto.capabilities.browserMicrophoneSupported ||
-                        !this.hasAvailableVtoIntercom(vto),
-                      compact: true,
-                      active: this._selectedVtoMicrophoneState.enabled,
-                    },
-                  )}
-                  ${vto.locks.length > 0
+                  ${this.hasVtoSnapshot(vto)
+                    ? this.renderControlButton(
+                        "Snapshot",
+                        "mdi:camera",
+                        () => this.openVtoSnapshot(vto),
+                        {
+                          compact: true,
+                        },
+                      )
+                    : nothing}
+                  ${vto.recordingStartUrl || vto.recordingStopUrl
+                    ? this.renderControlButton(
+                        vto.bridgeRecordingActive ? "Stop MP4" : "MP4 Recording",
+                        "mdi:record-rec",
+                        () => void this.triggerVtoBridgeRecording(vto),
+                        {
+                          tone: vto.bridgeRecordingActive ? "danger" : "warning",
+                          disabled: this.isBusy("vto:bridge_recording"),
+                          compact: true,
+                          active: vto.bridgeRecordingActive,
+                        },
+                      )
+                    : nothing}
+                  ${this.hasPlayableVtoStream(vto)
+                    ? this.renderControlButton(
+                        this._selectedVtoStreamPlaying ? "Stop Stream" : "Play Stream",
+                        this._selectedVtoStreamPlaying
+                          ? "mdi:stop-circle-outline"
+                          : "mdi:play-circle-outline",
+                        () => {
+                          const previousPlaying = this._selectedVtoStreamPlaying;
+                          this._selectedVtoStreamPlaying = !this._selectedVtoStreamPlaying;
+                          this.requestUpdate("_selectedVtoStreamPlaying", previousPlaying);
+                        },
+                        {
+                          tone: this._selectedVtoStreamPlaying ? "warning" : "primary",
+                          compact: true,
+                          active: this._selectedVtoStreamPlaying,
+                        },
+                      )
+                    : nothing}
+                  ${vto.capabilities.browserMicrophoneSupported && this.hasAvailableVtoIntercom(vto)
+                    ? this.renderControlButton(
+                        this._selectedVtoMicrophoneState.enabled ? "Disable Mic" : "Enable Mic",
+                        this._selectedVtoMicrophoneState.enabled ? "mdi:microphone-off" : "mdi:microphone",
+                        () => {
+                          void (this._selectedVtoMicrophoneState.enabled
+                            ? this.stopSelectedVtoMicrophone()
+                            : this.startSelectedVtoMicrophone(vto));
+                        },
+                        {
+                          tone: this._selectedVtoMicrophoneState.enabled ? "warning" : "neutral",
+                          compact: true,
+                          active: this._selectedVtoMicrophoneState.enabled,
+                        },
+                      )
+                    : nothing}
+                  ${vto.locks.filter((lock) => lock.hasUnlockButtonEntity || Boolean(lock.unlockActionUrl)).length > 0
                     ? repeat(
-                        vto.locks,
+                        vto.locks.filter(
+                          (lock) => lock.hasUnlockButtonEntity || Boolean(lock.unlockActionUrl),
+                        ),
                         (lock) => lock.deviceId,
                         (lock) =>
                           this.renderControlButton(
@@ -897,14 +917,13 @@ export class DahuaBridgeSurveillancePanelCard
                               ),
                             {
                               tone: "primary",
-                              disabled:
-                                this.isBusy(`vto-lock:${lock.deviceId}:unlock`) ||
-                                (!lock.hasUnlockButtonEntity && !lock.unlockActionUrl),
+                              disabled: this.isBusy(`vto-lock:${lock.deviceId}:unlock`),
                               compact: true,
                             },
                           ),
                       )
-                    : this.renderControlButton(
+                    : vto.hasUnlockButtonEntity || vto.unlockActionUrl
+                      ? this.renderControlButton(
                         "Unlock",
                         "mdi:lock-open-variant",
                         () =>
@@ -915,13 +934,12 @@ export class DahuaBridgeSurveillancePanelCard
                           ),
                         {
                           tone: "primary",
-                          disabled:
-                            this.isBusy("vto:unlock") ||
-                            (!vto.hasUnlockButtonEntity && !vto.unlockActionUrl),
+                          disabled: this.isBusy("vto:unlock"),
                           compact: true,
                         },
-                      )}
-                  ${vto.callState === "ringing"
+                      )
+                      : nothing}
+                  ${vto.callState === "ringing" && (vto.hasAnswerButtonEntity || vto.answerActionUrl)
                     ? this.renderControlButton(
                         "Answer Call",
                         "mdi:phone",
@@ -933,14 +951,13 @@ export class DahuaBridgeSurveillancePanelCard
                           ),
                         {
                           tone: "warning",
-                          disabled:
-                            this.isBusy("vto:answer") ||
-                            (!vto.hasAnswerButtonEntity && !vto.answerActionUrl),
+                          disabled: this.isBusy("vto:answer"),
                           compact: true,
                         },
                       )
                     : nothing}
-                  ${vto.callState === "ringing" || vto.callState === "active"
+                  ${(vto.callState === "ringing" || vto.callState === "active") &&
+                  (vto.hasHangupButtonEntity || vto.hangupActionUrl)
                     ? this.renderControlButton(
                         "Hang Up",
                         "mdi:phone-hangup",
@@ -952,33 +969,31 @@ export class DahuaBridgeSurveillancePanelCard
                           ),
                         {
                           tone: "danger",
-                          disabled:
-                            this.isBusy("vto:hangup") ||
-                            (!vto.hasHangupButtonEntity && !vto.hangupActionUrl),
+                          disabled: this.isBusy("vto:hangup"),
                           compact: true,
                         },
                       )
                     : nothing}
-                  ${this.renderControlButton(
-                    vto.muted ? "Unmute" : "Mute",
-                    vto.muted ? "mdi:volume-off" : "mdi:volume-high",
-                    () =>
-                      this.triggerVtoSwitchAction(
-                        "vto:mute",
-                        vto.mutedEntityId,
-                        !vto.muted,
-                        vto.mutedActionUrl,
-                        "muted",
-                      ),
-                    {
-                      tone: vto.muted ? "warning" : "neutral",
-                      disabled:
-                        this.isBusy("vto:mute") ||
-                        (!vto.hasMutedEntity && !vto.mutedActionUrl),
-                      compact: true,
-                      active: vto.muted,
-                    },
-                  )}
+                  ${vto.hasMutedEntity || vto.mutedActionUrl
+                    ? this.renderControlButton(
+                        vto.muted ? "Unmute" : "Mute",
+                        vto.muted ? "mdi:volume-off" : "mdi:volume-high",
+                        () =>
+                          this.triggerVtoSwitchAction(
+                            "vto:mute",
+                            vto.mutedEntityId,
+                            !vto.muted,
+                            vto.mutedActionUrl,
+                            "muted",
+                          ),
+                        {
+                          tone: vto.muted ? "warning" : "neutral",
+                          disabled: this.isBusy("vto:mute"),
+                          compact: true,
+                          active: vto.muted,
+                        },
+                      )
+                    : nothing}
                 </div>
               </div>
             </div>
@@ -1088,13 +1103,20 @@ export class DahuaBridgeSurveillancePanelCard
               archiveLoading: this._archiveLoading,
               archiveError: this._archiveError,
                 eventWindowHours: this._eventWindowHours,
+                archiveEventCode: this._archiveEventCodeFilter,
+                archiveEventTypeOptions: ARCHIVE_EVENT_TYPE_OPTIONS,
                 playbackSupported: Boolean(this.resolveArchiveSource(model)?.archive?.playbackUrl),
                 isLaunchingPlayback: (recording) => this.isBusy(this.playbackBusyKey(recording)),
                 isPlaybackActive: (recording) => this.isPlaybackActive(recording),
+                isDownloadingRecording: (recording) =>
+                  this.isBusy(this.archiveDownloadBusyKey(recording)),
+                onSelectArchiveEventType: (eventCode) => this.selectArchiveEventType(eventCode),
                 onLaunchPlayback: (recording) => {
                   void this.launchPlaybackSession(model, recording);
                 },
-                onDownloadRecording: (recording) => this.downloadArchiveRecording(recording),
+                onDownloadRecording: (recording) => {
+                  void this.downloadArchiveRecording(recording);
+                },
                 renderIcon: (icon) => this.renderIcon(icon),
               })
           : nothing,
@@ -1156,25 +1178,14 @@ export class DahuaBridgeSurveillancePanelCard
         this.requestUpdate("_eventWindowHours", previousWindow);
       },
       onSelectFilter: (key, value) => {
-        switch (key) {
-          case "roomLabel":
-            this.updateEventFilter("_eventRoomFilter", this._eventRoomFilter, value);
-            break;
-          case "deviceKind":
-            this.updateEventFilter("_eventDeviceKindFilter", this._eventDeviceKindFilter, value);
-            break;
-          case "severity":
-            this.updateEventFilter("_eventSeverityFilter", this._eventSeverityFilter, value);
-            break;
-          case "eventCode":
-            this.updateEventFilter("_eventCodeFilter", this._eventCodeFilter, value);
-            break;
+        if (key === "eventCode") {
+          this.updateEventFilter("_eventCodeFilter", this._eventCodeFilter, value);
         }
       },
       onResetFilters: () => {
         const previousFilters = this.currentEventFilters();
         this.resetEventFilters();
-        this.requestUpdate("_eventRoomFilter", previousFilters.roomLabel);
+        this.requestUpdate("_eventCodeFilter", previousFilters.eventCode);
       },
       onHistoryPageInput: this.handleHistoryPageInput,
       renderIcon: (icon) => this.renderIcon(icon),
@@ -1183,47 +1194,28 @@ export class DahuaBridgeSurveillancePanelCard
 
   private currentEventFilters(): TimelineEventFilters {
     return {
-      roomLabel: this._eventRoomFilter,
-      deviceKind: this._eventDeviceKindFilter,
-      severity: this._eventSeverityFilter,
       eventCode: this._eventCodeFilter,
     };
   }
 
   private resetEventFilters(): void {
     const defaults = defaultTimelineEventFilters();
-    this._eventRoomFilter = defaults.roomLabel;
-    this._eventDeviceKindFilter = defaults.deviceKind;
-    this._eventSeverityFilter = defaults.severity;
     this._eventCodeFilter = defaults.eventCode;
   }
 
+  private resetArchiveEventFilter(): void {
+    this._archiveEventCodeFilter = defaultTimelineEventFilters().eventCode;
+  }
+
   private updateEventFilter(
-    key:
-      | "_eventRoomFilter"
-      | "_eventDeviceKindFilter"
-      | "_eventSeverityFilter"
-      | "_eventCodeFilter",
+    key: "_eventCodeFilter",
     previousValue: string,
     nextValue: string,
   ): void {
     if (previousValue === nextValue) {
       return;
     }
-    switch (key) {
-      case "_eventRoomFilter":
-        this._eventRoomFilter = nextValue;
-        break;
-      case "_eventDeviceKindFilter":
-        this._eventDeviceKindFilter = nextValue;
-        break;
-      case "_eventSeverityFilter":
-        this._eventSeverityFilter = nextValue;
-        break;
-      case "_eventCodeFilter":
-        this._eventCodeFilter = nextValue;
-        break;
-    }
+    this._eventCodeFilter = nextValue;
     this.requestUpdate(key, previousValue);
   }
 
@@ -1237,9 +1229,6 @@ export class DahuaBridgeSurveillancePanelCard
       changedProperties.has("_registrySnapshot") ||
       changedProperties.has("_selection") ||
       changedProperties.has("_eventWindowHours") ||
-      changedProperties.has("_eventRoomFilter") ||
-      changedProperties.has("_eventDeviceKindFilter") ||
-      changedProperties.has("_eventSeverityFilter") ||
       changedProperties.has("_eventCodeFilter")
     );
   }
@@ -1476,6 +1465,7 @@ export class DahuaBridgeSurveillancePanelCard
     this._ptzAdjusting = nextState.ptzAdjusting;
     this._eventHistoryPage = nextState.eventHistoryPage;
     this.resetEventFilters();
+    this.resetArchiveEventFilter();
     this._nvrArchiveChannelNumber = null;
     this._selectedCameraStreamProfile = null;
     this._selectedCameraStreamSource = null;
@@ -1496,6 +1486,7 @@ export class DahuaBridgeSurveillancePanelCard
     this._ptzAdjusting = nextState.ptzAdjusting;
     this._eventHistoryPage = nextState.eventHistoryPage;
     this.resetEventFilters();
+    this.resetArchiveEventFilter();
     this._inspectorOpen = true;
     this._nvrArchiveChannelNumber = null;
     this._selectedCameraStreamProfile =
@@ -1524,6 +1515,7 @@ export class DahuaBridgeSurveillancePanelCard
     this._ptzAdjusting = nextState.ptzAdjusting;
     this._eventHistoryPage = nextState.eventHistoryPage;
     this.resetEventFilters();
+    this.resetArchiveEventFilter();
     this._inspectorOpen = true;
     this._nvrArchiveChannelNumber = nvr.rooms
       .flatMap((room) => room.channels)
@@ -1548,6 +1540,7 @@ export class DahuaBridgeSurveillancePanelCard
     this._ptzAdjusting = nextState.ptzAdjusting;
     this._eventHistoryPage = nextState.eventHistoryPage;
     this.resetEventFilters();
+    this.resetArchiveEventFilter();
     this._inspectorOpen = true;
     this._nvrArchiveChannelNumber = null;
     this._selectedCameraStreamProfile = null;
@@ -1581,6 +1574,15 @@ export class DahuaBridgeSurveillancePanelCard
     this._eventHistoryPage = nextPage;
     this.requestUpdate("_eventHistoryPage", previousPage);
   };
+
+  private selectArchiveEventType(eventCode: string): void {
+    if (eventCode === this._archiveEventCodeFilter) {
+      return;
+    }
+    const previousEventCode = this._archiveEventCodeFilter;
+    this._archiveEventCodeFilter = eventCode;
+    this.requestUpdate("_archiveEventCodeFilter", previousEventCode);
+  }
 
   private async refreshArchiveRecordings(): Promise<void> {
     if (
@@ -1637,6 +1639,7 @@ export class DahuaBridgeSurveillancePanelCard
         startTime: start.toISOString(),
         endTime: end.toISOString(),
         limit: archiveSource.archive.defaultLimit,
+        eventCode: this._archiveEventCodeFilter,
       }, controller.signal);
       if (controller.signal.aborted || this._archiveAbort !== controller || requestVersion !== this._archiveRequestVersion) {
         return;
@@ -1683,6 +1686,10 @@ export class DahuaBridgeSurveillancePanelCard
 
   private playbackBusyKey(recording: { channel: number; startTime: string; endTime: string }): string {
     return `playback:${recording.channel}:${recording.startTime}:${recording.endTime}`;
+  }
+
+  private archiveDownloadBusyKey(recording: { channel: number; startTime: string; endTime: string }): string {
+    return `archive-download:${recording.channel}:${recording.startTime}:${recording.endTime}`;
   }
 
   private async launchPlaybackSession(
@@ -1762,11 +1769,41 @@ export class DahuaBridgeSurveillancePanelCard
     );
   }
 
-  private downloadArchiveRecording(recording: NvrArchiveRecordingModel): void {
-    if (!recording.downloadUrl) {
+  private async downloadArchiveRecording(recording: NvrArchiveRecordingModel): Promise<void> {
+    if (recording.downloadUrl) {
+      window.open(recording.downloadUrl, "_blank", "noopener,noreferrer");
       return;
     }
-    window.open(recording.downloadUrl, "_blank", "noopener,noreferrer");
+
+    if (!recording.exportUrl) {
+      return;
+    }
+
+    const busyKey = this.archiveDownloadBusyKey(recording);
+    if (this.isBusy(busyKey)) {
+      return;
+    }
+
+    const nextBusy = new Set(this._busyActions);
+    nextBusy.add(busyKey);
+    this._busyActions = nextBusy;
+    this._errorMessage = "";
+
+    try {
+      const startedClip = await exportArchiveRecording(recording.exportUrl);
+      const completedClip = await waitForArchiveExportCompletion(startedClip);
+      if (!completedClip.downloadUrl) {
+        throw new Error("Bridge archive export completed without a download URL.");
+      }
+      window.open(completedClip.downloadUrl, "_blank", "noopener,noreferrer");
+    } catch (error) {
+      this._errorMessage =
+        error instanceof Error ? error.message : "Bridge archive export request failed.";
+    } finally {
+      const reducedBusy = new Set(this._busyActions);
+      reducedBusy.delete(busyKey);
+      this._busyActions = reducedBusy;
+    }
   }
 
   private renderPlaybackSeekPanel(playback: SelectedPlaybackState): TemplateResult {

@@ -34,7 +34,7 @@ func New(cfg config.DeviceConfig, logger zerolog.Logger, client *cgi.Client) *Dr
 	return &Driver{
 		cfg:    cfg,
 		cgi:    client,
-		rpc:    rpc.New(cfg),
+		rpc:    rpc.New(cfg, logger),
 		rtsp:   dahuartsp.NewChecker(cfg),
 		onvif:  onvif.New(cfg),
 		logger: logger.With().Str("device_id", cfg.ID).Str("device_type", string(dahua.DeviceKindIPC)).Logger(),
