@@ -64,11 +64,13 @@ type Manager struct {
 	logger   zerolog.Logger
 
 	mu                    sync.Mutex
+	audioProbeMu          sync.Mutex
 	mjpegWorkers          map[string]*worker
 	hlsWorkers            map[string]*hlsWorker
 	clipJobs              map[string]*clipJob
 	webrtcPeers           map[string]*webrtcSession
 	intercomUplinkEnabled map[string]bool
+	audioProbeCache       map[string]audioProbeCacheEntry
 }
 
 type WorkerStatus struct {
@@ -160,6 +162,7 @@ func New(cfg config.MediaConfig, resolver StreamResolver, logger zerolog.Logger,
 		clipJobs:              make(map[string]*clipJob),
 		webrtcPeers:           make(map[string]*webrtcSession),
 		intercomUplinkEnabled: make(map[string]bool),
+		audioProbeCache:       make(map[string]audioProbeCacheEntry),
 	}
 	if metricsRegistry != nil {
 		metricsRegistry.SetMediaWorkers(0)
@@ -643,15 +646,6 @@ func (w *worker) stopWhenIdle(idleGeneration uint64) {
 	}
 }
 
-func (w *worker) stopNowIfIdle() {
-	w.mu.Lock()
-	empty := len(w.subscribers) == 0
-	w.mu.Unlock()
-	if empty {
-		w.cancel()
-	}
-}
-
 func (w *worker) run() {
 	defer w.parent.removeMJPEGWorker(w.key, w)
 	defer w.closeSubscribers()
@@ -695,11 +689,7 @@ func (w *worker) run() {
 			return
 		}
 
-		stderrDone := make(chan string, 1)
-		go func() {
-			body, _ := io.ReadAll(io.LimitReader(stderr, 64*1024))
-			stderrDone <- strings.TrimSpace(string(body))
-		}()
+		stderrDone := drainFFmpegStderr(stderr, 64*1024)
 
 		readErr := w.readMJPEG(stdout)
 		waitErr := cmd.Wait()
@@ -764,6 +754,9 @@ func (w *worker) buildFFmpegArgs(attempt ffmpegStartAttempt) []string {
 	}
 	args = appendInputHWAccelArgs(args, w.parent.cfg, attempt.useHWAccel)
 	args = append(args, buildRTSPInputArgs(w.profile, attempt.inputPreset)...)
+	if playbackDuration, ok := playbackDurationFromStreamURL(w.profile.StreamURL); ok {
+		args = append(args, "-t", formatFFmpegSeconds(playbackDuration))
+	}
 	args = append(args, "-an")
 	if w.parent.cfg.Threads > 0 {
 		args = append(args, "-threads", strconv.Itoa(w.parent.cfg.Threads))
@@ -777,6 +770,7 @@ func (w *worker) buildFFmpegArgs(attempt ffmpegStartAttempt) []string {
 func (w *worker) readMJPEG(r io.Reader) error {
 	reader := bufio.NewReaderSize(r, w.parent.cfg.ReadBufferSize)
 	buffer := make([]byte, 0, 256*1024)
+	frameCount := 0
 
 	for {
 		select {
@@ -789,10 +783,15 @@ func (w *worker) readMJPEG(r io.Reader) error {
 		n, err := reader.Read(chunk)
 		if n > 0 {
 			buffer = append(buffer, chunk[:n]...)
-			buffer = w.extractFrames(buffer)
+			var published int
+			buffer, published = w.extractFramesWithCount(buffer)
+			frameCount += published
 		}
 		if err != nil {
 			if errors.Is(err, io.EOF) {
+				if frameCount > 0 && !hasIncompleteMJPEGFrame(buffer) {
+					return nil
+				}
 				return fmt.Errorf("read mjpeg stdout: %w", io.ErrUnexpectedEOF)
 			}
 			return fmt.Errorf("read mjpeg stdout: %w", err)
@@ -801,25 +800,32 @@ func (w *worker) readMJPEG(r io.Reader) error {
 }
 
 func (w *worker) extractFrames(buffer []byte) []byte {
+	buffer, _ = w.extractFramesWithCount(buffer)
+	return buffer
+}
+
+func (w *worker) extractFramesWithCount(buffer []byte) ([]byte, int) {
+	published := 0
 	for {
 		start := bytes.Index(buffer, []byte{0xFF, 0xD8})
 		if start < 0 {
 			if len(buffer) > 1024*1024 {
-				return nil
+				return nil, published
 			}
-			return buffer
+			return buffer, published
 		}
 		end := bytes.Index(buffer[start+2:], []byte{0xFF, 0xD9})
 		if end < 0 {
 			if start > 0 {
-				return append([]byte(nil), buffer[start:]...)
+				return append([]byte(nil), buffer[start:]...), published
 			}
-			return buffer
+			return buffer, published
 		}
 
 		end += start + 4
 		frame := append([]byte(nil), buffer[start:end]...)
 		w.publishFrame(frame)
+		published++
 		buffer = buffer[end:]
 	}
 }
@@ -940,6 +946,7 @@ func (w *worker) status() WorkerStatus {
 func (w *hlsWorker) run() {
 	outputDir := ""
 	retainOutput := false
+	includeAudio := w.parent.shouldIncludeSourceAudio(w.profile, w.logger)
 
 	defer func() {
 		if retainOutput && outputDir != "" && w.parent.cfg.HLSKeepAfterExit > 0 {
@@ -993,7 +1000,7 @@ func (w *hlsWorker) run() {
 			w.logger.Info().Bool("hwaccel", attempt.useHWAccel).Str("input_preset", attempt.inputPreset).Msg("starting hls fallback attempt")
 		}
 
-		args := w.buildFFmpegArgs(attempt)
+		args := w.buildFFmpegArgs(attempt, includeAudio)
 		w.logger.Debug().Bool("hwaccel", attempt.useHWAccel).Str("input_preset", attempt.inputPreset).Str("hls_output_dir", outputDir).Strs("ffmpeg_args", redactFFmpegArgs(args)).Msg("starting hls worker")
 
 		cmd := exec.CommandContext(w.ctx, w.parent.cfg.FFmpegPath, args...)
@@ -1014,11 +1021,7 @@ func (w *hlsWorker) run() {
 			return
 		}
 
-		stderrDone := make(chan string, 1)
-		go func() {
-			body, _ := io.ReadAll(io.LimitReader(stderr, 128*1024))
-			stderrDone <- strings.TrimSpace(string(body))
-		}()
+		stderrDone := drainFFmpegStderr(stderr, 128*1024)
 
 		waitErr := cmd.Wait()
 		stderrText := <-stderrDone
@@ -1057,7 +1060,7 @@ func (w *hlsWorker) run() {
 	}
 }
 
-func (w *hlsWorker) buildFFmpegArgs(attempt ffmpegStartAttempt) []string {
+func (w *hlsWorker) buildFFmpegArgs(attempt ffmpegStartAttempt, includeAudio bool) []string {
 	frameRate := w.parent.cfg.FrameRate
 	if w.profile.FrameRate > 0 {
 		frameRate = w.profile.FrameRate
@@ -1078,22 +1081,31 @@ func (w *hlsWorker) buildFFmpegArgs(attempt ffmpegStartAttempt) []string {
 	}
 	args = appendInputHWAccelArgs(args, w.parent.cfg, attempt.useHWAccel)
 	args = append(args, buildRTSPInputArgs(w.profile, attempt.inputPreset)...)
+	if playbackDuration, ok := playbackDurationFromStreamURL(w.profile.StreamURL); ok {
+		args = append(args, "-t", formatFFmpegSeconds(playbackDuration))
+	}
 	if w.parent.cfg.Threads > 0 {
 		args = append(args, "-threads", strconv.Itoa(w.parent.cfg.Threads))
 	}
 	args = appendVideoFilterArgs(args, w.parent.cfg, w.parent.cfg.ScaleWidth, w.profile, attempt.useHWAccel, frameRate)
-	args = append(args,
-		"-map", "0:v:0",
-		"-map", "0:a:0?",
-	)
+	args = append(args, "-map", "0:v:0")
 	args = appendVideoEncoderArgs(args, w.parent.cfg, attempt.useHWAccel, gopSize, "veryfast")
 	args = append(args,
 		"-fps_mode", "cfr",
 		"-force_key_frames", fmt.Sprintf("expr:gte(t,n_forced*%s)", segmentDuration),
-		"-c:a", "aac",
-		"-b:a", "96k",
-		"-ac", "2",
-		"-ar", "48000",
+	)
+	if includeAudio {
+		args = append(args,
+			"-map", "0:a:0?",
+			"-c:a", "aac",
+			"-b:a", "96k",
+			"-ac", "2",
+			"-ar", "48000",
+		)
+	} else {
+		args = append(args, "-an")
+	}
+	args = append(args,
 		"-hls_allow_cache", "0",
 		"-muxpreload", "0",
 		"-muxdelay", "0",
@@ -1241,6 +1253,15 @@ func safeHLSDirectoryPrefix(value string) string {
 		safe = safe[:96]
 	}
 	return safe
+}
+
+func hasIncompleteMJPEGFrame(buffer []byte) bool {
+	start := bytes.Index(buffer, []byte{0xFF, 0xD8})
+	if start < 0 {
+		return false
+	}
+	end := bytes.Index(buffer[start+2:], []byte{0xFF, 0xD9})
+	return end < 0
 }
 func removeDirectoryAfter(logger zerolog.Logger, dir string, delay time.Duration) {
 	if strings.TrimSpace(dir) == "" {
@@ -1411,6 +1432,30 @@ func formatFFmpegSeconds(duration time.Duration) string {
 		return "1"
 	}
 	return formatted
+}
+
+func playbackDurationFromStreamURL(raw string) (time.Duration, bool) {
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil {
+		return 0, false
+	}
+
+	query := parsed.Query()
+	startRaw := strings.TrimSpace(query.Get("starttime"))
+	endRaw := strings.TrimSpace(query.Get("endtime"))
+	if startRaw == "" || endRaw == "" {
+		return 0, false
+	}
+
+	startTime, err := time.Parse("2006_01_02_15_04_05", startRaw)
+	if err != nil {
+		return 0, false
+	}
+	endTime, err := time.Parse("2006_01_02_15_04_05", endRaw)
+	if err != nil || !endTime.After(startTime) {
+		return 0, false
+	}
+	return endTime.Sub(startTime), true
 }
 
 func ffmpegLogLevel(cfg config.MediaConfig) string {

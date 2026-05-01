@@ -229,6 +229,8 @@ Example catalog skeleton:
 
 - Returns current media worker state.
 - Use this for diagnostics when MJPEG, HLS, WebRTC, or clip recording behavior looks wrong.
+- A listed worker does not always mean an FFmpeg child process is still running.
+- For finite playback HLS sessions, retained playlists and segments can keep the worker visible until idle-timeout cleanup even after FFmpeg exited at end-of-file.
 
 ### `GET /api/v1/media/snapshot/{streamID}`
 
@@ -358,7 +360,7 @@ Example catalog skeleton:
 - Optional query param:
   - `limit`, default `25`, max `200`
   - `event` or `event_type`, optional Dahua event filter. Friendly values such as `motion`, `human`, `vehicle`, `tripwire`, `intrusion`, and `access` are normalized to recorder event codes.
-  - When an event filter is supplied, the bridge uses the recorder RPC2 event log (`log.startFind` / `log.doSeekFind`) and returns `source: "nvr_event"` playback windows around matching events.
+  - When an event filter is supplied, the bridge resolves matching archive windows from recorder event metadata, including recorder log RPC, SMD finder RPC, and IVS media-file RPC as needed.
 - Example:
 
 ```text
@@ -370,7 +372,9 @@ Example catalog skeleton:
   - native NVR archive items
   - bridge-owned MP4 clip items merged into the same time range for unfiltered searches
 - Bridge-owned items are the ones that can include `clip_id`, `stream_id`, and `download_url`.
-- Native NVR archive items are intended for playback sessions and MP4 export. They expose `export_url`, not `download_url`, because the generic Dahua HTTP file endpoint is not reliable across tested firmware.
+- The bridge caches identical archive-search queries briefly and coalesces concurrent misses so repeated UI polling does not duplicate recorder searches.
+- Event-backed items such as SMD and IVS results are intended for playback sessions and MP4 export through the bridge.
+- Native NVR archive items expose `export_url` as the supported recorder-footage path for bridge playback/export workflows.
 
 ### `POST /api/v1/nvr/{deviceID}/recordings/export`
 
@@ -390,6 +394,9 @@ Example catalog skeleton:
 
 - `seek_time`, `profile`, `duration_seconds`, and `duration_ms` are optional.
 - If no duration is supplied, the bridge records from `seek_time` or `start_time` until `end_time`.
+- For finite archive exports, the bridge derives the playback duration from the archive RTSP window and lets FFmpeg terminate at end-of-file.
+- Live validation on May 2, 2026 confirmed a 22-second SMD export on channel 1 completed cleanly as a video-only MP4 on the tested recorder.
+- The same export flow is the supported path for SMD and IVS event-backed archive items.
 - Returns:
   - `session`: playback session metadata
   - `clip`: bridge MP4 clip metadata with `self_url` and `download_url`
@@ -411,6 +418,7 @@ Example catalog skeleton:
 
 - `seek_time` is optional. If present, playback starts near that point.
 - Returns session metadata plus generated HLS, MJPEG, and WebRTC URLs under `profiles`.
+- Live validation on May 2, 2026 confirmed a seek to `2026-04-28T02:59:50+03:00` inside a `2026-04-28T02:30:00+03:00` to `2026-04-28T03:00:00+03:00` playback window exited FFmpeg at EOF while the retained HLS playlist remained fetchable.
 
 ### `GET /api/v1/nvr/playback/sessions/{sessionID}`
 
@@ -439,6 +447,7 @@ Example catalog skeleton:
   - `aux`
   - `audio`
   - `recording`
+- `audio` is capability metadata only for NVR channels. The bridge no longer exposes a recorder mute toggle there.
 - Use this before attempting PTZ or aux actions from a custom UI.
 
 ### `POST /api/v1/nvr/{deviceID}/channels/{channel}/ptz`

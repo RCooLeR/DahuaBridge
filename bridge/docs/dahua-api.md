@@ -517,6 +517,16 @@ Bridge flow:
 4. The media layer records the playback stream to a bridge-owned MP4 clip.
 5. Clients poll the returned clip `self_url` until `status=completed`, then open `download_url`.
 
+Live validation notes on the verified bridge/NVR pair:
+
+- finite playback HLS now exits FFmpeg at the requested `starttime`/`endtime` window
+- archive clip export now completes cleanly instead of hanging on FFmpeg stdin or stderr backpressure
+- channel 1 human and vehicle SMD archive lookups now resolve through the bridge again
+- SMD event footage on channel 1 exported successfully through the bridge MP4 flow
+- concurrent live HLS startup across all 11 tested NVR channels returned `200` for every playlist request
+
+For completeness, observed recorder `RPC_Loadfile` responses can be multipart: a small JSON status part followed by an `application/http` part carrying the file payload. The bridge does not depend on that transport for SMD or IVS playback/export workflows.
+
 The export endpoint accepts query parameters or JSON body fields:
 
 ```json
@@ -678,6 +688,8 @@ Event-filtered archive search uses the NVR web UI log flow instead of `mediaFile
 3. `log.doSeekFind`
 
 The bridge maps matching log rows to synthetic `nvr_event` playback windows around the event timestamp, then uses the normal archive playback/export path for video.
+
+For Smart Motion Detection event searches, the bridge also falls back through `SmdDataFinder.startFind` / `SmdDataFinder.doFind` when the generic recorder event log path does not return matches.
 
 ### 5.3 NVR `configManager.getConfig`
 

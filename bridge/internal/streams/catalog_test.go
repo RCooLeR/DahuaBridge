@@ -54,8 +54,8 @@ func TestBuildCatalogForNVRChannel(t *testing.T) {
 							"control_aux_supported":              true,
 							"control_aux_outputs":                []string{"aux", "light", "wiper"},
 							"control_aux_features":               []string{"siren", "warning_light", "wiper"},
-							"control_audio_supported":            false,
-							"control_audio_mute_supported":       true,
+							"control_audio_supported":            true,
+							"control_audio_mute_supported":       false,
 							"control_audio_volume_supported":     false,
 							"control_audio_muted":                true,
 							"control_audio_stream_enabled":       false,
@@ -136,7 +136,7 @@ func TestBuildCatalogForNVRChannel(t *testing.T) {
 	if len(entry.Controls.Aux.Features) != 1 || entry.Controls.Aux.Features[0] != "wiper" {
 		t.Fatalf("unexpected aux features %+v", entry.Controls.Aux.Features)
 	}
-	if entry.Controls.Audio.Supported || !entry.Controls.Audio.Mute || entry.Controls.Audio.Volume {
+	if !entry.Controls.Audio.Supported || entry.Controls.Audio.Mute || entry.Controls.Audio.Volume {
 		t.Fatalf("unexpected audio summary %+v", entry.Controls.Audio)
 	}
 	if !entry.Controls.Audio.Muted || entry.Controls.Audio.StreamAudioEnabled {
@@ -154,7 +154,7 @@ func TestBuildCatalogForNVRChannel(t *testing.T) {
 	if len(entry.Controls.ValidationNotes) != 1 || entry.Controls.ValidationNotes[0] != "ptz_capability_query_failed_aux_fallback_used" {
 		t.Fatalf("unexpected control validation notes %+v", entry.Controls.ValidationNotes)
 	}
-	if len(entry.Features) != 6 {
+	if len(entry.Features) != 5 {
 		t.Fatalf("expected deterrence features to hide siren/warning light without IMOU, got %+v", entry.Features)
 	}
 	archiveSearch := findFeatureByKey(entry.Features, "archive_search")
@@ -178,8 +178,8 @@ func TestBuildCatalogForNVRChannel(t *testing.T) {
 		t.Fatalf("expected warning light feature to stay hidden without IMOU override, got %+v", warningLight)
 	}
 	mute := findFeatureByKey(entry.Features, "mute")
-	if mute == nil || mute.Kind != "toggle" || mute.URL != "http://bridge.local:8080/api/v1/nvr/west20_nvr/channels/1/audio/mute" || mute.Active == nil || !*mute.Active {
-		t.Fatalf("unexpected mute feature %+v", mute)
+	if mute != nil {
+		t.Fatalf("expected nvr mute feature to be removed, got %+v", mute)
 	}
 	recording := findFeatureByKey(entry.Features, "recording")
 	if recording != nil {

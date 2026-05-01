@@ -105,7 +105,6 @@ func (m *Manager) CaptureFrame(ctx context.Context, streamID string, profileName
 	w.addSubscriber(ch)
 	defer func() {
 		w.removeSubscriber(ch)
-		w.stopNowIfIdle()
 	}()
 
 	if err := w.waitUntilReady(ctx); err != nil {
@@ -364,15 +363,26 @@ func (job *clipJob) run(parent *Manager, profile streams.Profile, duration time.
 	defer close(job.done)
 	defer parent.removeClipJob(job.info.ID, job)
 
-	args := buildClipFFmpegArgs(parent.cfg, profile, duration, job.outputPath)
+	if duration <= 0 {
+		if playbackDuration, ok := playbackDurationFromStreamURL(profile.StreamURL); ok {
+			duration = playbackDuration
+		}
+	}
+	disableStdin := duration > 0
+	includeAudio := parent.shouldIncludeSourceAudio(profile, job.logger)
+	args := buildClipFFmpegArgs(parent.cfg, profile, duration, job.outputPath, includeAudio, disableStdin)
 	job.logger.Debug().Strs("ffmpeg_args", redactFFmpegArgs(args)).Msg("starting clip worker")
 
 	cmd := exec.Command(parent.cfg.FFmpegPath, args...)
-	stdin, err := cmd.StdinPipe()
-	if err != nil {
-		started <- fmt.Errorf("ffmpeg stdin pipe: %w", err)
-		job.complete(parent, err)
-		return
+	var stdin io.WriteCloser
+	var err error
+	if !disableStdin {
+		stdin, err = cmd.StdinPipe()
+		if err != nil {
+			started <- fmt.Errorf("ffmpeg stdin pipe: %w", err)
+			job.complete(parent, err)
+			return
+		}
 	}
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
@@ -394,10 +404,12 @@ func (job *clipJob) run(parent *Manager, profile streams.Profile, duration time.
 	}
 	started <- nil
 
-	stderrText, _ := io.ReadAll(io.LimitReader(stderr, 64*1024))
+	stderrDone := drainFFmpegStderr(stderr, 64*1024)
+
 	waitErr := cmd.Wait()
-	if waitErr != nil && len(stderrText) > 0 {
-		waitErr = fmt.Errorf("%w: %s", waitErr, strings.TrimSpace(string(stderrText)))
+	stderrText := <-stderrDone
+	if waitErr != nil && stderrText != "" {
+		waitErr = fmt.Errorf("%w: %s", waitErr, stderrText)
 	}
 	job.complete(parent, waitErr)
 }
@@ -532,10 +544,13 @@ func clipSourceWindow(streamURL string, duration time.Duration) (time.Time, time
 	return startTime.UTC(), endTime.UTC()
 }
 
-func buildClipFFmpegArgs(cfg config.MediaConfig, profile streams.Profile, duration time.Duration, outputPath string) []string {
+func buildClipFFmpegArgs(cfg config.MediaConfig, profile streams.Profile, duration time.Duration, outputPath string, includeAudio bool, disableStdin bool) []string {
 	args := []string{
 		"-hide_banner",
 		"-loglevel", ffmpegLogLevel(cfg),
+	}
+	if disableStdin {
+		args = append(args, "-nostdin")
 	}
 	args = append(args, buildRTSPInputArgs(profile, cfg.InputPreset)...)
 	if duration > 0 {
@@ -543,19 +558,25 @@ func buildClipFFmpegArgs(cfg config.MediaConfig, profile streams.Profile, durati
 	}
 	args = append(args,
 		"-map", "0:v:0",
-		"-map", "0:a:0?",
 		"-c:v", "libx264",
 		"-preset", "veryfast",
 		"-pix_fmt", "yuv420p",
 		"-profile:v", "high",
 		"-tag:v", "avc1",
-		"-c:a", "aac",
-		"-b:a", "128k",
-		"-ac", "2",
-		"-ar", "48000",
 		"-movflags", "+faststart",
 		"-y",
 	)
+	if includeAudio {
+		args = append(args,
+			"-map", "0:a:0?",
+			"-c:a", "aac",
+			"-b:a", "128k",
+			"-ac", "2",
+			"-ar", "48000",
+		)
+	} else {
+		args = append(args, "-an")
+	}
 	args = append(args, outputPath)
 	return args
 }

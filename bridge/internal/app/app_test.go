@@ -3,6 +3,8 @@ package app
 import (
 	"context"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -20,24 +22,195 @@ type stubRuntimeMedia struct {
 }
 
 type stubSnapshotProvider struct {
+	mu          sync.Mutex
 	body        []byte
 	contentType string
 	calls       int
 	lastChannel int
 	err         error
+	snapshot    func(context.Context, int) ([]byte, string, error)
 }
 
 type stubRecordingSearcher struct {
 	find func(context.Context, dahua.NVRRecordingQuery) (dahua.NVRRecordingSearchResult, error)
 }
 
-func (s *stubSnapshotProvider) Snapshot(_ context.Context, channel int) ([]byte, string, error) {
+func (s *stubSnapshotProvider) Snapshot(ctx context.Context, channel int) ([]byte, string, error) {
+	s.mu.Lock()
 	s.calls++
 	s.lastChannel = channel
-	if s.err != nil {
-		return nil, "", s.err
+	snapshot := s.snapshot
+	body := append([]byte(nil), s.body...)
+	contentType := s.contentType
+	err := s.err
+	s.mu.Unlock()
+
+	if snapshot != nil {
+		return snapshot(ctx, channel)
 	}
-	return append([]byte(nil), s.body...), s.contentType, nil
+	if err != nil {
+		return nil, "", err
+	}
+	return body, contentType, nil
+}
+
+func (s *stubSnapshotProvider) callCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.calls
+}
+
+func (s *stubSnapshotProvider) channel() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.lastChannel
+}
+
+func TestRuntimeServicesNVRSnapshotDedupesConcurrentMisses(t *testing.T) {
+	probes := store.NewProbeStore()
+	services := newRuntimeServices(config.Config{}, probes)
+
+	started := make(chan struct{}, 1)
+	release := make(chan struct{})
+	provider := &stubSnapshotProvider{
+		snapshot: func(_ context.Context, channel int) ([]byte, string, error) {
+			if channel != 2 {
+				t.Fatalf("unexpected channel %d", channel)
+			}
+			select {
+			case started <- struct{}{}:
+			default:
+			}
+			<-release
+			return []byte("jpeg-bytes"), "image/jpeg", nil
+		},
+	}
+	services.RegisterNVR("west20_nvr", provider, nil, config.DeviceConfig{ID: "west20_nvr"})
+
+	startBarrier := make(chan struct{})
+	results := make(chan []byte, 2)
+	errs := make(chan error, 2)
+	for range 2 {
+		go func() {
+			<-startBarrier
+			body, _, err := services.NVRSnapshot(context.Background(), "west20_nvr", 2)
+			if err != nil {
+				errs <- err
+				return
+			}
+			results <- body
+		}()
+	}
+	close(startBarrier)
+
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for first snapshot fetch")
+	}
+
+	time.Sleep(50 * time.Millisecond)
+	close(release)
+
+	for range 2 {
+		select {
+		case err := <-errs:
+			t.Fatalf("NVRSnapshot returned error: %v", err)
+		case body := <-results:
+			if string(body) != "jpeg-bytes" {
+				t.Fatalf("unexpected snapshot body %q", string(body))
+			}
+		case <-time.After(time.Second):
+			t.Fatal("timed out waiting for deduped snapshot result")
+		}
+	}
+
+	if provider.callCount() != 1 {
+		t.Fatalf("expected one backend snapshot call, got %d", provider.callCount())
+	}
+}
+
+func TestRuntimeServicesNVRRecordingsDedupesConcurrentMisses(t *testing.T) {
+	probes := store.NewProbeStore()
+	services := newRuntimeServices(config.Config{}, probes)
+
+	started := make(chan struct{}, 1)
+	release := make(chan struct{})
+	var calls atomic.Int32
+	services.RegisterNVR("west20_nvr", nil, stubRecordingSearcher{
+		find: func(_ context.Context, query dahua.NVRRecordingQuery) (dahua.NVRRecordingSearchResult, error) {
+			calls.Add(1)
+			select {
+			case started <- struct{}{}:
+			default:
+			}
+			<-release
+			return dahua.NVRRecordingSearchResult{
+				DeviceID:      "west20_nvr",
+				Channel:       query.Channel,
+				StartTime:     query.StartTime.In(time.Local).Format(bridgeRecordingTimeLayout),
+				EndTime:       query.EndTime.In(time.Local).Format(bridgeRecordingTimeLayout),
+				Limit:         query.Limit,
+				ReturnedCount: 1,
+				Items: []dahua.NVRRecording{{
+					Source:    "nvr",
+					Channel:   query.Channel,
+					StartTime: "2026-05-01 02:30:00",
+					EndTime:   "2026-05-01 03:00:00",
+					Type:      "dav",
+				}},
+			}, nil
+		},
+	}, config.DeviceConfig{ID: "west20_nvr"})
+
+	query := dahua.NVRRecordingQuery{
+		Channel:   1,
+		StartTime: time.Date(2026, 5, 1, 2, 30, 0, 0, time.UTC),
+		EndTime:   time.Date(2026, 5, 1, 2, 31, 0, 0, time.UTC),
+		Limit:     10,
+	}
+
+	startBarrier := make(chan struct{})
+	type result struct {
+		value dahua.NVRRecordingSearchResult
+		err   error
+	}
+	results := make(chan result, 2)
+	for range 2 {
+		go func() {
+			<-startBarrier
+			value, err := services.NVRRecordings(context.Background(), "west20_nvr", query)
+			results <- result{value: value, err: err}
+		}()
+	}
+	close(startBarrier)
+
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for first recording search")
+	}
+
+	time.Sleep(50 * time.Millisecond)
+	close(release)
+
+	for range 2 {
+		select {
+		case result := <-results:
+			if result.err != nil {
+				t.Fatalf("NVRRecordings returned error: %v", result.err)
+			}
+			if len(result.value.Items) != 1 || result.value.Items[0].Type != "dav" {
+				t.Fatalf("unexpected recording search result %+v", result.value)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("timed out waiting for deduped recording search result")
+		}
+	}
+
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("expected one backend recording search, got %d", got)
+	}
 }
 
 func (s stubRecordingSearcher) FindRecordings(ctx context.Context, query dahua.NVRRecordingQuery) (dahua.NVRRecordingSearchResult, error) {
@@ -283,6 +456,60 @@ func TestRuntimeServicesNVRRecordingsDoesNotMergeBridgeClips(t *testing.T) {
 	}
 	if result.Items[0].DownloadURL != "" {
 		t.Fatalf("NVR archive items must not expose unverified direct download URLs, got %q", result.Items[0].DownloadURL)
+	}
+}
+
+func TestRuntimeServicesNVRRecordingsCachesRecentSearches(t *testing.T) {
+	probes := store.NewProbeStore()
+	services := newRuntimeServices(config.Config{}, probes)
+
+	calls := 0
+	services.RegisterNVR("west20_nvr", nil, stubRecordingSearcher{
+		find: func(_ context.Context, query dahua.NVRRecordingQuery) (dahua.NVRRecordingSearchResult, error) {
+			calls++
+			return dahua.NVRRecordingSearchResult{
+				DeviceID:      "west20_nvr",
+				Channel:       query.Channel,
+				StartTime:     query.StartTime.In(time.Local).Format(bridgeRecordingTimeLayout),
+				EndTime:       query.EndTime.In(time.Local).Format(bridgeRecordingTimeLayout),
+				Limit:         query.Limit,
+				ReturnedCount: 1,
+				Items: []dahua.NVRRecording{{
+					Source:    "nvr",
+					Channel:   query.Channel,
+					StartTime: "2026-05-01 02:30:00",
+					EndTime:   "2026-05-01 03:00:00",
+					Type:      "dav",
+				}},
+			}, nil
+		},
+	}, config.DeviceConfig{ID: "west20_nvr"})
+
+	query := dahua.NVRRecordingQuery{
+		Channel:   1,
+		StartTime: time.Date(2026, 5, 1, 2, 30, 0, 0, time.UTC),
+		EndTime:   time.Date(2026, 5, 1, 2, 31, 0, 0, time.UTC),
+		Limit:     10,
+	}
+
+	first, err := services.NVRRecordings(context.Background(), "west20_nvr", query)
+	if err != nil {
+		t.Fatalf("first NVRRecordings returned error: %v", err)
+	}
+	second, err := services.NVRRecordings(context.Background(), "west20_nvr", query)
+	if err != nil {
+		t.Fatalf("second NVRRecordings returned error: %v", err)
+	}
+
+	if calls != 1 {
+		t.Fatalf("expected cached search to call backend once, got %d", calls)
+	}
+	if len(first.Items) != 1 || len(second.Items) != 1 {
+		t.Fatalf("unexpected cached result sizes: %d / %d", len(first.Items), len(second.Items))
+	}
+	first.Items[0].Type = "mutated"
+	if second.Items[0].Type != "dav" {
+		t.Fatalf("expected cached result clone, got %+v", second.Items[0])
 	}
 }
 

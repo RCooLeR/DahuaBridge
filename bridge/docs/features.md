@@ -72,6 +72,7 @@ Current behavior:
 
 - snapshot endpoints now prefer capturing from the configured stream path
 - device snapshot providers remain available as fallback where needed
+- identical snapshot requests are cached briefly and coalesced in-flight to reduce repeated NVR/VTO/IPC fetches
 
 APIs:
 
@@ -88,6 +89,12 @@ The bridge can expose live media helpers for any known stream:
 - HLS
 - preview pages
 - WebRTC helper pages and answer flow
+
+Bridge media policy:
+
+- NVR and camera audio settings are no longer toggled by the bridge for normal stream viewing
+- transcode output includes audio only when the source stream actually provides audio
+- playback workers now stop FFmpeg at archive end-of-file instead of running past the requested window
 
 APIs:
 
@@ -130,6 +137,14 @@ The bridge supports:
 - playback HLS/WebRTC helpers
 - MP4 export by capturing a native archive playback stream
 
+Operational notes:
+
+- finite archive playback now enforces the requested playback duration across HLS, MJPEG, WebRTC, and clip export
+- identical recorder archive searches are cached briefly and coalesced in-flight to reduce repeated recorder RPC/CGI searches
+- archive export is the supported bridge path for recorder footage download
+- SMD and IVS event-backed archive items are supported through the same playback-session and bridge MP4 export path as regular recorder footage
+- live validation on May 2, 2026 confirmed channel 1 human/vehicle SMD archive lookups, 11 concurrent live HLS channel starts, near-end 24/7 playback EOF handling, and successful SMD MP4 export
+
 APIs:
 
 - `GET /api/v1/nvr/{deviceID}/recordings`
@@ -151,6 +166,8 @@ Per-channel capability discovery can expose:
 Important note:
 
 - device-side manual recording endpoints still exist
+- NVR channel mute control is no longer exposed by the bridge
+- source-audio metadata is still published, but bridge output audio is decided at transcode time
 - they are no longer the preferred recording UX for higher layers
 - `action:"auto"` returns a channel to schedule-controlled recording after manual start/stop
 - bridge-owned clip recording is the intended recording flow for integration and UI work

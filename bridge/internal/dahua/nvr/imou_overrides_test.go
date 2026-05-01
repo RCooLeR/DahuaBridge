@@ -2,6 +2,7 @@ package nvr
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -144,7 +145,7 @@ func TestDriverAuxLightUsesNightVisionModeForImouOverride(t *testing.T) {
 	}
 }
 
-func TestDriverSetAudioMuteUsesImouAudioEncodeControl(t *testing.T) {
+func TestDriverSetAudioMuteReturnsUnsupported(t *testing.T) {
 	imouStub := &imouServiceStub{audioOn: true}
 	driver := &Driver{
 		cfg: config.DeviceConfig{
@@ -160,21 +161,19 @@ func TestDriverSetAudioMuteUsesImouAudioEncodeControl(t *testing.T) {
 	}
 
 	capabilities, notes := driver.audioCapabilities(context.Background(), 5)
-	if !capabilities.Mute || capabilities.Muted {
+	if capabilities.Mute || capabilities.Supported {
 		t.Fatalf("unexpected audio capabilities %+v", capabilities)
 	}
-	if len(notes) == 0 {
-		t.Fatalf("expected audio capability notes, got %+v", notes)
-	}
+	_ = notes
 
 	if err := driver.SetAudioMute(context.Background(), dahua.NVRAudioRequest{
 		Channel: 5,
 		Muted:   true,
-	}); err != nil {
-		t.Fatalf("SetAudioMute returned error: %v", err)
+	}); !errors.Is(err, dahua.ErrUnsupportedOperation) {
+		t.Fatalf("expected unsupported operation, got %v", err)
 	}
-	if len(imouStub.statuses) != 1 || imouStub.statuses[0].EnableType != "audioEncodeControl" || imouStub.statuses[0].Enable {
-		t.Fatalf("unexpected audio status changes %+v", imouStub.statuses)
+	if len(imouStub.statuses) != 0 {
+		t.Fatalf("expected no imou audio status changes %+v", imouStub.statuses)
 	}
 }
 
