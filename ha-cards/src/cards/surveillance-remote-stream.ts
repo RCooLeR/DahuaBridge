@@ -7,6 +7,17 @@ import type { CameraViewportSource } from "./surveillance-panel-media";
 
 const STARTUP_TIMEOUT_MS = 20_000;
 const MAX_WEBRTC_RECONNECT_ATTEMPTS = 3;
+const HLS_RETRY_CONFIG = {
+  manifestLoadingMaxRetry: 6,
+  manifestLoadingRetryDelay: 1_000,
+  manifestLoadingMaxRetryTimeout: 16_000,
+  levelLoadingMaxRetry: 6,
+  levelLoadingRetryDelay: 1_000,
+  levelLoadingMaxRetryTimeout: 16_000,
+  fragLoadingMaxRetry: 8,
+  fragLoadingRetryDelay: 1_000,
+  fragLoadingMaxRetryTimeout: 16_000,
+} as const;
 
 export interface RemoteStreamDescriptor {
   cacheKey: string;
@@ -17,6 +28,10 @@ export interface RemoteStreamDescriptor {
     kind: CameraViewportSource;
     url: string;
   }>;
+}
+
+export interface RemoteStreamAudioHost extends HTMLElement {
+  syncAudioState(muted: boolean): void;
 }
 
 export function renderRemoteStream(
@@ -119,7 +134,7 @@ class DahuaBridgeRemoteStreamElement extends LitElement {
     }
 
     if (changedProperties.has("muted")) {
-      video.muted = this.muted;
+      this.applyAudioState(video, this.muted);
     }
 
     const sourceKey = this.sourceRuntimeKey(currentSource);
@@ -134,6 +149,13 @@ class DahuaBridgeRemoteStreamElement extends LitElement {
   disconnectedCallback(): void {
     this.cleanupPlayback();
     super.disconnectedCallback();
+  }
+
+  syncAudioState(muted: boolean): void {
+    const previousMuted = this.muted;
+    this.muted = muted;
+    this.requestUpdate("muted", previousMuted);
+    this.applyAudioState(this._videoRef.value ?? this._attachedVideo, muted, true);
   }
 
   render(): TemplateResult {
@@ -244,7 +266,9 @@ class DahuaBridgeRemoteStreamElement extends LitElement {
       if (!this.isCurrentSource(sourceKey)) {
         return;
       }
-      this.advanceToNextSource("video element error");
+      const details = getVideoElementDiagnostics(video);
+      console.warn("[DahuaBridge] video element error", details);
+      this.advanceToNextSource(`video element error: ${details.codeName}`);
     };
 
     video.addEventListener("loadedmetadata", onReady);
@@ -282,6 +306,7 @@ class DahuaBridgeRemoteStreamElement extends LitElement {
 
     const hls = new Hls({
       enableWorker: true,
+      ...HLS_RETRY_CONFIG,
     });
     this._hls = hls;
     this._hlsMediaRecoveryAttempts = 0;
@@ -293,7 +318,19 @@ class DahuaBridgeRemoteStreamElement extends LitElement {
       this.queuePlayback(video);
     });
     hls.on(Hls.Events.ERROR, (_event, data) => {
-      if (!this.isCurrentSource(sourceKey) || !data.fatal) {
+      if (!this.isCurrentSource(sourceKey)) {
+        return;
+      }
+      console.warn("[DahuaBridge] hls.js error", {
+        descriptor: this.descriptor?.cacheKey ?? "",
+        source: normalizedSource,
+        fatal: data.fatal,
+        type: data.type,
+        details: data.details,
+        reason: data.reason,
+        response_code: data.response?.code,
+      });
+      if (!data.fatal) {
         return;
       }
       if (
@@ -467,9 +504,24 @@ class DahuaBridgeRemoteStreamElement extends LitElement {
   };
 
   private prepareVideo(video: HTMLVideoElement): void {
-    video.muted = this.muted;
+    this.applyAudioState(video, this.muted);
     video.autoplay = true;
     video.playsInline = true;
+  }
+
+  private applyAudioState(
+    video: HTMLVideoElement | null,
+    muted: boolean,
+    playImmediately = false,
+  ): void {
+    if (!video) {
+      return;
+    }
+    video.dataset.audioMuted = muted ? "true" : "false";
+    video.muted = muted;
+    if (playImmediately) {
+      void video.play().catch(() => undefined);
+    }
   }
 
   private queuePlayback(video: HTMLVideoElement): void {
@@ -549,11 +601,49 @@ class DahuaBridgeRemoteStreamElement extends LitElement {
   }
 }
 
-function describeVideoError(video: HTMLVideoElement): string { const error = video.error; if (!error) { return "none"; } const names: Record<number, string> = { 1: "MEDIA_ERR_ABORTED", 2: "MEDIA_ERR_NETWORK", 3: "MEDIA_ERR_DECODE", 4: "MEDIA_ERR_SRC_NOT_SUPPORTED", }; const name = names[error.code] ?? `MEDIA_ERR_${error.code}`; const message = typeof error.message === "string" && error.message.trim() ? `: ${error.message.trim()}` : ""; return `${name}${message}`; } function describeVideoError(video: HTMLVideoElement): string { const error = video.error; if (!error) { return "none"; } const names: Record<number, string> = { 1: "MEDIA_ERR_ABORTED", 2: "MEDIA_ERR_NETWORK", 3: "MEDIA_ERR_DECODE", 4: "MEDIA_ERR_SRC_NOT_SUPPORTED", }; const name = names[error.code] ?? `MEDIA_ERR_${error.code}`; const message = typeof error.message === "string" && error.message.trim() ? `: ${error.message.trim()}` : ""; return `${name}${message}`; } function canPlayNativeHls(video: HTMLVideoElement): boolean {
+function canPlayNativeHls(video: HTMLVideoElement): boolean {
   return (
     video.canPlayType("application/vnd.apple.mpegurl") !== "" ||
     video.canPlayType("application/x-mpegURL") !== ""
   );
+}
+
+function getVideoElementDiagnostics(video: HTMLVideoElement): {
+  code: number | null;
+  codeName: string;
+  message: string;
+  currentSrc: string;
+  networkState: number;
+  readyState: number;
+} {
+  const error = video.error;
+  const code = error?.code ?? null;
+  const messageValue = error && "message" in error ? error.message : "";
+  return {
+    code,
+    codeName: describeMediaErrorCode(code),
+    message: typeof messageValue === "string" ? messageValue.trim() : "",
+    currentSrc: video.currentSrc,
+    networkState: video.networkState,
+    readyState: video.readyState,
+  };
+}
+
+function describeMediaErrorCode(code: number | null): string {
+  switch (code) {
+    case 1:
+      return "MEDIA_ERR_ABORTED";
+    case 2:
+      return "MEDIA_ERR_NETWORK";
+    case 3:
+      return "MEDIA_ERR_DECODE";
+    case 4:
+      return "MEDIA_ERR_SRC_NOT_SUPPORTED";
+    case null:
+      return "MEDIA_ERR_UNKNOWN";
+    default:
+      return `MEDIA_ERR_${code}`;
+  }
 }
 
 function resetVideoElement(video: HTMLVideoElement): void {

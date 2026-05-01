@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"gopkg.in/yaml.v3"
 )
 
 func TestEnabledDefaultsToTrueWhenUnset(t *testing.T) {
@@ -76,6 +78,12 @@ func TestMediaDefaults(t *testing.T) {
 	}
 	if cfg.Media.HLSListSize != 6 {
 		t.Fatalf("unexpected default media hls_list_size %d", cfg.Media.HLSListSize)
+	}
+	if cfg.Media.HLSTmpDir != "/data/tmp/dahuabridge/hls" {
+		t.Fatalf("unexpected default media hls_tmp_dir %q", cfg.Media.HLSTmpDir)
+	}
+	if cfg.Media.HLSKeepAfterExit != 6*time.Hour {
+		t.Fatalf("unexpected default media hls_keep_after_exit %s", cfg.Media.HLSKeepAfterExit)
 	}
 	if len(cfg.Media.WebRTCICEServers) != 0 {
 		t.Fatalf("expected no default webrtc ice servers, got %+v", cfg.Media.WebRTCICEServers)
@@ -185,6 +193,48 @@ func TestNormalizeHomeAssistantAPIBaseURL(t *testing.T) {
 	}
 	if cfg.HomeAssistant.CameraSnapshotSource != "logo" {
 		t.Fatalf("unexpected normalized camera snapshot source %q", cfg.HomeAssistant.CameraSnapshotSource)
+	}
+}
+
+func TestNormalizeMediaHLSTmpDirAlias(t *testing.T) {
+	cfg := defaultConfig()
+	cfg.Media.HLSTmpDir = ""
+	cfg.Media.HLSTempPath = " /srv/cache/hls "
+
+	if err := cfg.normalize(); err != nil {
+		t.Fatalf("normalize returned error: %v", err)
+	}
+
+	if cfg.Media.HLSTmpDir != "/srv/cache/hls" {
+		t.Fatalf("unexpected normalized media hls_tmp_dir %q", cfg.Media.HLSTmpDir)
+	}
+	if cfg.Media.HLSTempPath != "/srv/cache/hls" {
+		t.Fatalf("unexpected normalized media hls_temp_path %q", cfg.Media.HLSTempPath)
+	}
+}
+
+func TestYAMLUnmarshalSupportsMediaHLSTmpDir(t *testing.T) {
+	cfg := defaultConfig()
+	cfg.Media.HLSTmpDir = ""
+	cfg.Media.HLSTempPath = ""
+	cfg.Media.HLSKeepAfterExit = 0
+
+	data := []byte("media:\n  hls_tmp_dir: /cache/dahuabridge/hls\n  hls_keep_after_exit: 90m\n")
+	if err := yaml.Unmarshal(data, &cfg); err != nil {
+		t.Fatalf("yaml.Unmarshal returned error: %v", err)
+	}
+	if err := cfg.normalize(); err != nil {
+		t.Fatalf("normalize returned error: %v", err)
+	}
+
+	if cfg.Media.HLSTmpDir != "/cache/dahuabridge/hls" {
+		t.Fatalf("unexpected media hls_tmp_dir %q", cfg.Media.HLSTmpDir)
+	}
+	if cfg.Media.HLSTempPath != "/cache/dahuabridge/hls" {
+		t.Fatalf("unexpected media hls_temp_path %q", cfg.Media.HLSTempPath)
+	}
+	if cfg.Media.HLSKeepAfterExit != 90*time.Minute {
+		t.Fatalf("unexpected media hls_keep_after_exit %s", cfg.Media.HLSKeepAfterExit)
 	}
 }
 

@@ -70,7 +70,7 @@ media:
   hls_segment_time: 2s
   # Number of HLS segments kept in the playlist.
   hls_list_size: 6
-  hls_temp_path: /data/tmp/dahuabridge/hls
+  hls_tmp_dir: /data/tmp/dahuabridge/hls
   hls_keep_after_exit: 6h
   # Optional ffmpeg hardware acceleration arguments. Empty list disables hwaccel.
   # For Linux Intel QSV inside Docker, prefer:

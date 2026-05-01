@@ -37,6 +37,7 @@ import {
   teardownRemoteStreamPlayback,
   type CameraViewportSource,
 } from "./surveillance-panel-media";
+import type { RemoteStreamAudioHost } from "./surveillance-remote-stream";
 import {
   renderControlButton as renderControlPrimitive,
   renderIconButton as renderIconPrimitive,
@@ -2665,6 +2666,14 @@ export class DahuaBridgeSurveillancePanelCard
   }
 
   private syncSelectedCameraViewportAudioState(muted: boolean): void {
+    const remoteStream = this.renderRoot.querySelector<RemoteStreamAudioHost>(
+      "section.main .viewport dahuabridge-remote-stream",
+    );
+    if (remoteStream) {
+      remoteStream.syncAudioState(muted);
+      return;
+    }
+
     const video = this.renderRoot.querySelector<HTMLVideoElement>(
       "video#remote-stream.remote-stream, video#remote-stream, video.remote-stream",
     );

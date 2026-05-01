@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"net"
 	"strings"
 	"testing"
@@ -73,6 +74,42 @@ func TestExtractFramesPublishesJPEG(t *testing.T) {
 	got2 := <-received
 	if !bytes.Equal(got1, frame1) || !bytes.Equal(got2, frame2) {
 		t.Fatalf("unexpected frames: %v %v", got1, got2)
+	}
+}
+
+func TestReadMJPEGTreatsEOFAsUnexpected(t *testing.T) {
+	manager := New(config.MediaConfig{
+		Enabled:        true,
+		StartTimeout:   time.Second,
+		IdleTimeout:    time.Second,
+		MaxWorkers:     2,
+		FrameRate:      5,
+		JPEGQuality:    7,
+		Threads:        1,
+		ScaleWidth:     960,
+		ReadBufferSize: 1024,
+		HLSSegmentTime: 2 * time.Second,
+		HLSListSize:    6,
+	}, testResolver{}, zerolog.Nop(), nil)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	w := &worker{
+		key:         "test:stable",
+		streamID:    "test",
+		profileName: "stable",
+		parent:      manager,
+		ctx:         ctx,
+		cancel:      cancel,
+		subscribers: map[chan []byte]struct{}{},
+		ready:       make(chan struct{}),
+		startErr:    make(chan error, 1),
+	}
+
+	err := w.readMJPEG(bytes.NewReader([]byte{0xFF, 0xD8, 0x01, 0x02, 0xFF, 0xD9}))
+	if !errors.Is(err, io.ErrUnexpectedEOF) {
+		t.Fatalf("expected io.ErrUnexpectedEOF, got %v", err)
 	}
 }
 
