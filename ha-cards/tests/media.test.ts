@@ -2,11 +2,14 @@ import { describe, expect, it } from "vitest";
 
 import {
   availableCameraViewportSources,
+  availablePlaybackViewportSources,
   cameraImageSrc,
+  resolvePlaybackViewportSource,
   resolveSelectedCameraStreamProfile,
   resolveSelectedCameraViewportSource,
   type CameraViewportSource,
 } from "../src/cards/surveillance-panel-media";
+import type { NvrPlaybackSessionModel } from "../src/domain/archive";
 import type { CameraViewModel } from "../src/domain/model";
 
 function buildCamera(overrides: Partial<CameraViewModel> = {}): CameraViewModel {
@@ -142,6 +145,62 @@ describe("camera media helpers", () => {
     ] satisfies CameraViewportSource[]);
     expect(resolveSelectedCameraViewportSource(camera, "hls", "stable")).toBe("mjpeg");
     expect(resolveSelectedCameraViewportSource(camera, "mjpeg", "stable")).toBe("mjpeg");
+  });
+
+  it("includes WebRTC when the selected profile exposes it", () => {
+    const camera = buildCamera({
+      stream: {
+        ...buildCamera().stream,
+        preferredVideoSource: "webrtc",
+        profiles: [
+          {
+            ...buildCamera().stream.profiles[0]!,
+            localWebRtcUrl: "http://bridge.local:9205/api/v1/media/webrtc/west20_nvr_channel_01/quality",
+          },
+          ...buildCamera().stream.profiles.slice(1),
+        ],
+      },
+    });
+
+    expect(availableCameraViewportSources(camera, "quality")).toEqual([
+      "hls",
+      "webrtc",
+      "mjpeg",
+    ] satisfies CameraViewportSource[]);
+    expect(resolveSelectedCameraViewportSource(camera, "webrtc", "quality")).toBe("webrtc");
+    expect(resolveSelectedCameraViewportSource(camera, null, "quality")).toBe("webrtc");
+  });
+
+  it("keeps playback on WebRTC when the session offers it", () => {
+    const session: NvrPlaybackSessionModel = {
+      id: "nvrpb_test",
+      streamId: "nvrpb_test",
+      deviceId: "west20_nvr",
+      sourceStreamId: "west20_nvr_channel_01",
+      name: "Entrance",
+      channel: 1,
+      startTime: "2026-05-01T10:00:00Z",
+      endTime: "2026-05-01T10:10:00Z",
+      seekTime: "2026-05-01T10:00:00Z",
+      recommendedProfile: "quality",
+      snapshotUrl: null,
+      createdAt: "2026-05-01T10:00:00Z",
+      expiresAt: "2026-05-01T10:10:00Z",
+      profiles: {
+        quality: {
+          name: "quality",
+          hlsUrl: "http://bridge.local:9205/api/v1/media/hls/nvrpb_test/quality/index.m3u8",
+          mjpegUrl: null,
+          webrtcOfferUrl: "http://bridge.local:9205/api/v1/media/webrtc/nvrpb_test/quality/offer",
+        },
+      },
+    };
+
+    expect(availablePlaybackViewportSources(session, "quality")).toEqual([
+      "hls",
+      "webrtc",
+    ] satisfies CameraViewportSource[]);
+    expect(resolvePlaybackViewportSource(session, "webrtc", "quality")).toBe("webrtc");
   });
 
   it("prefers the bridge snapshot URL over the entity picture fallback", () => {

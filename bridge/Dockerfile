@@ -14,12 +14,31 @@ ARG BUILD_DATE=unknown
 COPY . .
 
 RUN --mount=type=cache,target=/go/pkg/mod \
+    set -eux; \
+    if [ -f /src/go.mod ]; then \
+        MODULE_ROOT=/src; \
+    elif [ -f /src/bridge/go.mod ]; then \
+        MODULE_ROOT=/src/bridge; \
+    else \
+        echo "unable to locate go.mod in /src or /src/bridge" >&2; \
+        exit 1; \
+    fi; \
+    cd "${MODULE_ROOT}"; \
     go mod download
 
 
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
     set -eux; \
+    if [ -f /src/go.mod ]; then \
+        MODULE_ROOT=/src; \
+    elif [ -f /src/bridge/go.mod ]; then \
+        MODULE_ROOT=/src/bridge; \
+    else \
+        echo "unable to locate go.mod in /src or /src/bridge" >&2; \
+        exit 1; \
+    fi; \
+    cd "${MODULE_ROOT}"; \
     MODULE="$(go list -m)"; \
     CGO_ENABLED=0 GOOS="${TARGETOS:-linux}" GOARCH="${TARGETARCH:-amd64}" \
     go build \
@@ -29,7 +48,8 @@ RUN --mount=type=cache,target=/go/pkg/mod \
         -X ${MODULE}/internal/buildinfo.Commit=${COMMIT} \
         -X ${MODULE}/internal/buildinfo.BuildDate=${BUILD_DATE}" \
       -o /out/dahuabridge \
-      ./cmd/dahuabridge
+      ./cmd/dahuabridge; \
+    install -Dm755 docker-entrypoint.sh /out/docker-entrypoint.sh
 
 FROM --platform=$TARGETPLATFORM debian:bookworm-slim
 
@@ -60,7 +80,7 @@ RUN set -eux; \
 WORKDIR /app
 
 COPY --from=build /out/dahuabridge /app/dahuabridge
-COPY --chmod=0755 docker-entrypoint.sh /app/docker-entrypoint.sh
+COPY --from=build /out/docker-entrypoint.sh /app/docker-entrypoint.sh
 
 EXPOSE 9205
 VOLUME ["/config"]

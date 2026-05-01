@@ -108,6 +108,32 @@ export interface NvrArchiveSearchResultModel {
   items: NvrArchiveRecordingModel[];
 }
 
+export interface BridgeRecordingClipModel {
+  id: string;
+  streamId: string;
+  rootDeviceId: string | null;
+  sourceDeviceId: string | null;
+  deviceKind: string | null;
+  name: string | null;
+  channel: number | null;
+  profile: string | null;
+  status: string;
+  startedAt: string;
+  endedAt: string | null;
+  durationMs: number | null;
+  bytes: number | null;
+  fileName: string | null;
+  downloadUrl: string | null;
+  selfUrl: string | null;
+  stopUrl: string | null;
+  error: string | null;
+}
+
+export interface BridgeRecordingClipListModel {
+  returnedCount: number;
+  items: BridgeRecordingClipModel[];
+}
+
 export interface NvrPlaybackProfileModel {
   name: string;
   hlsUrl: string | null;

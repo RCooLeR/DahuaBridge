@@ -1540,20 +1540,49 @@ func parseOptionalPositiveInt(raw string) (int, error) {
 }
 
 func parseClipStartRequest(r *http.Request) (mediaapi.ClipStartRequest, error) {
-	if r.Body == nil {
-		return mediaapi.ClipStartRequest{}, nil
+	request := struct {
+		ProfileName     string
+		DurationSeconds *int
+		DurationMS      *int
+	}{}
+	request.ProfileName = firstNonEmptyQueryValue(r.URL.Query(), "profile", "profile_name")
+
+	if rawDurationMS := strings.TrimSpace(r.URL.Query().Get("duration_ms")); rawDurationMS != "" {
+		value, err := parseOptionalPositiveInt(rawDurationMS)
+		if err != nil {
+			return mediaapi.ClipStartRequest{}, fmt.Errorf("invalid duration_ms")
+		}
+		request.DurationMS = &value
+	} else if rawDurationSeconds := strings.TrimSpace(r.URL.Query().Get("duration_seconds")); rawDurationSeconds != "" {
+		value, err := parseOptionalPositiveInt(rawDurationSeconds)
+		if err != nil {
+			return mediaapi.ClipStartRequest{}, fmt.Errorf("invalid duration_seconds")
+		}
+		request.DurationSeconds = &value
 	}
 
-	var request struct {
+	var bodyRequest struct {
 		ProfileName     string `json:"profile"`
 		DurationSeconds *int   `json:"duration_seconds"`
 		DurationMS      *int   `json:"duration_ms"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
-		if errors.Is(err, io.EOF) {
-			return mediaapi.ClipStartRequest{}, nil
+	if r.Body != nil {
+		if err := json.NewDecoder(r.Body).Decode(&bodyRequest); err != nil {
+			if !errors.Is(err, io.EOF) {
+				return mediaapi.ClipStartRequest{}, fmt.Errorf("invalid json body")
+			}
+		} else {
+			if strings.TrimSpace(bodyRequest.ProfileName) != "" {
+				request.ProfileName = bodyRequest.ProfileName
+			}
+			if bodyRequest.DurationMS != nil {
+				request.DurationMS = bodyRequest.DurationMS
+				request.DurationSeconds = nil
+			} else if bodyRequest.DurationSeconds != nil {
+				request.DurationSeconds = bodyRequest.DurationSeconds
+				request.DurationMS = nil
+			}
 		}
-		return mediaapi.ClipStartRequest{}, fmt.Errorf("invalid json body")
 	}
 
 	duration := time.Duration(0)

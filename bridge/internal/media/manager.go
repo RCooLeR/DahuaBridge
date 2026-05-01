@@ -1032,10 +1032,14 @@ func (w *hlsWorker) buildFFmpegArgs(attempt ffmpegStartAttempt) []string {
 	args = appendVideoFilterArgs(args, w.parent.cfg, w.parent.cfg.ScaleWidth, w.profile, attempt.useHWAccel, frameRate)
 	args = append(args,
 		"-map", "0:v:0",
+		"-map", "0:a:0?",
 	)
 	args = appendVideoEncoderArgs(args, w.parent.cfg, attempt.useHWAccel, gopSize, "veryfast")
 	args = append(args,
-		"-an",
+		"-c:a", "aac",
+		"-b:a", "96k",
+		"-ac", "2",
+		"-ar", "48000",
 		"-f", "hls",
 		"-hls_time", formatFFmpegSeconds(w.parent.cfg.HLSSegmentTime),
 		"-hls_list_size", strconv.Itoa(w.parent.cfg.HLSListSize),

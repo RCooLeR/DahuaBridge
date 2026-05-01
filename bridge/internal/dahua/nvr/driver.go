@@ -568,20 +568,12 @@ func recordingEventCondition(eventCode string) string {
 	switch strings.ToLower(strings.TrimSpace(eventCode)) {
 	case "", "*", "all", "any", "__all__":
 		return "*"
-	case "motion", "videomotion":
-		return "VideoMotion"
-	case "human", "smartmotionhuman":
-		return "SmartMotionHuman"
-	case "vehicle", "smartmotionvehicle":
-		return "SmartMotionVehicle"
-	case "tripwire", "crosslinedetection":
-		return "CrossLineDetection"
-	case "intrusion", "crossregiondetection":
-		return "CrossRegionDetection"
-	case "access", "accesscontrol", "accessctl":
-		return "AccessControl"
 	default:
-		return strings.TrimSpace(eventCode)
+		code := canonicalRecordingEventCode(eventCode)
+		if code != "" {
+			return code
+		}
+		return normalizeRecordingEventCode(eventCode)
 	}
 }
 
@@ -700,10 +692,16 @@ func recordingLogTypesForEvent(eventCode string) []string {
 		return append(recordingLogTypeVariants("SmartMotionHuman"), recordingLogTypeVariants("Intelligence")...)
 	case "smartmotionvehicle":
 		return append(recordingLogTypeVariants("SmartMotionVehicle"), recordingLogTypeVariants("Intelligence")...)
+	case "animaldetection":
+		return append(recordingLogTypeVariants("AnimalDetection"), recordingLogTypeVariants("Intelligence")...)
 	case "crosslinedetection":
 		return append(recordingLogTypeVariants("CrossLineDetection"), recordingLogTypeVariants("Intelligence")...)
 	case "crossregiondetection":
 		return append(recordingLogTypeVariants("CrossRegionDetection"), recordingLogTypeVariants("Intelligence")...)
+	case "leftdetection":
+		return append(recordingLogTypeVariants("LeftDetection"), recordingLogTypeVariants("Intelligence")...)
+	case "movedetection":
+		return append(recordingLogTypeVariants("MoveDetection"), recordingLogTypeVariants("Intelligence")...)
 	case "accesscontrol":
 		return recordingLogTypeVariants("AccessControl", "AccessCtl")
 	default:
@@ -739,13 +737,19 @@ func recordingEventMatchCodes(eventCode string) map[string]struct{} {
 	case "videomotion":
 		codes = append(codes, "AlarmPIR")
 	case "smartmotionhuman":
-		codes = append(codes, "HumanDetection", "IntelliFrameHuman")
+		codes = append(codes, "HumanDetection", "IntelliFrameHuman", "Human", "smdTypeHuman")
 	case "smartmotionvehicle":
-		codes = append(codes, "VehicleDetection")
+		codes = append(codes, "VehicleDetection", "MotorVehicle", "smdTypeVehicle")
+	case "animaldetection":
+		codes = append(codes, "Animal", "smdTypeAnimal")
 	case "crosslinedetection":
 		codes = append(codes, "Tripwire")
 	case "crossregiondetection":
 		codes = append(codes, "Intrusion")
+	case "leftdetection":
+		codes = append(codes, "LeftDetection")
+	case "movedetection":
+		codes = append(codes, "MoveDetection")
 	case "accesscontrol":
 		codes = append(codes, "AccessCtl")
 	}
@@ -782,7 +786,46 @@ func normalizeRecordingEventCode(code string) string {
 			break
 		}
 	}
+	for {
+		lower := strings.ToLower(code)
+		trimmed := false
+		for _, prefix := range []string{"com.", "ivs."} {
+			if strings.HasPrefix(lower, prefix) {
+				code = code[len(prefix):]
+				trimmed = true
+				break
+			}
+		}
+		if !trimmed {
+			break
+		}
+	}
 	return strings.TrimSpace(code)
+}
+
+func canonicalRecordingEventCode(code string) string {
+	switch strings.ToLower(normalizeRecordingEventCode(code)) {
+	case "motion", "videomotion":
+		return "VideoMotion"
+	case "human", "smartmotionhuman", "humandetection", "intelliframehuman", "smdtypehuman":
+		return "SmartMotionHuman"
+	case "vehicle", "smartmotionvehicle", "vehicledetection", "motorvehicle", "smdtypevehicle":
+		return "SmartMotionVehicle"
+	case "animal", "animaldetection", "smdtypeanimal":
+		return "AnimalDetection"
+	case "tripwire", "crosslinedetection":
+		return "CrossLineDetection"
+	case "intrusion", "crossregiondetection":
+		return "CrossRegionDetection"
+	case "leftdetection":
+		return "LeftDetection"
+	case "movedetection":
+		return "MoveDetection"
+	case "access", "accesscontrol", "accessctl":
+		return "AccessControl"
+	default:
+		return normalizeRecordingEventCode(code)
+	}
 }
 
 func recordingEventLogPageSize(limit int) int {
@@ -809,7 +852,7 @@ func nvrLogItemToRecording(item nvrLogItem, query dahua.NVRRecordingQuery, event
 		return dahua.NVRRecording{}, time.Time{}, false
 	}
 	startTime, endTime := nvrEventRecordingWindow(eventTime, query.StartTime, query.EndTime)
-	code := firstNonEmpty(normalizeRecordingEventCode(item.Code), normalizeRecordingEventCode(eventCode))
+	code := firstNonEmpty(canonicalRecordingEventCode(item.Code), canonicalRecordingEventCode(eventCode))
 	channel := nvrLogItemChannel(item, query.Channel)
 	recordingType := "Event"
 	if code != "" {
@@ -936,9 +979,9 @@ func nvrEventRecordingWindow(eventTime time.Time, queryStart time.Time, queryEnd
 }
 
 func nvrLogRecordingDedupeKey(recording dahua.NVRRecording, eventCode string, eventTime time.Time) string {
-	code := normalizeRecordingEventCode(recording.Type)
+	code := canonicalRecordingEventCode(recording.Type)
 	if code == "" {
-		code = normalizeRecordingEventCode(eventCode)
+		code = canonicalRecordingEventCode(eventCode)
 	}
 	return fmt.Sprintf("%d|%s|%d", recording.Channel, strings.ToLower(code), eventTime.Unix()/30)
 }

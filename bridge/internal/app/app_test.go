@@ -356,7 +356,10 @@ func TestRuntimeServicesListStreamsIncludesCaptureSummary(t *testing.T) {
 	if entries[0].Capture == nil {
 		t.Fatal("expected capture summary")
 	}
-	if !strings.Contains(entries[0].Capture.StartRecordingURL, "/api/v1/media/streams/west20_nvr_channel_05/recordings") {
+	if !strings.Contains(entries[0].Capture.SnapshotURL, "/api/v1/media/snapshot/west20_nvr_channel_05?profile=quality") {
+		t.Fatalf("unexpected snapshot url %q", entries[0].Capture.SnapshotURL)
+	}
+	if !strings.Contains(entries[0].Capture.StartRecordingURL, "/api/v1/media/streams/west20_nvr_channel_05/recordings?profile=quality") {
 		t.Fatalf("unexpected start recording url %q", entries[0].Capture.StartRecordingURL)
 	}
 	if !entries[0].Capture.Active || entries[0].Capture.ActiveClipID != "clip_active" {

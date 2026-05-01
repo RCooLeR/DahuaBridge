@@ -2466,6 +2466,37 @@ func TestMediaRecordingEndpoints(t *testing.T) {
 	}
 }
 
+func TestParseClipStartRequestUsesQueryDefaults(t *testing.T) {
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/media/streams/west20_nvr_channel_05/recordings?profile=quality&duration_seconds=30", nil)
+
+	got, err := parseClipStartRequest(req)
+	if err != nil {
+		t.Fatalf("parseClipStartRequest returned error: %v", err)
+	}
+	if got.ProfileName != "quality" {
+		t.Fatalf("unexpected profile %q", got.ProfileName)
+	}
+	if got.Duration != 30*time.Second {
+		t.Fatalf("unexpected duration %s", got.Duration)
+	}
+}
+
+func TestParseClipStartRequestBodyOverridesQueryDefaults(t *testing.T) {
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/media/streams/west20_nvr_channel_05/recordings?profile=quality&duration_seconds=30", strings.NewReader(`{"profile":"default","duration_ms":1500}`))
+	req.Header.Set("Content-Type", "application/json")
+
+	got, err := parseClipStartRequest(req)
+	if err != nil {
+		t.Fatalf("parseClipStartRequest returned error: %v", err)
+	}
+	if got.ProfileName != "default" {
+		t.Fatalf("unexpected profile %q", got.ProfileName)
+	}
+	if got.Duration != 1500*time.Millisecond {
+		t.Fatalf("unexpected duration %s", got.Duration)
+	}
+}
+
 func TestMediaRecordingDownloadEndpoint(t *testing.T) {
 	dir := t.TempDir()
 	clipPath := filepath.Join(dir, "clip_test.mp4")

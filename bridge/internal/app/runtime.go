@@ -436,15 +436,15 @@ func (r *runtimeServices) streamSnapshotTarget(deviceID string, channel int, kin
 		switch kind {
 		case dahua.DeviceKindNVRChannel:
 			if entry.DeviceKind == dahua.DeviceKindNVRChannel && entry.RootDeviceID == deviceID && entry.Channel == channel {
-				return entry.ID, firstNonEmptyProfile(entry.RecommendedProfile, "stable"), true
+				return entry.ID, bestCaptureProfile(entry), true
 			}
 		case dahua.DeviceKindVTO:
 			if entry.DeviceKind == dahua.DeviceKindVTO && entry.ID == deviceID {
-				return entry.ID, firstNonEmptyProfile(entry.RecommendedProfile, "stable"), true
+				return entry.ID, bestCaptureProfile(entry), true
 			}
 		case dahua.DeviceKindIPC:
 			if entry.DeviceKind == dahua.DeviceKindIPC && entry.ID == deviceID {
-				return entry.ID, firstNonEmptyProfile(entry.RecommendedProfile, "stable"), true
+				return entry.ID, bestCaptureProfile(entry), true
 			}
 		}
 	}
@@ -483,9 +483,10 @@ func buildClipDownloadURL(publicBaseURL string, clipID string) string {
 }
 
 func buildCaptureSummary(publicBaseURL string, entry streams.Entry, mediaReader runtimeMediaReader) *streams.CaptureSummary {
+	captureProfile := bestCaptureProfile(entry)
 	summary := &streams.CaptureSummary{
-		SnapshotURL:       buildMediaSnapshotURL(publicBaseURL, entry.ID, entry.RecommendedProfile),
-		StartRecordingURL: buildMediaStreamRecordingStartURL(publicBaseURL, entry.ID),
+		SnapshotURL:       buildMediaSnapshotURL(publicBaseURL, entry.ID, captureProfile),
+		StartRecordingURL: buildMediaStreamRecordingStartURL(publicBaseURL, entry.ID, captureProfile),
 		RecordingsURL:     buildMediaRecordingsURL(publicBaseURL, entry.ID),
 	}
 	if clip, ok := mediaReader.ActiveClip(entry.ID); ok {
@@ -511,9 +512,12 @@ func buildMediaSnapshotURL(publicBaseURL string, streamID string, profile string
 	return publicBaseURL + path
 }
 
-func buildMediaStreamRecordingStartURL(publicBaseURL string, streamID string) string {
+func buildMediaStreamRecordingStartURL(publicBaseURL string, streamID string, profile string) string {
 	publicBaseURL = strings.TrimRight(strings.TrimSpace(publicBaseURL), "/")
 	path := "/api/v1/media/streams/" + url.PathEscape(streamID) + "/recordings"
+	if strings.TrimSpace(profile) != "" {
+		path += "?profile=" + url.QueryEscape(profile)
+	}
 	if publicBaseURL == "" {
 		return path
 	}
@@ -545,6 +549,76 @@ func firstNonEmptyProfile(values ...string) string {
 		}
 	}
 	return "stable"
+}
+
+func bestCaptureProfile(entry streams.Entry) string {
+	if len(entry.Profiles) == 0 {
+		return firstNonEmptyProfile(entry.RecommendedProfile, "quality", "default", "stable", "substream")
+	}
+
+	bestName := ""
+	bestArea := -1
+	bestRank := 100
+
+	consider := func(name string, profile streams.Profile) {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			return
+		}
+		area := profileArea(profile)
+		rank := captureProfileRank(name, entry.RecommendedProfile)
+		if bestName == "" || area > bestArea || (area == bestArea && rank < bestRank) {
+			bestName = name
+			bestArea = area
+			bestRank = rank
+		}
+	}
+
+	for _, name := range []string{"quality", "default", "stable", "substream"} {
+		if profile, ok := entry.Profiles[name]; ok {
+			consider(name, profile)
+		}
+	}
+
+	extraNames := make([]string, 0, len(entry.Profiles))
+	for name := range entry.Profiles {
+		switch name {
+		case "quality", "default", "stable", "substream":
+			continue
+		default:
+			extraNames = append(extraNames, name)
+		}
+	}
+	sort.Strings(extraNames)
+	for _, name := range extraNames {
+		consider(name, entry.Profiles[name])
+	}
+
+	return firstNonEmptyProfile(bestName, entry.RecommendedProfile, "quality", "default", "stable", "substream")
+}
+
+func profileArea(profile streams.Profile) int {
+	if profile.SourceWidth <= 0 || profile.SourceHeight <= 0 {
+		return 0
+	}
+	return profile.SourceWidth * profile.SourceHeight
+}
+
+func captureProfileRank(name string, recommended string) int {
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "quality":
+		return 0
+	case "default":
+		return 1
+	case "stable":
+		return 2
+	case "substream":
+		return 3
+	}
+	if strings.EqualFold(strings.TrimSpace(name), strings.TrimSpace(recommended)) {
+		return 4
+	}
+	return 5
 }
 
 func firstNonEmptyTime(values ...time.Time) time.Time {

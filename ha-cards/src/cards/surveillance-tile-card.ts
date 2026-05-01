@@ -652,15 +652,23 @@ export class DahuaBridgeSurveillanceTileCard
 
   private async toggleCameraAudio(camera: CameraViewModel): Promise<void> {
     const nextMuted = !this._cameraAudioMuted;
-    if (camera.audioMuteSupported) {
-      const succeeded = await this._actions.triggerCameraMuteAction(camera, nextMuted);
-      if (!succeeded) {
-        return;
-      }
-    }
     const previousMuted = this._cameraAudioMuted;
     this._cameraAudioMuted = nextMuted;
     this.requestUpdate("_cameraAudioMuted", previousMuted);
+    this.syncCameraViewportAudioState(nextMuted);
+
+    if (!camera.audioMuteSupported) {
+      return;
+    }
+
+    const succeeded = await this._actions.triggerCameraMuteAction(camera, nextMuted);
+    if (succeeded) {
+      return;
+    }
+
+    this._cameraAudioMuted = previousMuted;
+    this.requestUpdate("_cameraAudioMuted", nextMuted);
+    this.syncCameraViewportAudioState(previousMuted);
   }
 
   private async triggerVtoBridgeRecording(vto: VtoViewModel): Promise<void> {
@@ -710,9 +718,24 @@ export class DahuaBridgeSurveillanceTileCard
     return (
       vto.streamAvailable &&
       vto.stream.profiles.some(
-        (profile) => Boolean(profile.localHlsUrl) || Boolean(profile.localMjpegUrl),
+        (profile) =>
+          Boolean(profile.localHlsUrl) ||
+          Boolean(profile.localWebRtcUrl) ||
+          Boolean(profile.localMjpegUrl),
       )
     );
+  }
+
+  private syncCameraViewportAudioState(muted: boolean): void {
+    const video = this.renderRoot.querySelector<HTMLVideoElement>(
+      "video#remote-stream.remote-stream, video#remote-stream, video.remote-stream",
+    );
+    if (!video) {
+      return;
+    }
+    video.dataset.audioMuted = muted ? "true" : "false";
+    video.muted = muted;
+    void video.play().catch(() => undefined);
   }
 
   private hasAvailableVtoIntercom(vto: VtoViewModel): boolean {

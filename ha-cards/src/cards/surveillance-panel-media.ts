@@ -1,30 +1,29 @@
+import Hls from "hls.js";
 import { html, type TemplateResult } from "lit";
 
 import type { CameraStreamViewModel, CameraViewModel, VtoViewModel } from "../domain/model";
 import type { NvrPlaybackSessionModel } from "../domain/archive";
+import { buildWebRtcOfferUrl } from "../ha/bridge-intercom";
 import type { HassEntity, HomeAssistant } from "../types/home-assistant";
 
-export type CameraViewportSource = "hls" | "mjpeg";
+export type CameraViewportSource = "hls" | "webrtc" | "mjpeg";
 
 const STREAM_STYLE_ELEMENT_ID = "dahuabridge-remote-stream-style";
 const streamShadowObservers = new WeakMap<Node, MutationObserver>();
 const hlsAttachments = new Map<HTMLVideoElement, HlsAttachment>();
-let hlsConstructorPromise: Promise<HlsConstructor | null> | null = null;
+const webRtcAttachments = new Map<HTMLVideoElement, WebRtcAttachment>();
 
 interface HlsAttachment {
   source: string;
-  hls: HlsInstance | null;
+  hls: Hls | null;
 }
 
-interface HlsInstance {
-  loadSource(source: string): void;
-  attachMedia(video: HTMLMediaElement): void;
-  destroy(): void;
-}
-
-interface HlsConstructor {
-  new (config?: Record<string, unknown>): HlsInstance;
-  isSupported(): boolean;
+interface WebRtcAttachment {
+  offerUrl: string;
+  stream: MediaStream;
+  peer: RTCPeerConnection | null;
+  reconnectAttempts: number;
+  reconnectTimer: number | null;
 }
 
 export function renderLiveViewport(
@@ -71,13 +70,32 @@ export function renderSelectedCameraViewport(
       <video
         id="remote-stream"
         class="remote-stream"
-        data-hls-src=${resolvedProfile.localHlsUrl}
+        data-hls-src=${normalizeHlsPlaybackUrl(resolvedProfile.localHlsUrl)}
         data-audio-muted=${muted ? "true" : "false"}
         autoplay
         playsinline
+        controls
         ?muted=${muted}
       ></video>
     `;
+  }
+
+  if (resolvedSource === "webrtc") {
+    const offerUrl = buildWebRtcOfferUrl(resolvedProfile?.localWebRtcUrl ?? null);
+    if (offerUrl) {
+      return html`
+        <video
+          id="remote-stream"
+          class="remote-stream"
+          data-webrtc-offer-src=${offerUrl}
+          data-audio-muted=${muted ? "true" : "false"}
+          autoplay
+          playsinline
+          controls
+          ?muted=${muted}
+        ></video>
+      `;
+    }
   }
 
   if (resolvedSource === "mjpeg" && resolvedProfile?.localMjpegUrl) {
@@ -96,13 +114,32 @@ export function renderSelectedCameraViewport(
       <video
         id="remote-stream"
         class="remote-stream"
-        data-hls-src=${resolvedProfile.localHlsUrl}
+        data-hls-src=${normalizeHlsPlaybackUrl(resolvedProfile.localHlsUrl)}
         data-audio-muted=${muted ? "true" : "false"}
         autoplay
         playsinline
+        controls
         ?muted=${muted}
       ></video>
     `;
+  }
+
+  {
+    const offerUrl = buildWebRtcOfferUrl(resolvedProfile?.localWebRtcUrl ?? null);
+    if (offerUrl) {
+      return html`
+        <video
+          id="remote-stream"
+          class="remote-stream"
+          data-webrtc-offer-src=${offerUrl}
+          data-audio-muted=${muted ? "true" : "false"}
+          autoplay
+          playsinline
+          controls
+          ?muted=${muted}
+        ></video>
+      `;
+    }
   }
 
   if (resolvedProfile?.localMjpegUrl) {
@@ -160,12 +197,29 @@ export function renderSelectedVtoViewport(
       <video
         id="remote-stream"
         class="remote-stream vto-live-stream"
-        data-hls-src=${resolvedProfile.localHlsUrl}
+        data-hls-src=${normalizeHlsPlaybackUrl(resolvedProfile.localHlsUrl)}
         muted
         playsinline
         preload="none"
       ></video>
     `;
+  }
+
+  if (resolvedSource === "webrtc") {
+    const offerUrl = buildWebRtcOfferUrl(resolvedProfile?.localWebRtcUrl ?? null);
+    if (offerUrl) {
+      return html`
+        <video
+          id="remote-stream"
+          class="remote-stream vto-live-stream"
+          data-webrtc-offer-src=${offerUrl}
+          data-audio-muted="true"
+          muted
+          playsinline
+          preload="none"
+        ></video>
+      `;
+    }
   }
 
   if (resolvedSource === "mjpeg" && resolvedProfile?.localMjpegUrl) {
@@ -184,12 +238,29 @@ export function renderSelectedVtoViewport(
       <video
         id="remote-stream"
         class="remote-stream vto-live-stream"
-        data-hls-src=${resolvedProfile.localHlsUrl}
+        data-hls-src=${normalizeHlsPlaybackUrl(resolvedProfile.localHlsUrl)}
         muted
         playsinline
         preload="none"
       ></video>
     `;
+  }
+
+  {
+    const offerUrl = buildWebRtcOfferUrl(resolvedProfile?.localWebRtcUrl ?? null);
+    if (offerUrl) {
+      return html`
+        <video
+          id="remote-stream"
+          class="remote-stream vto-live-stream"
+          data-webrtc-offer-src=${offerUrl}
+          data-audio-muted="true"
+          muted
+          playsinline
+          preload="none"
+        ></video>
+      `;
+    }
   }
 
   if (resolvedProfile?.localMjpegUrl) {
@@ -219,6 +290,7 @@ export function renderPlaybackViewport(
   session: NvrPlaybackSessionModel,
   selectedProfileKey: string | null,
   selectedSource: CameraViewportSource | null,
+  muted: boolean,
 ): TemplateResult {
   const resolvedProfile = resolvePlaybackProfile(session, selectedProfileKey);
   const resolvedSource = resolvePlaybackViewportSource(session, selectedSource, resolvedProfile?.key ?? null);
@@ -228,10 +300,29 @@ export function renderPlaybackViewport(
       <video
         id="remote-stream"
         class="remote-stream playback-stream"
-        data-hls-src=${resolvedProfile.hlsUrl}
+        data-hls-src=${normalizeHlsPlaybackUrl(resolvedProfile.hlsUrl)}
+        data-audio-muted=${muted ? "true" : "false"}
         autoplay
         playsinline
         controls
+        preload="auto"
+        ?muted=${muted}
+      ></video>
+    `;
+  }
+
+  if (resolvedSource === "webrtc" && resolvedProfile?.webrtcOfferUrl) {
+    return html`
+      <video
+        id="remote-stream"
+        class="remote-stream playback-stream"
+        data-webrtc-offer-src=${resolvedProfile.webrtcOfferUrl}
+        data-audio-muted=${muted ? "true" : "false"}
+        autoplay
+        playsinline
+        controls
+        preload="auto"
+        ?muted=${muted}
       ></video>
     `;
   }
@@ -252,10 +343,29 @@ export function renderPlaybackViewport(
       <video
         id="remote-stream"
         class="remote-stream playback-stream"
-        data-hls-src=${resolvedProfile.hlsUrl}
+        data-hls-src=${normalizeHlsPlaybackUrl(resolvedProfile.hlsUrl)}
+        data-audio-muted=${muted ? "true" : "false"}
         autoplay
         playsinline
         controls
+        preload="auto"
+        ?muted=${muted}
+      ></video>
+    `;
+  }
+
+  if (resolvedProfile?.webrtcOfferUrl) {
+    return html`
+      <video
+        id="remote-stream"
+        class="remote-stream playback-stream"
+        data-webrtc-offer-src=${resolvedProfile.webrtcOfferUrl}
+        data-audio-muted=${muted ? "true" : "false"}
+        autoplay
+        playsinline
+        controls
+        preload="auto"
+        ?muted=${muted}
       ></video>
     `;
   }
@@ -293,16 +403,27 @@ export function syncRemoteStreamStyles(renderRoot: ParentNode): void {
 
 export function syncRemoteStreamPlayback(renderRoot: ParentNode): void {
   const activeVideos = new Set(
-    Array.from(renderRoot.querySelectorAll<HTMLVideoElement>("video[data-hls-src]")),
+    Array.from(
+      renderRoot.querySelectorAll<HTMLVideoElement>("video[data-hls-src], video[data-webrtc-offer-src]"),
+    ),
   );
 
   for (const video of activeVideos) {
-    const source = video.dataset.hlsSrc?.trim();
-    if (!source) {
+    const webrtcOfferUrl = normalizeWebRtcOfferUrl(video.dataset.webrtcOfferSrc);
+    if (webrtcOfferUrl) {
       destroyHlsAttachment(video);
+      void attachWebRtcPlayback(video, webrtcOfferUrl);
       continue;
     }
-    void attachHlsPlayback(video, source);
+
+    const hlsSource = normalizeHlsPlaybackUrl(video.dataset.hlsSrc);
+    if (!hlsSource) {
+      destroyHlsAttachment(video);
+      destroyWebRtcAttachment(video);
+      continue;
+    }
+    destroyWebRtcAttachment(video);
+    void attachHlsPlayback(video, hlsSource);
   }
 
   for (const [video] of hlsAttachments) {
@@ -310,11 +431,19 @@ export function syncRemoteStreamPlayback(renderRoot: ParentNode): void {
       destroyHlsAttachment(video);
     }
   }
+  for (const [video] of webRtcAttachments) {
+    if (!video.isConnected || !activeVideos.has(video)) {
+      destroyWebRtcAttachment(video);
+    }
+  }
 }
 
 export function teardownRemoteStreamPlayback(): void {
   for (const [video] of hlsAttachments) {
     destroyHlsAttachment(video);
+  }
+  for (const [video] of webRtcAttachments) {
+    destroyWebRtcAttachment(video);
   }
 }
 
@@ -436,6 +565,7 @@ async function attachHlsPlayback(video: HTMLVideoElement, source: string): Promi
   }
 
   destroyHlsAttachment(video);
+  destroyWebRtcAttachment(video);
   if (canPlayNativeHls(video)) {
     if (video.src !== source) {
       video.src = source;
@@ -446,11 +576,10 @@ async function attachHlsPlayback(video: HTMLVideoElement, source: string): Promi
     return;
   }
 
-  const Hls = await loadHlsConstructor();
   if (!video.isConnected) {
     return;
   }
-  if (!Hls || !Hls.isSupported()) {
+  if (!Hls.isSupported()) {
     if (video.src !== source) {
       video.src = source;
     }
@@ -465,6 +594,19 @@ async function attachHlsPlayback(video: HTMLVideoElement, source: string): Promi
   });
   prepareVideoPlayback(video);
   queueVideoPlayback(video);
+  hls.on(Hls.Events.MANIFEST_PARSED, () => {
+    queueVideoPlayback(video);
+  });
+  hls.on(Hls.Events.ERROR, (_event, data) => {
+    if (!data.fatal) {
+      return;
+    }
+    if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
+      hls.recoverMediaError();
+      return;
+    }
+    destroyHlsAttachment(video);
+  });
   video.addEventListener("loadedmetadata", () => {
     queueVideoPlayback(video);
   }, { once: true });
@@ -478,12 +620,11 @@ async function attachHlsPlayback(video: HTMLVideoElement, source: string): Promi
 
 function destroyHlsAttachment(video: HTMLVideoElement): void {
   const attachment = hlsAttachments.get(video);
-  if (!attachment) {
-    return;
+  if (attachment) {
+    attachment.hls?.destroy();
+    hlsAttachments.delete(video);
   }
-
-  attachment.hls?.destroy();
-  hlsAttachments.delete(video);
+  resetVideoElement(video);
 }
 
 function canPlayNativeHls(video: HTMLVideoElement): boolean {
@@ -491,15 +632,6 @@ function canPlayNativeHls(video: HTMLVideoElement): boolean {
     video.canPlayType("application/vnd.apple.mpegurl") !== "" ||
     video.canPlayType("application/x-mpegURL") !== ""
   );
-}
-
-async function loadHlsConstructor(): Promise<HlsConstructor | null> {
-  if (!hlsConstructorPromise) {
-    hlsConstructorPromise = import("hls.js/dist/hls.light.mjs")
-      .then((module) => (module.default as HlsConstructor | undefined) ?? null)
-      .catch(() => null);
-  }
-  return hlsConstructorPromise;
 }
 
 export function cameraImageSrc(
@@ -577,6 +709,9 @@ export function availableStreamViewportSources(
   if (profile?.localHlsUrl) {
     sources.push("hls");
   }
+  if (profile?.localWebRtcUrl) {
+    sources.push("webrtc");
+  }
   if (profile?.localMjpegUrl) {
     sources.push("mjpeg");
   }
@@ -592,6 +727,10 @@ export function resolveStreamViewportSource(
   if (selectedSource && availableSources.includes(selectedSource)) {
     return selectedSource;
   }
+  const preferredSource = normalizeViewportSource(stream.preferredVideoSource);
+  if (preferredSource && availableSources.includes(preferredSource)) {
+    return preferredSource;
+  }
   return availableSources[0] ?? null;
 }
 
@@ -603,6 +742,9 @@ export function availablePlaybackViewportSources(
   const profile = resolvePlaybackProfile(session, selectedProfileKey);
   if (profile?.hlsUrl) {
     sources.push("hls");
+  }
+  if (profile?.webrtcOfferUrl) {
+    sources.push("webrtc");
   }
   if (profile?.mjpegUrl) {
     sources.push("mjpeg");
@@ -625,7 +767,7 @@ export function resolvePlaybackViewportSource(
 export function resolvePlaybackProfile(
   session: NvrPlaybackSessionModel,
   selectedProfileKey: string | null,
-): { key: string; hlsUrl: string | null; mjpegUrl: string | null } | null {
+): { key: string; hlsUrl: string | null; mjpegUrl: string | null; webrtcOfferUrl: string | null } | null {
   const profileKey = selectedProfileKey?.trim() || session.recommendedProfile;
   if (profileKey && session.profiles[profileKey]) {
     const profile = session.profiles[profileKey];
@@ -633,6 +775,7 @@ export function resolvePlaybackProfile(
       key: profileKey,
       hlsUrl: profile.hlsUrl,
       mjpegUrl: profile.mjpegUrl,
+      webrtcOfferUrl: profile.webrtcOfferUrl,
     };
   }
 
@@ -644,6 +787,7 @@ export function resolvePlaybackProfile(
     key: firstEntry[0],
     hlsUrl: firstEntry[1].hlsUrl,
     mjpegUrl: firstEntry[1].mjpegUrl,
+    webrtcOfferUrl: firstEntry[1].webrtcOfferUrl,
   };
 }
 
@@ -662,6 +806,241 @@ function queueVideoPlayback(video: HTMLVideoElement): void {
 
 function requestedMuteState(video: HTMLVideoElement): boolean {
   return video.dataset.audioMuted !== "false";
+}
+
+async function attachWebRtcPlayback(video: HTMLVideoElement, offerUrl: string): Promise<void> {
+  const existing = webRtcAttachments.get(video);
+  if (existing?.offerUrl === offerUrl) {
+    queueVideoPlayback(video);
+    return;
+  }
+
+  destroyWebRtcAttachment(video);
+  destroyHlsAttachment(video);
+  if (typeof RTCPeerConnection !== "function") {
+    return;
+  }
+
+  const attachment: WebRtcAttachment = {
+    offerUrl,
+    stream: new MediaStream(),
+    peer: null,
+    reconnectAttempts: 0,
+    reconnectTimer: null,
+  };
+  prepareVideoPlayback(video);
+  video.srcObject = attachment.stream;
+  webRtcAttachments.set(video, attachment);
+  try {
+    await startWebRtcPlayback(video, attachment);
+  } catch {
+    scheduleWebRtcReconnect(video, attachment);
+  }
+}
+
+async function startWebRtcPlayback(video: HTMLVideoElement, attachment: WebRtcAttachment): Promise<void> {
+  if (!isCurrentWebRtcAttachment(video, attachment)) {
+    return;
+  }
+
+  closeWebRtcPeer(attachment);
+  attachment.stream = new MediaStream();
+  video.srcObject = attachment.stream;
+  prepareVideoPlayback(video);
+
+  const peer = new RTCPeerConnection({ iceServers: [] });
+  attachment.peer = peer;
+  peer.addTransceiver("video", { direction: "recvonly" });
+  peer.addTransceiver("audio", { direction: "recvonly" });
+  peer.ontrack = (event) => {
+    if (!isCurrentWebRtcAttachment(video, attachment)) {
+      return;
+    }
+    attachment.stream.addTrack(event.track);
+    attachment.reconnectAttempts = 0;
+    queueVideoPlayback(video);
+  };
+  peer.onconnectionstatechange = () => {
+    if (!isCurrentWebRtcAttachment(video, attachment)) {
+      return;
+    }
+    switch (peer.connectionState) {
+      case "connected":
+        attachment.reconnectAttempts = 0;
+        queueVideoPlayback(video);
+        return;
+      case "disconnected":
+      case "failed":
+      case "closed":
+        scheduleWebRtcReconnect(video, attachment);
+        return;
+      default:
+        return;
+    }
+  };
+
+  const offer = await peer.createOffer();
+  if (!isCurrentWebRtcAttachment(video, attachment)) {
+    peer.close();
+    return;
+  }
+  await peer.setLocalDescription(offer);
+  await waitForIceComplete(peer);
+  if (!isCurrentWebRtcAttachment(video, attachment)) {
+    peer.close();
+    return;
+  }
+
+  const response = await fetch(attachment.offerUrl, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(peer.localDescription),
+  });
+  if (!response.ok) {
+    closeWebRtcPeer(attachment);
+    throw new Error(await response.text());
+  }
+
+  const answer = (await response.json()) as RTCSessionDescriptionInit;
+  if (!isCurrentWebRtcAttachment(video, attachment)) {
+    peer.close();
+    return;
+  }
+  await peer.setRemoteDescription(answer);
+  queueVideoPlayback(video);
+}
+
+function destroyWebRtcAttachment(video: HTMLVideoElement): void {
+  const attachment = webRtcAttachments.get(video);
+  if (attachment) {
+    clearWebRtcReconnectTimer(attachment);
+    closeWebRtcPeer(attachment);
+    webRtcAttachments.delete(video);
+  }
+  resetVideoElement(video);
+}
+
+function scheduleWebRtcReconnect(video: HTMLVideoElement, attachment: WebRtcAttachment): void {
+  if (!isCurrentWebRtcAttachment(video, attachment) || attachment.reconnectTimer !== null) {
+    return;
+  }
+
+  attachment.reconnectAttempts += 1;
+  const delayMs = Math.min(1000 * 2 ** Math.min(attachment.reconnectAttempts, 4), 10_000);
+  attachment.reconnectTimer = window.setTimeout(() => {
+    attachment.reconnectTimer = null;
+    if (!isCurrentWebRtcAttachment(video, attachment)) {
+      return;
+    }
+    void startWebRtcPlayback(video, attachment).catch(() => {
+      scheduleWebRtcReconnect(video, attachment);
+    });
+  }, delayMs);
+}
+
+function isCurrentWebRtcAttachment(video: HTMLVideoElement, attachment: WebRtcAttachment): boolean {
+  return video.isConnected && webRtcAttachments.get(video) === attachment;
+}
+
+function clearWebRtcReconnectTimer(attachment: WebRtcAttachment): void {
+  if (attachment.reconnectTimer === null) {
+    return;
+  }
+  window.clearTimeout(attachment.reconnectTimer);
+  attachment.reconnectTimer = null;
+}
+
+function closeWebRtcPeer(attachment: WebRtcAttachment): void {
+  const peer = attachment.peer;
+  attachment.peer = null;
+  if (!peer) {
+    return;
+  }
+  try {
+    peer.ontrack = null;
+    peer.onconnectionstatechange = null;
+    peer.close();
+  } catch {
+    return;
+  }
+}
+
+function resetVideoElement(video: HTMLVideoElement): void {
+  try {
+    video.pause();
+  } catch {
+    return;
+  } finally {
+    try {
+      video.srcObject = null;
+    } catch {
+      // Ignore.
+    }
+    try {
+      video.removeAttribute("src");
+      video.src = "";
+    } catch {
+      // Ignore.
+    }
+    try {
+      video.load();
+    } catch {
+      // Ignore.
+    }
+  }
+}
+
+function normalizeViewportSource(value: string | null | undefined): CameraViewportSource | null {
+  switch (value?.trim().toLowerCase()) {
+    case "hls":
+      return "hls";
+    case "webrtc":
+      return "webrtc";
+    case "mjpeg":
+      return "mjpeg";
+    default:
+      return null;
+  }
+}
+
+function normalizeHlsPlaybackUrl(value: string | null | undefined): string {
+  const source = value?.trim() ?? "";
+  if (!source) {
+    return "";
+  }
+  try {
+    const parsed = new URL(source, globalThis.location?.href);
+    if (parsed.pathname.includes("/api/v1/media/hls/") && !parsed.pathname.endsWith(".m3u8")) {
+      parsed.pathname = `${parsed.pathname.replace(/\/+$/, "")}/index.m3u8`;
+    }
+    return parsed.toString();
+  } catch {
+    if (source.includes("/api/v1/media/hls/") && !source.includes(".m3u8")) {
+      return `${source.replace(/\/+$/, "")}/index.m3u8`;
+    }
+    return source;
+  }
+}
+
+function normalizeWebRtcOfferUrl(value: string | null | undefined): string {
+  return buildWebRtcOfferUrl(value?.trim() ?? null) ?? "";
+}
+
+async function waitForIceComplete(peer: RTCPeerConnection): Promise<void> {
+  if (peer.iceGatheringState === "complete") {
+    return;
+  }
+  await new Promise<void>((resolve) => {
+    const onChange = () => {
+      if (peer.iceGatheringState === "complete") {
+        peer.removeEventListener("icegatheringstatechange", onChange);
+        resolve();
+      }
+    };
+    peer.addEventListener("icegatheringstatechange", onChange);
+  });
 }
 
 function isQualityProfile(key: string, name: string): boolean {

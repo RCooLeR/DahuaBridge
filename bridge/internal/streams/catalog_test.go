@@ -154,8 +154,8 @@ func TestBuildCatalogForNVRChannel(t *testing.T) {
 	if len(entry.Controls.ValidationNotes) != 1 || entry.Controls.ValidationNotes[0] != "ptz_capability_query_failed_aux_fallback_used" {
 		t.Fatalf("unexpected control validation notes %+v", entry.Controls.ValidationNotes)
 	}
-	if len(entry.Features) != 8 {
-		t.Fatalf("expected 7 normalized features, got %+v", entry.Features)
+	if len(entry.Features) != 6 {
+		t.Fatalf("expected deterrence features to hide siren/warning light without IMOU, got %+v", entry.Features)
 	}
 	archiveSearch := findFeatureByKey(entry.Features, "archive_search")
 	if archiveSearch == nil || archiveSearch.Kind != "query" || archiveSearch.URL != "http://bridge.local:8080/api/v1/nvr/west20_nvr/recordings" {
@@ -170,8 +170,12 @@ func TestBuildCatalogForNVRChannel(t *testing.T) {
 		t.Fatalf("unexpected ptz feature %+v", ptz)
 	}
 	siren := findFeatureByKey(entry.Features, "siren")
-	if siren == nil || siren.ParameterKey != "output" || siren.ParameterValue != "siren" || siren.URL != "http://bridge.local:8080/api/v1/nvr/west20_nvr/channels/1/aux" {
-		t.Fatalf("unexpected siren feature %+v", siren)
+	if siren != nil {
+		t.Fatalf("expected siren feature to stay hidden without IMOU override, got %+v", siren)
+	}
+	warningLight := findFeatureByKey(entry.Features, "warning_light")
+	if warningLight != nil {
+		t.Fatalf("expected warning light feature to stay hidden without IMOU override, got %+v", warningLight)
 	}
 	mute := findFeatureByKey(entry.Features, "mute")
 	if mute == nil || mute.Kind != "toggle" || mute.URL != "http://bridge.local:8080/api/v1/nvr/west20_nvr/channels/1/audio/mute" || mute.Active == nil || !*mute.Active {

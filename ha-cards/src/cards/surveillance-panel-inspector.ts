@@ -14,8 +14,7 @@ import {
   renderControlButton,
   renderSegmentButton,
 } from "./surveillance-panel-primitives";
-
-type DetailTab = "overview" | "events" | "recordings" | "settings";
+import type { DetailTab } from "./surveillance-panel-state";
 
 interface RenderSurveillancePanelInspectorArgs {
   model: PanelModel;
@@ -24,6 +23,7 @@ interface RenderSurveillancePanelInspectorArgs {
   detailTab: DetailTab;
   eventContent: TemplateResult | typeof nothing;
   archiveContent: TemplateResult | typeof nothing;
+  mp4Content: TemplateResult | typeof nothing;
   renderIcon: (icon: string) => TemplateResult;
   isBusy: (key: string) => boolean;
   onSelectDetailTab: (tab: DetailTab) => void;
@@ -54,6 +54,7 @@ export function renderSurveillancePanelInspector({
   detailTab,
   eventContent,
   archiveContent,
+  mp4Content,
   renderIcon,
   isBusy,
   onSelectDetailTab,
@@ -75,6 +76,7 @@ export function renderSurveillancePanelInspector({
             detailTab,
             eventContent,
             archiveContent,
+            mp4Content,
             onSelectDetailTab,
           )
         : model.selectedNvr
@@ -251,6 +253,7 @@ function renderCameraInspector(
   detailTab: DetailTab,
   eventContent: TemplateResult | typeof nothing,
   archiveContent: TemplateResult | typeof nothing,
+  mp4Content: TemplateResult | typeof nothing,
   onSelectDetailTab: (tab: DetailTab) => void,
 ): TemplateResult {
   return html`
@@ -259,13 +262,13 @@ function renderCameraInspector(
       <div class="muted">${camera.roomLabel}</div>
     </div>
     <div class="detail-tabs">
-      ${renderSegmentButton("overview", "Overview", detailTab, (tab) =>
-        onSelectDetailTab(tab as DetailTab),
-      )}
       ${renderSegmentButton("events", "Events", detailTab, (tab) =>
         onSelectDetailTab(tab as DetailTab),
       )}
       ${renderSegmentButton("recordings", "Recordings", detailTab, (tab) =>
+        onSelectDetailTab(tab as DetailTab),
+      )}
+      ${renderSegmentButton("mp4", "MP4", detailTab, (tab) =>
         onSelectDetailTab(tab as DetailTab),
       )}
       ${renderSegmentButton("settings", "Settings", detailTab, (tab) =>
@@ -273,82 +276,11 @@ function renderCameraInspector(
       )}
     </div>
     <div class="detail-main">
-      ${detailTab === "overview"
-        ? html`
-            <div class="panel">
-              <div class="panel-title">Camera Status</div>
-              <div class="chip-row">
-                <span class="badge info">${camera.kindLabel}</span>
-                <span class="badge ${camera.online ? "success" : "critical"}">
-                  ${camera.online ? "Online" : "Offline"}
-                </span>
-                <span class="badge ${camera.streamAvailable ? "success" : "warning"}">
-                  ${camera.streamAvailable ? "Stream ready" : "Stream unavailable"}
-                </span>
-                <span class="badge ${camera.recordingActive ? "critical" : "info"}">
-                  ${camera.recordingActive ? "NVR Recording" : "NVR Idle"}
-                </span>
-                ${camera.bridgeRecordingActive
-                  ? html`<span class="badge warning">MP4 Clip Active</span>`
-                  : nothing}
-                ${camera.supportsPtz ? html`<span class="badge">PTZ</span>` : nothing}
-              </div>
-            </div>
-            <div class="panel">
-              <div class="panel-title">AI / Detection</div>
-              <div class="chip-row">
-                ${camera.detections.length === 0
-                  ? html`<span class="muted">No active detections.</span>`
-                  : repeat(
-                      camera.detections,
-                      (badge) => badge.key,
-                      (badge) => html`<span class="badge ${badge.tone}">${badge.label}</span>`,
-                    )}
-              </div>
-            </div>
-            <div class="panel">
-              <div class="panel-title">Capabilities</div>
-              <div class="chip-row">
-                ${camera.supportsPtzPan || camera.supportsPtzTilt
-                  ? html`<span class="badge info">Pan/Tilt</span>`
-                  : nothing}
-                ${camera.supportsPtzZoom ? html`<span class="badge info">Zoom</span>` : nothing}
-                ${camera.supportsPtzFocus ? html`<span class="badge info">Focus</span>` : nothing}
-                ${camera.aux?.targets.length
-                  ? html`
-                      <span class="badge warning">
-                        ${camera.aux.targets.length} aux target${camera.aux.targets.length === 1 ? "" : "s"}
-                      </span>
-                    `
-                  : camera.supportsAux
-                    ? html`<span class="badge warning">Aux available</span>`
-                    : nothing}
-                ${camera.supportsRecording
-                  ? html`
-                      <span class="badge ${camera.bridgeRecordingActive ? "warning" : "info"}">
-                        Bridge MP4
-                      </span>
-                    `
-                  : nothing}
-                ${camera.recording
-                  ? html`
-                      <span class="badge ${camera.recording.active ? "critical" : "info"}">
-                        NVR Recording State
-                      </span>
-                    `
-                  : nothing}
-                ${camera.archive?.searchUrl
-                  ? html`<span class="badge success">Archive ready</span>`
-                  : nothing}
-              </div>
-            </div>
-            ${renderCameraControlAuthority(camera)}
-          `
-        : nothing}
-
       ${detailTab === "events" ? eventContent : nothing}
 
       ${detailTab === "recordings" ? archiveContent : nothing}
+
+      ${detailTab === "mp4" ? mp4Content : nothing}
 
       ${detailTab === "settings"
         ? html`
@@ -425,24 +357,24 @@ function renderCameraStreamStatus(camera: CameraViewModel): TemplateResult {
         <span class="badge ${camera.stream.available ? "success" : "critical"}">
           ${camera.stream.available ? "Live stream ready" : "Live stream unavailable"}
         </span>
-        <span class="badge info">${camera.stream.profile}</span>
+        <span class="badge info">${streamProfileLabel(camera.stream.profile)}</span>
         <span class="badge">${camera.stream.resolution}</span>
         <span class="badge">${camera.stream.codec}</span>
         <span class="badge">${camera.stream.frameRate}</span>
         <span class="badge">${camera.stream.bitrate}</span>
         <span class="badge">${camera.stream.audioCodec}</span>
         ${camera.stream.recommendedProfile
-          ? html`<span class="badge success">Recommended ${camera.stream.recommendedProfile}</span>`
+          ? html`<span class="badge success">Recommended ${streamProfileLabel(camera.stream.recommendedProfile)}</span>`
           : nothing}
         ${camera.stream.onvifStreamUrl ? html`<span class="badge info">ONVIF stream ready</span>` : nothing}
         ${camera.stream.onvifSnapshotUrl ? html`<span class="badge info">ONVIF snapshot ready</span>` : nothing}
       </div>
       <div class="detail-inline-meta">
         ${camera.stream.preferredVideoProfile
-          ? html`<span class="muted">Preferred profile: ${camera.stream.preferredVideoProfile}</span>`
+          ? html`<span class="muted">Preferred profile: ${streamProfileLabel(camera.stream.preferredVideoProfile)}</span>`
           : nothing}
         ${camera.stream.preferredVideoSource
-          ? html`<span class="muted">Preferred source: ${camera.stream.preferredVideoSource}</span>`
+          ? html`<span class="muted">Preferred source: ${streamSourceLabel(camera.stream.preferredVideoSource)}</span>`
           : nothing}
         <span class="muted">
           ${camera.stream.source
@@ -870,6 +802,38 @@ function audioSemanticLabel(semantic: string | null): string {
       return "Stream audio toggle";
     default:
       return semantic?.trim() || "Audio control";
+  }
+}
+
+function streamProfileLabel(value: string | null | undefined): string {
+  switch (value?.trim().toLowerCase()) {
+    case "quality":
+      return "Quality (Main Stream)";
+    case "default":
+      return "Default (Main Stream)";
+    case "stable":
+      return "Stable (Substream)";
+    case "substream":
+      return "Substream (Native)";
+    default:
+      return value?.trim() || "unknown";
+  }
+}
+
+function streamSourceLabel(value: string | null | undefined): string {
+  switch (value?.trim().toLowerCase()) {
+    case "rtsp":
+      return "Direct RTSP";
+    case "hls":
+      return "Bridge HLS (H.264/AAC)";
+    case "webrtc":
+      return "Bridge WebRTC";
+    case "mjpeg":
+      return "Bridge MJPEG";
+    case "auto":
+      return "Auto (Bridge Recommended)";
+    default:
+      return value?.trim() || "unknown";
   }
 }
 

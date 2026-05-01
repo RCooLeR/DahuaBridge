@@ -8,7 +8,7 @@ import type {
   VtoViewModel,
 } from "../domain/model";
 
-export type DetailTab = "overview" | "events" | "recordings" | "settings";
+export type DetailTab = "overview" | "events" | "recordings" | "mp4" | "settings";
 export type EventViewMode = "recent" | "history";
 export type OverviewLayoutName = "1x1" | "2x1" | "2x2" | "3x2" | "3x3" | "4x3" | "4x4";
 export type SidebarItemKind = "camera" | "vto" | "accessory" | "nvr";
@@ -53,7 +53,7 @@ export function selectOverviewState(): SelectionStatePatch {
 export function selectCameraState(camera: CameraViewModel): SelectionStatePatch {
   return {
     selection: { kind: "camera", deviceId: camera.deviceId },
-    detailTab: "overview",
+    detailTab: "events",
     ptzAdjusting: false,
     eventHistoryPage: 0,
   };
