@@ -919,16 +919,45 @@ func (w *worker) status() WorkerStatus {
 }
 
 func (w *hlsWorker) run() {
-	defer w.parent.removeHLSWorker(w.key, w)
+	outputDir := ""
+	retainOutput := false
 
-	outputDir, err := os.MkdirTemp("", "dahuabridge-hls-*")
+	defer func() {
+		if retainOutput && outputDir != "" && w.parent.cfg.HLSKeepAfterExit > 0 {
+			keepFor := w.parent.cfg.HLSKeepAfterExit
+			w.logger.Info().Str("hls_output_dir", outputDir).Dur("keep_after_exit", keepFor).Msg("retaining completed hls output")
+			time.AfterFunc(keepFor, func() {
+				w.parent.removeHLSWorker(w.key, w)
+				if err := os.RemoveAll(outputDir); err != nil {
+					w.logger.Warn().Err(err).Str("hls_output_dir", outputDir).Msg("failed to cleanup retained hls output")
+				}
+			})
+			return
+		}
+
+		w.parent.removeHLSWorker(w.key, w)
+		if outputDir != "" {
+			if err := os.RemoveAll(outputDir); err != nil {
+				w.logger.Warn().Err(err).Str("hls_output_dir", outputDir).Msg("failed to cleanup hls output")
+			}
+		}
+	}()
+
+	outputRoot := strings.TrimSpace(w.parent.cfg.HLSTempPath)
+	if outputRoot == "" {
+		outputRoot = "/data/tmp/dahuabridge/hls"
+	}
+	if err := os.MkdirAll(outputRoot, 0o755); err != nil {
+		w.setError(fmt.Errorf("create hls temp root: %w", err))
+		return
+	}
+
+	var err error
+	outputDir, err = os.MkdirTemp(outputRoot, "dahuabridge-hls-*")
 	if err != nil {
 		w.setError(fmt.Errorf("create hls temp dir: %w", err))
 		return
 	}
-	defer os.RemoveAll(outputDir)
-
-	stderrDone := make(chan string, 1)
 
 	w.mu.Lock()
 	w.outputDir = outputDir
@@ -942,20 +971,15 @@ func (w *hlsWorker) run() {
 	attempts := buildFFmpegStartAttempts(w.parent.cfg)
 	for index, attempt := range attempts {
 		if index > 0 {
-			w.logger.Warn().
-				Bool("hwaccel", attempt.useHWAccel).
-				Str("input_preset", attempt.inputPreset).
-				Msg("retrying hls worker with fallback")
+			w.logger.Warn().Bool("hwaccel", attempt.useHWAccel).Str("input_preset", attempt.inputPreset).Msg("retrying hls worker with fallback")
 		}
 
 		args := w.buildFFmpegArgs(attempt)
-		w.logger.Debug().
-			Bool("hwaccel", attempt.useHWAccel).
-			Str("input_preset", attempt.inputPreset).
-			Strs("ffmpeg_args", redactFFmpegArgs(args)).
-			Msg("starting hls worker")
+		w.logger.Debug().Bool("hwaccel", attempt.useHWAccel).Str("input_preset", attempt.inputPreset).Str("hls_output_dir", outputDir).Strs("ffmpeg_args", redactFFmpegArgs(args)).Msg("starting hls worker")
+
 		cmd := exec.CommandContext(w.ctx, w.parent.cfg.FFmpegPath, args...)
 		cmd.Dir = outputDir
+
 		stderr, err := cmd.StderrPipe()
 		if err != nil {
 			w.setError(fmt.Errorf("ffmpeg stderr pipe: %w", err))
@@ -971,8 +995,9 @@ func (w *hlsWorker) run() {
 			return
 		}
 
+		stderrDone := make(chan string, 1)
 		go func() {
-			body, _ := io.ReadAll(io.LimitReader(stderr, 64*1024))
+			body, _ := io.ReadAll(io.LimitReader(stderr, 128*1024))
 			stderrDone <- strings.TrimSpace(string(body))
 		}()
 
@@ -982,13 +1007,13 @@ func (w *hlsWorker) run() {
 		if errors.Is(w.ctx.Err(), context.Canceled) {
 			return
 		}
+
+		if stderrText != "" {
+			w.logger.Debug().Bool("hwaccel", attempt.useHWAccel).Str("input_preset", attempt.inputPreset).Str("ffmpeg_stderr", stderrText).Msg("hls worker stderr")
+		}
+
 		if waitErr != nil {
 			if stderrText != "" {
-				w.logger.Debug().
-					Bool("hwaccel", attempt.useHWAccel).
-					Str("input_preset", attempt.inputPreset).
-					Str("ffmpeg_stderr", stderrText).
-					Msg("hls worker stderr")
 				waitErr = fmt.Errorf("%w: %s", waitErr, stderrText)
 			}
 			if index < len(attempts)-1 {
@@ -997,20 +1022,17 @@ func (w *hlsWorker) run() {
 			w.setError(waitErr)
 			return
 		}
-		if stderrText != "" {
-			w.logger.Debug().
-				Bool("hwaccel", attempt.useHWAccel).
-				Str("input_preset", attempt.inputPreset).
-				Str("ffmpeg_stderr", stderrText).
-				Msg("hls worker stderr")
-			if index < len(attempts)-1 {
-				continue
-			}
-			w.setError(errors.New(stderrText))
+
+		// A clean FFmpeg exit is normal for finite NVR playback and SMB/IVS/event clips.
+		// Keep the generated playlist and segments addressable through the existing worker
+		// instead of removing the worker/output directory immediately.
+		if w.isPlaybackStream() || w.parent.cfg.HLSKeepAfterExit > 0 {
+			retainOutput = true
 		}
 		return
 	}
 }
+
 
 func (w *hlsWorker) buildFFmpegArgs(attempt ffmpegStartAttempt) []string {
 	frameRate := w.parent.cfg.FrameRate
@@ -1020,10 +1042,10 @@ func (w *hlsWorker) buildFFmpegArgs(attempt ffmpegStartAttempt) []string {
 	segmentSeconds := int(maxInt(int(w.parent.cfg.HLSSegmentTime/time.Second), 1))
 	gopSize := maxInt(frameRate*segmentSeconds, frameRate)
 	hlsListSize := strconv.Itoa(w.parent.cfg.HLSListSize)
-	hlsFlags := "delete_segments+independent_segments+append_list+omit_endlist+temp_file"
+	hlsFlags := "delete_segments+independent_segments+omit_endlist+temp_file"
 	if w.isPlaybackStream() {
 		hlsListSize = "0"
-		hlsFlags = "independent_segments+append_list+temp_file"
+		hlsFlags = "independent_segments+omit_endlist+temp_file"
 	}
 
 	args := []string{
@@ -1179,7 +1201,7 @@ func (w *hlsWorker) status() WorkerStatus {
 	return status
 }
 
-func redactURLUserinfo(raw string) string {
+func safeHLSDirectoryPrefix(value string) string { trimmed := strings.TrimSpace(value) if trimmed == "" { return "stream" } replacer := strings.NewReplacer(":", "_", "/", "_", "\\", "_", " ", "_") safe := replacer.Replace(trimmed) if len(safe) > 96 { safe = safe[:96] } return safe } func removeDirectoryAfter(logger zerolog.Logger, dir string, delay time.Duration) { if strings.TrimSpace(dir) == "" { return } timer := time.NewTimer(delay) defer timer.Stop() <-timer.C if err := os.RemoveAll(dir); err != nil { logger.Warn().Err(err).Str("dir", dir).Msg("failed to remove expired hls cache directory") } } func safeHLSDirectoryPrefix(value string) string { trimmed := strings.TrimSpace(value) if trimmed == "" { return "stream" } replacer := strings.NewReplacer(":", "_", "/", "_", "\\", "_", " ", "_") safe := replacer.Replace(trimmed) if len(safe) > 96 { safe = safe[:96] } return safe } func removeDirectoryAfter(logger zerolog.Logger, dir string, delay time.Duration) { if strings.TrimSpace(dir) == "" { return } timer := time.NewTimer(delay) defer timer.Stop() <-timer.C if err := os.RemoveAll(dir); err != nil { logger.Warn().Err(err).Str("dir", dir).Msg("failed to remove expired hls cache directory") } } func redactURLUserinfo(raw string) string {
 	parsed, err := url.Parse(raw)
 	if err != nil {
 		return raw

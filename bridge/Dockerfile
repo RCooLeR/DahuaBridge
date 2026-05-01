@@ -1,41 +1,69 @@
+# syntax=docker/dockerfile:1.7
+
 # --- Stage 1: Build the Go binary ---
-FROM golang:1.26.2-alpine AS builder
+FROM golang:1.26.2-alpine AS build
 
-# Install git and CA certs (if needed for Go modules)
-RUN apk upgrade --no-cache && apk add --no-cache git ca-certificates
+RUN apk add --no-cache git ca-certificates
 
-# Set working directory inside the container
 WORKDIR /app
 
-# Copy Go source code into the container
+COPY go.mod go.sum ./
+RUN --mount=type=cache,target=/go/pkg/mod \
+    go mod download
+
 COPY . .
 
-# Enable Go Modules (optional if using go.mod)
-ENV GO111MODULE=on
+ARG VERSION=dev
+ARG COMMIT=unknown
+ARG BUILD_DATE=unknown
 
-# Download deps
-RUN go mod download
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    set -eux; \
+    MODULE="$(go list -m)"; \
+    CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+    go build \
+      -trimpath \
+      -ldflags="-s -w \
+        -X ${MODULE}/internal/buildinfo.Version=${VERSION} \
+        -X ${MODULE}/internal/buildinfo.Commit=${COMMIT} \
+        -X ${MODULE}/internal/buildinfo.BuildDate=${BUILD_DATE}" \
+      -o /app/dahuabridge \
+      ./cmd/dahuabridge; \
+    chmod +x /app/dahuabridge /app/docker-entrypoint.sh
 
-# Build the Go app for Linux with CGO disabled so the binary runs in Alpine.
-RUN CGO_ENABLED=0 go build -o /app/dahuabridge ./cmd/dahuabridge
 
-# --- Stage 2: Create a lightweight image with the binary only ---
-FROM alpine:3.23
+# --- Stage 2: Runtime image ---
+FROM ubuntu:26.04
 
-# Add CA certs for HTTPS support
-RUN apk upgrade --no-cache && apk add --no-cache ca-certificates
+ENV DEBIAN_FRONTEND=noninteractive
 
-# Copy binary from builder stage
-COPY --from=builder /app/dahuabridge /app/dahuabridge
-COPY --from=builder /app/docker-entrypoint.sh /app/docker-entrypoint.sh
+RUN set -eux; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends \
+      ca-certificates \
+      wget \
+      ffmpeg \
+      tzdata \
+      gosu \
+      passwd \
+      vainfo \
+      libvpl2 \
+      intel-media-va-driver-non-free; \
+    rm -rf /var/lib/apt/lists/*
 
-# Set executable permissions (just in case)
-RUN chmod +x /app/dahuabridge
-RUN chmod +x /app/docker-entrypoint.sh
+WORKDIR /app
 
+COPY --from=build /app/dahuabridge /app/dahuabridge
+COPY --from=build /app/docker-entrypoint.sh /app/docker-entrypoint.sh
+
+RUN set -eux; \
+    chmod 0755 /app/dahuabridge /app/docker-entrypoint.sh; \
+    mkdir -p /config /data /data/tmp
 
 EXPOSE 9205
-VOLUME ["/config"]
+
+VOLUME ["/config", "/data"]
 
 ENV DAHUABRIDGE_CONFIG=/config/config.yaml
 

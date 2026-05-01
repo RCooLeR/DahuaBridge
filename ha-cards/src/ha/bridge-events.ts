@@ -1,20 +1,26 @@
 import { z } from "zod";
 
-const bridgeEventSchema = z.object({
-  device_id: z.string().min(1),
-  device_kind: z.string().min(1),
-  child_id: z.string().min(1).optional(),
-  code: z.string().min(1),
-  action: z.string().min(1),
-  index: z.number().int().optional(),
-  channel: z.number().int().optional(),
-  occurred_at: z.string().min(1),
-  data: z.record(z.string(), z.string()).optional(),
-});
+const bridgeEventSchema = z
+  .object({
+    device_id: z.string().min(1),
+    device_kind: z.string().min(1).optional().default("unknown"),
+    child_id: z.string().min(1).optional(),
+    code: z.string().min(1),
+    action: z.string().min(1),
+    index: z.coerce.number().int().optional(),
+    channel: z.coerce.number().int().optional(),
+    occurred_at: z.string().min(1),
+    data: z.record(z.string(), z.unknown()).optional(),
+  })
+  .passthrough();
 
-const bridgeEventsResponseSchema = z.object({
-  events: z.array(bridgeEventSchema),
-});
+const bridgeEventsObjectResponseSchema = z
+  .object({
+    events: z.array(bridgeEventSchema),
+  })
+  .passthrough();
+
+const bridgeEventsArrayResponseSchema = z.array(bridgeEventSchema);
 
 export interface BridgeEventQuery {
   limit: number;
@@ -25,6 +31,23 @@ export interface BridgeEventQuery {
 }
 
 export type BridgeEvent = z.infer<typeof bridgeEventSchema>;
+
+function parseBridgeEventsPayload(payload: unknown): BridgeEvent[] {
+  const objectResult = bridgeEventsObjectResponseSchema.safeParse(payload);
+  if (objectResult.success) {
+    return objectResult.data.events;
+  }
+
+  const arrayResult = bridgeEventsArrayResponseSchema.safeParse(payload);
+  if (arrayResult.success) {
+    return arrayResult.data;
+  }
+
+  const message = objectResult.error.issues
+    .map((issue) => `${issue.path.join(".") || "payload"}: ${issue.message}`)
+    .join("; ");
+  throw new Error(`Bridge event response schema mismatch: ${message}`);
+}
 
 export async function fetchBridgeEvents(
   eventsUrl: string,
@@ -59,6 +82,5 @@ export async function fetchBridgeEvents(
     throw new Error(`Bridge event request failed with status ${response.status}`);
   }
 
-  const payload = bridgeEventsResponseSchema.parse(await response.json());
-  return payload.events;
+  return parseBridgeEventsPayload(await response.json());
 }
