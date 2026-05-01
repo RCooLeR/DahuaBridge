@@ -21,11 +21,13 @@ import {
   availableCameraViewportSources,
   availablePlaybackViewportSources,
   availableStreamViewportSources,
+  defaultOverviewStreamProfileKey,
   defaultSelectedStreamProfileKey,
   renderPlaybackViewport,
   renderSelectedCameraViewport,
   renderSelectedVtoViewport,
   resolveInitialPlaybackViewportSource,
+  resolveOverviewCameraViewportSource,
   resolvePlaybackViewportSource,
   resolveSelectedCameraStreamProfile,
   resolveSelectedCameraViewportSource,
@@ -88,6 +90,7 @@ import {
   summarizePanelTodayEvents,
   type PanelTodayEventSummaryModel,
 } from "../domain/event-summary";
+import { buildBridgeEndpointUrl } from "../ha/bridge-url";
 import { parseConfig, type SurveillancePanelCardConfig } from "../types/card-config";
 import type {
   HomeAssistant,
@@ -1195,11 +1198,12 @@ export class DahuaBridgeSurveillancePanelCard
       },
       renderIcon: (icon) => this.renderIcon(icon),
       renderCameraViewport: (camera) => {
-        const profileKey = defaultSelectedStreamProfileKey(camera.stream);
-        const source = resolveSelectedCameraViewportSource(camera, null, profileKey);
+        const profileKey = defaultOverviewStreamProfileKey(camera.stream);
+        const source = resolveOverviewCameraViewportSource(camera, profileKey);
         return renderSelectedCameraViewport(this.hass, camera, profileKey, source, true, {
           controls: false,
           preload: "none",
+          fallbackOrder: ["hls", "mjpeg", "webrtc"],
         });
       },
       cameraImageSrc: (cameraEntity, snapshotUrl) =>
@@ -2489,8 +2493,12 @@ export class DahuaBridgeSurveillancePanelCard
   }
 
   private resolvePlaybackSeekUrl(bridgeBaseUrl: string | null): string {
-    if (bridgeBaseUrl?.trim()) {
-      return new URL("/api/v1/nvr/playback/sessions/{session_id}/seek", bridgeBaseUrl).toString();
+    const bridgeUrl = buildBridgeEndpointUrl(
+      bridgeBaseUrl,
+      "/api/v1/nvr/playback/sessions/{session_id}/seek",
+    );
+    if (bridgeUrl) {
+      return bridgeUrl;
     }
     return "/api/v1/nvr/playback/sessions/{session_id}/seek";
   }

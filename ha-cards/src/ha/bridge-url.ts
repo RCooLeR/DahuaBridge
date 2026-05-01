@@ -44,6 +44,18 @@ export function rewriteBridgeUrl(
   }
 }
 
+export function buildBridgeEndpointUrl(
+  baseUrl: string | null | undefined,
+  targetPath: string | null | undefined,
+): string | null {
+  const normalizedPath = normalizeTarget(targetPath);
+  if (!normalizedPath) {
+    return null;
+  }
+  const relativePath = normalizedPath.startsWith("/") ? normalizedPath : `/${normalizedPath}`;
+  return rewriteBridgeUrl(relativePath, baseUrl);
+}
+
 function buildRewrittenUrl(
   browserBase: URL,
   targetPath: string,
