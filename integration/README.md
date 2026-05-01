@@ -15,6 +15,7 @@ It consumes the bridge-native catalog and creates Home Assistant devices and ent
 - features: [docs/features.md](docs/features.md)
 - entities and controls: [docs/entities-and-controls.md](docs/entities-and-controls.md)
 - camera recording behavior: [docs/camera-recording.md](docs/camera-recording.md)
+- archive playback and export: [docs/camera-recording.md](docs/camera-recording.md)
 
 ## Related Docs
 

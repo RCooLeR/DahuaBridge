@@ -12,6 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from homeassistant.exceptions import HomeAssistantError
 
+from custom_components.dahuabridge.bridge_api import DahuaBridgeAPI
 from custom_components.dahuabridge.bridge_api import DahuaBridgeAPIError
 from custom_components.dahuabridge.camera import DahuaBridgeCamera
 
@@ -20,6 +21,7 @@ def make_record(capture: dict | None = None) -> dict:
     return {
         "device": {
             "id": "cam1",
+            "parent_id": "west20_nvr",
             "name": "Front Gate",
             "kind": "nvr_channel",
         },
@@ -83,18 +85,40 @@ class FakeCoordinator:
         self.preferred_video_profile = "stable"
         self.preferred_video_source = "hls"
         self.refresh_count = 0
+        self.last_update_success = True
 
     async def async_request_refresh(self) -> None:
         self.refresh_count += 1
 
 
 class CameraCaptureTests(unittest.IsolatedAsyncioTestCase):
+    def test_bridge_api_preserves_rtsp_targets(self) -> None:
+        api = DahuaBridgeAPI(object(), "http://bridge.local:8080")
+        self.assertEqual(
+            api.bridge_resource_url("rtsp://camera.local:554/cam/realmonitor?channel=1"),
+            "rtsp://camera.local:554/cam/realmonitor?channel=1",
+        )
+
+    def test_bridge_api_preserves_base_path_when_rewriting_bridge_urls(self) -> None:
+        api = DahuaBridgeAPI(object(), "https://public.example/bridge")
+        self.assertEqual(
+            api.bridge_resource_url("http://127.0.0.1:19215/api/v1/events"),
+            "https://public.example/bridge/api/v1/events",
+        )
+
     def test_is_recording_reflects_bridge_capture_state(self) -> None:
         camera = DahuaBridgeCamera(
             FakeCoordinator(make_record({"active": True})),
             "cam1",
         )
         self.assertTrue(camera.is_recording)
+
+    def test_camera_available_follows_coordinator_success(self) -> None:
+        coordinator = FakeCoordinator(make_record())
+        camera = DahuaBridgeCamera(coordinator, "cam1")
+        self.assertTrue(camera.available)
+        coordinator.last_update_success = False
+        self.assertFalse(camera.available)
 
     async def test_async_camera_image_prefers_snapshot_endpoint(self) -> None:
         camera = DahuaBridgeCamera(
@@ -126,6 +150,24 @@ class CameraCaptureTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             coordinator.api.mjpeg_requests,
             ["http://bridge.local:8080/api/v1/media/mjpeg/cam1?profile=stable&width=320"],
+        )
+
+    def test_camera_attributes_include_archive_endpoints_for_nvr_channels(self) -> None:
+        camera = DahuaBridgeCamera(FakeCoordinator(make_record()), "cam1")
+
+        attrs = camera.extra_state_attributes
+
+        self.assertEqual(
+            attrs["bridge_archive_export_url"],
+            "http://bridge.local:8080/api/v1/nvr/west20_nvr/recordings/export",
+        )
+        self.assertEqual(
+            attrs["bridge_playback_sessions_url"],
+            "http://bridge.local:8080/api/v1/nvr/west20_nvr/playback/sessions",
+        )
+        self.assertEqual(
+            attrs["bridge_archive_recordings_url_template"],
+            "http://bridge.local:8080/api/v1/nvr/west20_nvr/recordings?channel=5&start={start}&end={end}&limit={limit}&event={event}",
         )
 
     async def test_async_start_recording_calls_bridge_capture_service(self) -> None:

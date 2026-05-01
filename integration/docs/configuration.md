@@ -1,8 +1,8 @@
-# ⚙️ Configuration
+# Configuration
 
 The integration is configured through the Home Assistant UI.
 
-## 🔗 Config Entry Input
+## Config Entry Input
 
 The main required value is:
 
@@ -16,7 +16,9 @@ http://bridge-host:9205
 
 The setup flow validates this URL by calling the bridge status endpoint before it creates the config entry.
 
-## 🎛️ Options
+If Home Assistant reaches the bridge through a reverse proxy path such as `https://ha.example.com/dahuabridge`, use that full public URL. The integration preserves that base path when it rewrites bridge-hosted HTTP links from the catalog.
+
+## Options
 
 The integration currently exposes runtime options for:
 
@@ -31,7 +33,7 @@ Current defaults:
 - preferred video source: `hls`
 - allowed poll interval range: `5` to `300` seconds
 
-## 🔄 Polling Model
+## Polling Model
 
 The integration is polling-based.
 
@@ -40,9 +42,10 @@ It periodically refreshes the bridge-native catalog and updates entities from th
 This means:
 
 - device behavior is ultimately owned by the bridge
-- entity availability and attributes follow the most recent successful catalog refresh
+- entity availability follows the most recent successful catalog refresh
+- repeated bridge snapshot and archive-search requests are still reduced on the bridge side by short caching and in-flight request coalescing
 
-## 🎞️ Preferred Video Profile
+## Preferred Video Profile
 
 This controls which bridge-provided profile the camera entity prefers when choosing stream-related URLs.
 
@@ -59,7 +62,7 @@ Behavior:
 - `quality` prioritizes the bridge main-stream style profiles
 - `stable` and `substream` prefer lower-bandwidth bridge-generated variants when available
 
-## 📺 Preferred Video Source
+## Preferred Video Source
 
 This controls which generated stream URL type the integration prefers.
 
@@ -90,15 +93,17 @@ Current source order is:
 2. direct RTSP
 3. bridge MJPEG
 
+RTSP selections keep the direct `rtsp://` URL from the catalog. They are not rewritten into bridge HTTP URLs.
+
 If Home Assistant cannot play the chosen source well in your environment, change this option before changing bridge-side stream modeling.
 
-## 🩺 Diagnostics
+## Diagnostics
 
 The integration supports diagnostics export for support and troubleshooting.
 
-Diagnostics redact sensitive bridge and stream details where appropriate.
+Diagnostics redact sensitive bridge and stream URLs where appropriate.
 
-## 📚 Next Step
+## Next Step
 
 - [features.md](features.md)
 - [entities-and-controls.md](entities-and-controls.md)

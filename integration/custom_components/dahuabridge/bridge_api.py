@@ -25,6 +25,25 @@ def normalize_bridge_url(raw: str) -> str:
     return urlunsplit((parsed.scheme, parsed.netloc, parsed.path.rstrip("/"), "", ""))
 
 
+def _is_absolute_target(target: str) -> bool:
+    parsed = urlsplit(target.strip())
+    return bool(parsed.scheme)
+
+
+def _apply_base_path(base_path: str, target_path: str) -> str:
+    normalized_base = base_path.rstrip("/")
+    normalized_target = target_path or "/"
+    if not normalized_target.startswith("/"):
+        normalized_target = "/" + normalized_target
+    if not normalized_base:
+        return normalized_target
+    if normalized_target == normalized_base or normalized_target.startswith(
+        normalized_base + "/"
+    ):
+        return normalized_target
+    return normalized_base + normalized_target
+
+
 class DahuaBridgeAPI:
     def __init__(self, session: ClientSession, base_url: str) -> None:
         self._session = session
@@ -47,7 +66,7 @@ class DahuaBridgeAPI:
             (
                 parsed_base.scheme,
                 parsed_base.netloc,
-                parsed_target.path,
+                _apply_base_path(parsed_base.path, parsed_target.path),
                 parsed_target.query,
                 parsed_target.fragment,
             )
@@ -222,7 +241,7 @@ class DahuaBridgeAPI:
         return payload
 
     def _absolute_url(self, target: str) -> str:
-        if target.startswith("http://") or target.startswith("https://"):
+        if _is_absolute_target(target):
             return target
         if not target.startswith("/"):
             target = "/" + target

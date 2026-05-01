@@ -77,8 +77,10 @@ def install() -> None:
     sys.modules["homeassistant.const"] = ha_const
 
     class ConfigEntry:
-        def __init__(self, options=None) -> None:
+        def __init__(self, data=None, options=None, title="DahuaBridge") -> None:
+            self.data = data or {}
             self.options = options or {}
+            self.title = title
 
     config_entries = types.ModuleType("homeassistant.config_entries")
     config_entries.ConfigEntry = ConfigEntry
@@ -131,7 +133,7 @@ def install() -> None:
 
         @property
         def available(self) -> bool:
-            return True
+            return bool(getattr(self.coordinator, "last_update_success", True))
 
     class DataUpdateCoordinator:
         @classmethod
@@ -159,6 +161,15 @@ def install() -> None:
     entity_platform.AddEntitiesCallback = object
     entity_platform.async_get_current_platform = lambda: _DummyPlatform()
     sys.modules["homeassistant.helpers.entity_platform"] = entity_platform
+
+    diagnostics = types.ModuleType("homeassistant.components.diagnostics")
+    diagnostics.async_redact_data = (
+        lambda data, keys: {
+            key: ("**REDACTED**" if key in keys else value)
+            for key, value in data.items()
+        }
+    )
+    sys.modules["homeassistant.components.diagnostics"] = diagnostics
 
     util = types.ModuleType("homeassistant.util")
     sys.modules["homeassistant.util"] = util

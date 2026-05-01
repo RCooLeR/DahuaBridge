@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 from typing import Any
-from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
 
 import voluptuous as vol
 from homeassistant.components.camera import Camera, CameraEntityFeature
@@ -108,7 +108,7 @@ class DahuaBridgeCamera(DahuaBridgeEntity, Camera):
 
     @property
     def available(self) -> bool:
-        return self.record is not None
+        return super().available
 
     @property
     def is_on(self) -> bool:
@@ -167,6 +167,19 @@ class DahuaBridgeCamera(DahuaBridgeEntity, Camera):
         channel = stream.get("channel")
         if isinstance(channel, int):
             attrs["bridge_channel"] = channel
+            if parent_id:
+                attrs["bridge_archive_recordings_url_template"] = (
+                    self.coordinator.api.absolute_url(
+                        f"/api/v1/nvr/{quote(parent_id, safe='')}/recordings"
+                    )
+                    + f"?channel={channel}&start={{start}}&end={{end}}&limit={{limit}}&event={{event}}"
+                )
+                attrs["bridge_archive_export_url"] = self.coordinator.api.absolute_url(
+                    f"/api/v1/nvr/{quote(parent_id, safe='')}/recordings/export"
+                )
+                attrs["bridge_playback_sessions_url"] = self.coordinator.api.absolute_url(
+                    f"/api/v1/nvr/{quote(parent_id, safe='')}/playback/sessions"
+                )
         attrs["stream_available"] = self._stream_available()
         attrs["preferred_video_profile"] = self.coordinator.preferred_video_profile
         attrs["preferred_video_source"] = self.coordinator.preferred_video_source
