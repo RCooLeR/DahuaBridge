@@ -758,12 +758,19 @@ async function startWebRtcPlayback(video: HTMLVideoElement, attachment: WebRtcAt
     return;
   }
 
+  const offerPayload = buildWebRtcOfferPayload(peer);
+  if (!offerPayload) {
+    closeWebRtcPeer(attachment);
+    throw new Error("WebRTC offer SDP is empty");
+  }
+
   const response = await fetch(attachment.offerUrl, {
     method: "POST",
     headers: {
+      "Accept": "application/json",
       "Content-Type": "application/json",
     },
-    body: JSON.stringify(peer.localDescription),
+    body: JSON.stringify(offerPayload),
   });
   if (!response.ok) {
     closeWebRtcPeer(attachment);
@@ -893,6 +900,28 @@ function normalizeHlsPlaybackUrl(value: string | null | undefined): string {
 
 function normalizeWebRtcOfferUrl(value: string | null | undefined): string {
   return buildWebRtcOfferUrl(value?.trim() ?? null) ?? "";
+}
+
+function buildWebRtcOfferPayload(peer: RTCPeerConnection): RTCSessionDescriptionInit | null {
+  const description = peer.localDescription;
+  const type = description?.type;
+  const rawSdp = description?.sdp ?? "";
+  const sdp = rawSdp
+    .replace(/\r\n/g, "\n")
+    .replace(/\r/g, "\n")
+    .split("\n")
+    .map((line) => line.trimEnd())
+    .filter((line) => line.length > 0)
+    .join("\r\n");
+
+  if (!type || !sdp.trim()) {
+    return null;
+  }
+
+  return {
+    type,
+    sdp: `${sdp}\r\n`,
+  };
 }
 
 async function waitForIceComplete(peer: RTCPeerConnection): Promise<void> {

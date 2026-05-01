@@ -93,6 +93,8 @@ type MediaConfig struct {
 	HWAccelArgs         []string                `yaml:"hwaccel_args"`
 	WebRTCICEServers    []WebRTCICEServerConfig `yaml:"webrtc_ice_servers"`
 	WebRTCUplinkTargets []string                `yaml:"webrtc_uplink_targets"`
+	HLSTempPath         string                  `yaml:"hls_temp_path"`
+	HLSKeepAfterExit    time.Duration           `yaml:"hls_keep_after_exit"`
 }
 
 type WebRTCICEServerConfig struct {
@@ -363,6 +365,15 @@ func (c *Config) normalize() error {
 	if c.Media.ClipPath == "" {
 		c.Media.ClipPath = "/data/clips"
 	}
+
+	c.Media.HLSTempPath = strings.TrimSpace(c.Media.HLSTempPath)
+	if c.Media.HLSTempPath == "" {
+		c.Media.HLSTempPath = "/data/tmp/dahuabridge/hls"
+	}
+	if c.Media.HLSKeepAfterExit < 0 {
+		c.Media.HLSKeepAfterExit = 0
+	}
+
 	if c.Media.IdleTimeout <= 0 {
 		c.Media.IdleTimeout = 30 * time.Second
 	}

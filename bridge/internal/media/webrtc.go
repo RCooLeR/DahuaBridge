@@ -662,14 +662,39 @@ func toPionSessionDescription(input WebRTCSessionDescription) (webrtc.SessionDes
 	if typ == webrtc.SDPTypeUnknown {
 		return webrtc.SessionDescription{}, fmt.Errorf("unsupported sdp type %q", input.Type)
 	}
-	sdp := strings.TrimSpace(input.SDP)
-	if sdp == "" {
+
+	sdp := normalizeSDPForPion(input.SDP)
+	if strings.TrimSpace(sdp) == "" {
 		return webrtc.SessionDescription{}, errors.New("sdp is required")
 	}
+
 	return webrtc.SessionDescription{
 		Type: typ,
 		SDP:  sdp,
 	}, nil
+}
+
+func normalizeSDPForPion(raw string) string {
+	sdp := strings.Trim(raw, "\x00 \t")
+	sdp = strings.ReplaceAll(sdp, "\r\n", "\n")
+	sdp = strings.ReplaceAll(sdp, "\r", "\n")
+
+	lines := strings.Split(sdp, "\n")
+	clean := make([]string, 0, len(lines))
+	for _, line := range lines {
+		line = strings.TrimRight(line, " \t")
+		if line == "" {
+			continue
+		}
+		clean = append(clean, line)
+	}
+	if len(clean) == 0 {
+		return ""
+	}
+
+	// Keep SDP in canonical CRLF form and explicitly terminate the final line.
+	// This avoids Pion parser failures like "failed to unmarshal SDP: EOF".
+	return strings.Join(clean, "\r\n") + "\r\n"
 }
 
 func toPionICEServers(input []WebRTCICEServer) []webrtc.ICEServer {

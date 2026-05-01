@@ -1172,9 +1172,15 @@ func New(
 			return
 		}
 
+		r.Body = http.MaxBytesReader(w, r.Body, 2<<20)
+
 		var offer mediaapi.WebRTCSessionDescription
 		if err := json.NewDecoder(r.Body).Decode(&offer); err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json body"})
+			return
+		}
+		if strings.TrimSpace(offer.Type) == "" || strings.TrimSpace(offer.SDP) == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "webrtc offer is missing type or sdp"})
 			return
 		}
 

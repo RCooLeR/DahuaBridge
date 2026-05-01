@@ -5,7 +5,7 @@ import { createRef, ref } from "lit/directives/ref.js";
 import { buildWebRtcOfferUrl } from "../ha/bridge-intercom";
 import type { CameraViewportSource } from "./surveillance-panel-media";
 
-const STARTUP_TIMEOUT_MS = 10_000;
+const STARTUP_TIMEOUT_MS = 20_000;
 const MAX_WEBRTC_RECONNECT_ATTEMPTS = 3;
 
 export interface RemoteStreamDescriptor {
@@ -549,7 +549,7 @@ class DahuaBridgeRemoteStreamElement extends LitElement {
   }
 }
 
-function canPlayNativeHls(video: HTMLVideoElement): boolean {
+function describeVideoError(video: HTMLVideoElement): string { const error = video.error; if (!error) { return "none"; } const names: Record<number, string> = { 1: "MEDIA_ERR_ABORTED", 2: "MEDIA_ERR_NETWORK", 3: "MEDIA_ERR_DECODE", 4: "MEDIA_ERR_SRC_NOT_SUPPORTED", }; const name = names[error.code] ?? `MEDIA_ERR_${error.code}`; const message = typeof error.message === "string" && error.message.trim() ? `: ${error.message.trim()}` : ""; return `${name}${message}`; } function describeVideoError(video: HTMLVideoElement): string { const error = video.error; if (!error) { return "none"; } const names: Record<number, string> = { 1: "MEDIA_ERR_ABORTED", 2: "MEDIA_ERR_NETWORK", 3: "MEDIA_ERR_DECODE", 4: "MEDIA_ERR_SRC_NOT_SUPPORTED", }; const name = names[error.code] ?? `MEDIA_ERR_${error.code}`; const message = typeof error.message === "string" && error.message.trim() ? `: ${error.message.trim()}` : ""; return `${name}${message}`; } function canPlayNativeHls(video: HTMLVideoElement): boolean {
   return (
     video.canPlayType("application/vnd.apple.mpegurl") !== "" ||
     video.canPlayType("application/x-mpegURL") !== ""
@@ -598,6 +598,28 @@ function normalizeHlsPlaybackUrl(value: string | null | undefined): string {
     }
     return source;
   }
+}
+
+function buildWebRtcOfferPayload(peer: RTCPeerConnection): RTCSessionDescriptionInit | null {
+  const description = peer.localDescription;
+  const type = description?.type;
+  const rawSdp = description?.sdp ?? "";
+  const sdp = rawSdp
+    .replace(/\r\n/g, "\n")
+    .replace(/\r/g, "\n")
+    .split("\n")
+    .map((line) => line.trimEnd())
+    .filter((line) => line.length > 0)
+    .join("\r\n");
+
+  if (!type || !sdp.trim()) {
+    return null;
+  }
+
+  return {
+    type,
+    sdp: `${sdp}\r\n`,
+  };
 }
 
 async function waitForIceComplete(peer: RTCPeerConnection): Promise<void> {
