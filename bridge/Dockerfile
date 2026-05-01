@@ -7,55 +7,60 @@ WORKDIR /src
 
 ARG TARGETOS
 ARG TARGETARCH
-
-COPY go.mod go.sum ./
-RUN --mount=type=cache,target=/go/pkg/mod \
-    go mod download
-
-COPY cmd ./cmd
-COPY internal ./internal
-
 ARG VERSION=dev
 ARG COMMIT=unknown
 ARG BUILD_DATE=unknown
 
+COPY . .
+
+RUN --mount=type=cache,target=/go/pkg/mod \
+    go mod download
+
+
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
-    CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} \
+    set -eux; \
+    MODULE="$(go list -m)"; \
+    CGO_ENABLED=0 GOOS="${TARGETOS:-linux}" GOARCH="${TARGETARCH:-amd64}" \
     go build \
       -trimpath \
       -ldflags="-s -w \
-        -X RCooLeR/DahuaBridge/internal/buildinfo.Version=${VERSION} \
-        -X RCooLeR/DahuaBridge/internal/buildinfo.Commit=${COMMIT} \
-        -X RCooLeR/DahuaBridge/internal/buildinfo.BuildDate=${BUILD_DATE}" \
+        -X ${MODULE}/internal/buildinfo.Version=${VERSION} \
+        -X ${MODULE}/internal/buildinfo.Commit=${COMMIT} \
+        -X ${MODULE}/internal/buildinfo.BuildDate=${BUILD_DATE}" \
       -o /out/dahuabridge \
       ./cmd/dahuabridge
 
-FROM debian:bookworm-slim
+FROM --platform=$TARGETPLATFORM debian:bookworm-slim
 
-RUN sed -i 's/Components: main/Components: main contrib non-free non-free-firmware/' /etc/apt/sources.list.d/debian.sources \
-    && apt-get update \
-    && apt-get install -y --no-install-recommends \
+ARG TARGETARCH
+
+RUN set -eux; \
+    sed -i 's/Components: main/Components: main contrib non-free non-free-firmware/g' /etc/apt/sources.list.d/debian.sources; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends \
         ca-certificates \
         tzdata \
         wget \
         ffmpeg \
-        vainfo \
-        intel-media-va-driver-non-free \
-        libvpl2 \
-        libmfx-gen1.2 \
-        gosu \
-    && rm -rf /var/lib/apt/lists/* \
-    && groupadd --system dahuabridge \
-    && useradd --system --no-create-home --home-dir /app --shell /usr/sbin/nologin --gid dahuabridge dahuabridge \
-    && mkdir -p /app /config /data \
-    && chown -R dahuabridge:dahuabridge /app /config /data
+        gosu; \
+    if [ "${TARGETARCH:-amd64}" = "amd64" ]; then \
+        apt-get install -y --no-install-recommends \
+            vainfo \
+            intel-media-va-driver-non-free \
+            libvpl2 \
+            libmfx-gen1.2; \
+    fi; \
+    rm -rf /var/lib/apt/lists/*; \
+    groupadd --system dahuabridge; \
+    useradd --system --no-create-home --home-dir /app --shell /usr/sbin/nologin --gid dahuabridge dahuabridge; \
+    mkdir -p /app /config /data; \
+    chown -R dahuabridge:dahuabridge /app /config /data
 
 WORKDIR /app
 
 COPY --from=build /out/dahuabridge /app/dahuabridge
-COPY docker-entrypoint.sh /app/docker-entrypoint.sh
-RUN chmod 0755 /app/docker-entrypoint.sh
+COPY --chmod=0755 docker-entrypoint.sh /app/docker-entrypoint.sh
 
 EXPOSE 9205
 VOLUME ["/config"]

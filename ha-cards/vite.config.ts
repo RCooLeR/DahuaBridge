@@ -14,7 +14,7 @@ export default defineConfig({
         inlineDynamicImports: true,
       },
     },
-    sourcemap: false,
-    target: "es2022",
+    sourcemap: true,
+    target: ["es2020","chrome58","edge88","firefox72","node12","safari15"],
   },
 });
