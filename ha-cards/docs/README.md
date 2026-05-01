@@ -7,6 +7,7 @@ Use these pages in order:
 1. [Install](install.md)
 2. [Configuration](configuration.md)
 3. [Features](features.md)
+4. [Architecture](architecture.md)
 
 ## What This Section Covers
 

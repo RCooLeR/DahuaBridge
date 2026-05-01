@@ -34,9 +34,7 @@ import {
   resolveIntercomOfferUrl,
 } from "../ha/bridge-intercom";
 import {
-  syncRemoteStreamPlayback,
   syncRemoteStreamStyles,
-  teardownRemoteStreamPlayback,
 } from "./surveillance-panel-media";
 import { surveillancePanelBaseStyles, surveillancePanelOverviewStyles } from "./surveillance-panel-styles";
 
@@ -255,14 +253,12 @@ export class DahuaBridgeSurveillanceTileCard
   }
 
   disconnectedCallback(): void {
-    teardownRemoteStreamPlayback();
     void this.stopVtoMicrophone();
     super.disconnectedCallback();
   }
 
   protected updated(changedProperties: Map<PropertyKey, unknown>): void {
     syncRemoteStreamStyles(this.renderRoot);
-    syncRemoteStreamPlayback(this.renderRoot);
 
     if (
       this._vtoStreamPlaying &&
@@ -346,7 +342,7 @@ export class DahuaBridgeSurveillanceTileCard
                 {
                   controls: false,
                   preload: "none",
-                  fallbackOrder: ["hls", "mjpeg", "webrtc"],
+                  fallbackOrder: ["hls", "mjpeg"],
                 },
               )}
               <div class="tile-topbar">
@@ -708,7 +704,6 @@ export class DahuaBridgeSurveillanceTileCard
       vto.stream.profiles.some(
         (profile) =>
           Boolean(profile.localHlsUrl) ||
-          Boolean(profile.localWebRtcUrl) ||
           Boolean(profile.localMjpegUrl),
       )
     );

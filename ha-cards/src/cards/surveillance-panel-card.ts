@@ -33,9 +33,7 @@ import {
   resolveSelectedCameraStreamProfile,
   resolveSelectedCameraViewportSource,
   resolveStreamViewportSource,
-  syncRemoteStreamPlayback,
   syncRemoteStreamStyles,
-  teardownRemoteStreamPlayback,
   type CameraViewportSource,
 } from "./surveillance-panel-media";
 import type { RemoteStreamAudioHost } from "./surveillance-remote-stream";
@@ -390,7 +388,6 @@ export class DahuaBridgeSurveillancePanelCard
     this.cancelArchiveRefresh();
     this.cancelMp4Refresh();
     this.cancelTodayEventSummaryRefresh();
-    teardownRemoteStreamPlayback();
     void this.stopSelectedVtoMicrophone();
     this._runtime.disconnected();
     super.disconnectedCallback();
@@ -1276,7 +1273,7 @@ export class DahuaBridgeSurveillancePanelCard
         return renderSelectedCameraViewport(this.hass, camera, profileKey, source, true, {
           controls: false,
           preload: "none",
-          fallbackOrder: ["hls", "mjpeg", "webrtc"],
+          fallbackOrder: ["hls", "mjpeg"],
         });
       },
       cameraImageSrc: (cameraEntity, snapshotUrl) =>
@@ -1667,7 +1664,6 @@ export class DahuaBridgeSurveillancePanelCard
     const syncDelays = [0, 100, 300, 800, 1500];
     const runSyncAt = (index: number): void => {
       syncRemoteStreamStyles(this.renderRoot);
-      syncRemoteStreamPlayback(this.renderRoot);
       if (index >= syncDelays.length - 1) {
         this._remoteStreamSyncTimer = null;
         return;
@@ -1766,124 +1762,125 @@ export class DahuaBridgeSurveillancePanelCard
     }
   }
 
-  private selectOverview(): void {
-    const previousSelection = this._selection;
-    const nextState = selectOverviewState();
-    this._selection = nextState.selection;
-    this._detailTab = nextState.detailTab;
-    this._ptzAdjusting = nextState.ptzAdjusting;
-    this._eventHistoryPage = nextState.eventHistoryPage;
+  private resetSharedSelectionViewState(): void {
     this.resetEventFilters();
     this.resetArchiveEventFilter();
     this._archivePage = 0;
     this._mp4Page = 0;
-    this._nvrArchiveChannelNumber = null;
-    this._selectedCameraStreamProfile = null;
-    this._selectedCameraStreamSource = null;
     this._selectedPlaybackStreamProfile = null;
     this._selectedPlaybackStreamSource = null;
     this._selectedCameraAudioMuted = true;
+    this._selectedPlayback = null;
+    this._selectedBridgeRecordingPlayback = null;
+  }
+
+  private clearCameraSelectionState(): void {
+    this._selectedCameraStreamProfile = null;
+    this._selectedCameraStreamSource = null;
+  }
+
+  private clearVtoSelectionState(): void {
     this._selectedVtoStreamProfile = null;
     this._selectedVtoStreamSource = null;
     this._selectedVtoStreamPlaying = false;
-    this._selectedPlayback = null;
-    this._selectedBridgeRecordingPlayback = null;
+  }
+
+  private applySelectionTransition(
+    nextState: {
+      selection: PanelSelection;
+      detailTab: DetailTab;
+      ptzAdjusting: boolean;
+      eventHistoryPage: number;
+    },
+    options: {
+      openInspector?: boolean;
+      nvrArchiveChannelNumber?: number | null;
+      cameraProfile?: string | null;
+      cameraSource?: CameraViewportSource | null;
+      vtoProfile?: string | null;
+      vtoSource?: CameraViewportSource | null;
+      vtoPlaying?: boolean;
+    } = {},
+  ): void {
+    this._selection = nextState.selection;
+    this._detailTab = nextState.detailTab;
+    this._ptzAdjusting = nextState.ptzAdjusting;
+    this._eventHistoryPage = nextState.eventHistoryPage;
+    this._inspectorOpen = options.openInspector ?? this._inspectorOpen;
+    this._nvrArchiveChannelNumber = options.nvrArchiveChannelNumber ?? null;
+    this._selectedCameraStreamProfile = options.cameraProfile ?? null;
+    this._selectedCameraStreamSource = options.cameraSource ?? null;
+    this._selectedVtoStreamProfile = options.vtoProfile ?? null;
+    this._selectedVtoStreamSource = options.vtoSource ?? null;
+    this._selectedVtoStreamPlaying = options.vtoPlaying ?? false;
     void this.stopSelectedVtoMicrophone();
+  }
+
+  private selectOverview(): void {
+    const previousSelection = this._selection;
+    const nextState = selectOverviewState();
+    this.resetSharedSelectionViewState();
+    this.clearCameraSelectionState();
+    this.clearVtoSelectionState();
+    this.applySelectionTransition(nextState);
     this.requestUpdate("_selection", previousSelection);
   }
 
   private selectCamera(camera: CameraViewModel): void {
     const previousSelection = this._selection;
     const nextState = selectCameraState(camera);
-    this._selection = nextState.selection;
-    this._detailTab = nextState.detailTab;
-    this._ptzAdjusting = nextState.ptzAdjusting;
-    this._eventHistoryPage = nextState.eventHistoryPage;
-    this.resetEventFilters();
-    this.resetArchiveEventFilter();
-    this._archivePage = 0;
-    this._mp4Page = 0;
-    this._inspectorOpen = true;
-    this._nvrArchiveChannelNumber = null;
-    this._selectedCameraStreamProfile =
+    const cameraProfile =
       defaultSelectedStreamProfileKey(camera.stream) ??
       resolveSelectedCameraStreamProfile(camera, null)?.key ??
       null;
-    this._selectedCameraStreamSource = resolveSelectedCameraViewportSource(
+    const cameraSource = resolveSelectedCameraViewportSource(
       camera,
       null,
-      this._selectedCameraStreamProfile,
+      cameraProfile,
     );
-    this._selectedPlaybackStreamProfile = null;
-    this._selectedPlaybackStreamSource = null;
-    this._selectedCameraAudioMuted = true;
-    this._selectedVtoStreamProfile = null;
-    this._selectedVtoStreamSource = null;
-    this._selectedVtoStreamPlaying = false;
-    this._selectedPlayback = null;
-    this._selectedBridgeRecordingPlayback = null;
-    void this.stopSelectedVtoMicrophone();
+    this.resetSharedSelectionViewState();
+    this.clearVtoSelectionState();
+    this.applySelectionTransition(nextState, {
+      openInspector: true,
+      cameraProfile,
+      cameraSource,
+    });
     this.requestUpdate("_selection", previousSelection);
   }
 
   private selectNvr(nvr: NvrViewModel): void {
     const previousSelection = this._selection;
     const nextState = selectNvrState(nvr);
-    this._selection = nextState.selection;
-    this._detailTab = nextState.detailTab;
-    this._ptzAdjusting = nextState.ptzAdjusting;
-    this._eventHistoryPage = nextState.eventHistoryPage;
-    this.resetEventFilters();
-    this.resetArchiveEventFilter();
-    this._archivePage = 0;
-    this._mp4Page = 0;
-    this._inspectorOpen = true;
-    this._nvrArchiveChannelNumber = nvr.rooms
+    const nvrArchiveChannelNumber = nvr.rooms
       .flatMap((room) => room.channels)
       .find((channel) => channel.archive?.searchUrl && channel.archive.channel !== null)
       ?.archive?.channel ?? null;
-    this._selectedCameraStreamProfile = null;
-    this._selectedCameraStreamSource = null;
-    this._selectedPlaybackStreamProfile = null;
-    this._selectedPlaybackStreamSource = null;
-    this._selectedCameraAudioMuted = true;
-    this._selectedVtoStreamProfile = null;
-    this._selectedVtoStreamSource = null;
-    this._selectedVtoStreamPlaying = false;
-    this._selectedPlayback = null;
-    this._selectedBridgeRecordingPlayback = null;
-    void this.stopSelectedVtoMicrophone();
+    this.resetSharedSelectionViewState();
+    this.clearCameraSelectionState();
+    this.clearVtoSelectionState();
+    this.applySelectionTransition(nextState, {
+      openInspector: true,
+      nvrArchiveChannelNumber,
+    });
     this.requestUpdate("_selection", previousSelection);
   }
 
   private selectVto(vto: VtoViewModel): void {
     const previousSelection = this._selection;
     const nextState = selectVtoState(vto);
-    this._selection = nextState.selection;
-    this._detailTab = nextState.detailTab;
-    this._ptzAdjusting = nextState.ptzAdjusting;
-    this._eventHistoryPage = nextState.eventHistoryPage;
-    this.resetEventFilters();
-    this.resetArchiveEventFilter();
-    this._archivePage = 0;
-    this._mp4Page = 0;
-    this._inspectorOpen = true;
-    this._nvrArchiveChannelNumber = null;
-    this._selectedCameraStreamProfile = null;
-    this._selectedCameraStreamSource = null;
-    this._selectedPlaybackStreamProfile = null;
-    this._selectedPlaybackStreamSource = null;
-    this._selectedCameraAudioMuted = true;
-    this._selectedVtoStreamProfile = defaultSelectedStreamProfileKey(vto.stream);
-    this._selectedVtoStreamSource = resolveStreamViewportSource(
+    const vtoProfile = defaultSelectedStreamProfileKey(vto.stream);
+    const vtoSource = resolveStreamViewportSource(
       vto.stream,
       null,
-      this._selectedVtoStreamProfile,
+      vtoProfile,
     );
-    this._selectedVtoStreamPlaying = false;
-    this._selectedPlayback = null;
-    this._selectedBridgeRecordingPlayback = null;
-    void this.stopSelectedVtoMicrophone();
+    this.resetSharedSelectionViewState();
+    this.clearCameraSelectionState();
+    this.applySelectionTransition(nextState, {
+      openInspector: true,
+      vtoProfile,
+      vtoSource,
+    });
     this.requestUpdate("_selection", previousSelection);
   }
 
@@ -2328,19 +2325,30 @@ export class DahuaBridgeSurveillancePanelCard
       );
       const previousSelection = this._selection;
       const nextState = selectCameraState(archiveSource);
-      this._selection = nextState.selection;
-      this._detailTab =
+      const detailTab =
         this._detailTab === "events" || this._detailTab === "recordings"
           ? this._detailTab
           : nextState.detailTab;
-      this._ptzAdjusting = nextState.ptzAdjusting;
-      this._eventHistoryPage = nextState.eventHistoryPage;
-      this._inspectorOpen = true;
-      this._selectedCameraAudioMuted = true;
-      this._selectedVtoStreamProfile = null;
-      this._selectedVtoStreamSource = null;
-      this._selectedVtoStreamPlaying = false;
-      void this.stopSelectedVtoMicrophone();
+      this.resetSharedSelectionViewState();
+      this.clearVtoSelectionState();
+      this.applySelectionTransition(
+        {
+          ...nextState,
+          detailTab,
+        },
+        {
+          openInspector: true,
+          cameraProfile:
+            this._selectedCameraStreamProfile ??
+            defaultSelectedStreamProfileKey(archiveSource.stream) ??
+            null,
+          cameraSource: resolveSelectedCameraViewportSource(
+            archiveSource,
+            this._selectedCameraStreamSource,
+            this._selectedCameraStreamProfile,
+          ),
+        },
+      );
       this._selectedPlaybackStreamProfile = session.recommendedProfile;
       this._selectedPlaybackStreamSource = resolveInitialPlaybackViewportSource(
         session,
@@ -2721,8 +2729,6 @@ export class DahuaBridgeSurveillancePanelCard
     switch (source) {
       case "hls":
         return "HLS";
-      case "webrtc":
-        return "WebRTC";
       case "mjpeg":
         return "MJPEG";
     }
@@ -2751,15 +2757,12 @@ export class DahuaBridgeSurveillancePanelCard
       return true;
     }
 
-    if (selectedSource !== "hls" && selectedSource !== "webrtc") {
+    if (selectedSource !== "hls") {
       return false;
     }
     const profile = resolveSelectedCameraStreamProfile(camera, selectedProfileKey);
     if (!profile) {
       return false;
-    }
-    if (selectedSource === "webrtc") {
-      return Boolean(profile.localWebRtcUrl);
     }
     return Boolean(profile.localHlsUrl);
   }
@@ -2770,7 +2773,6 @@ export class DahuaBridgeSurveillancePanelCard
       vto.stream.profiles.some(
         (profile) =>
           Boolean(profile.localHlsUrl) ||
-          Boolean(profile.localWebRtcUrl) ||
           Boolean(profile.localMjpegUrl),
       )
     );
@@ -2781,7 +2783,7 @@ export class DahuaBridgeSurveillancePanelCard
     selectedProfileKey: string | null,
     selectedSource: CameraViewportSource | null,
   ): boolean {
-    if (selectedSource !== "hls" && selectedSource !== "webrtc") {
+    if (selectedSource !== "hls") {
       return false;
     }
     return availablePlaybackViewportSources(session, selectedProfileKey).includes(selectedSource);

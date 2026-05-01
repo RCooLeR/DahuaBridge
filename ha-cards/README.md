@@ -13,6 +13,7 @@ The cards consume entities and metadata already created by the DahuaBridge Home 
 - install and build: [docs/install.md](docs/install.md)
 - configure cards: [docs/configuration.md](docs/configuration.md)
 - review card features: [docs/features.md](docs/features.md)
+- review frontend architecture: [docs/architecture.md](docs/architecture.md)
 
 ## Current Card Entry Points
 
