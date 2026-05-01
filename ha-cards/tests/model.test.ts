@@ -1112,4 +1112,105 @@ describe("buildPanelModel", () => {
       "West Entry",
     );
   });
+  it("builds archive capabilities from integration archive attributes when feature metadata is absent", () => {
+    const now = new Date().toISOString();
+    const hass: HomeAssistant = {
+      states: {
+        "camera.west20_nvr_channel_01_camera": {
+          entity_id: "camera.west20_nvr_channel_01_camera",
+          state: "streaming",
+          attributes: {
+            friendly_name: "Entrance Gate",
+            bridge_device_id: "west20_nvr_channel_01",
+            bridge_root_device_id: "west20_nvr",
+            bridge_device_kind: "nvr_channel",
+            stream_source: "http://bridge.local:9205/api/v1/media/hls/west20_nvr_channel_01/quality",
+            bridge_archive_recordings_url_template:
+              "http://bridge.local:9205/api/v1/nvr/west20_nvr/recordings?channel={channel}&start={start}&end={end}&limit={limit}&event={event}",
+            bridge_playback_sessions_url:
+              "http://bridge.local:9205/api/v1/nvr/west20_nvr/playback/sessions",
+          },
+          last_changed: now,
+          last_updated: now,
+        },
+        "binary_sensor.west20_nvr_channel_01_online": {
+          entity_id: "binary_sensor.west20_nvr_channel_01_online",
+          state: "on",
+          attributes: {},
+          last_changed: now,
+          last_updated: now,
+        },
+      },
+      callService: async () => undefined,
+    };
+
+    const config: SurveillancePanelCardConfig = {
+      type: "custom:dahuabridge-surveillance-panel",
+    };
+
+    const model = buildPanelModel(hass, config, { kind: "overview" });
+
+    expect(model.cameras[0]?.archive).toMatchObject({
+      supported: true,
+      searchUrl: "http://bridge.local:9205/api/v1/nvr/west20_nvr/recordings",
+      playbackUrl: "http://bridge.local:9205/api/v1/nvr/west20_nvr/playback/sessions",
+      channel: 1,
+      defaultLimit: 100,
+    });
+  });
+
+  it("keeps camera stream audio browser-local even when legacy mute actions are advertised", () => {
+    const now = new Date().toISOString();
+    const hass: HomeAssistant = {
+      states: {
+        "camera.west20_nvr_channel_01_camera": {
+          entity_id: "camera.west20_nvr_channel_01_camera",
+          state: "streaming",
+          attributes: {
+            friendly_name: "Entrance Gate",
+            bridge_device_id: "west20_nvr_channel_01",
+            bridge_root_device_id: "west20_nvr",
+            bridge_device_kind: "nvr_channel",
+            stream_source: "http://bridge.local:9205/api/v1/media/hls/west20_nvr_channel_01/quality",
+            bridge_features: [
+              {
+                key: "mute",
+                label: "Mute",
+                kind: "action",
+                url: "http://bridge.local:9205/api/v1/nvr/west20_nvr/channels/1/audio/mute",
+                supported: true,
+              },
+            ],
+          },
+          last_changed: now,
+          last_updated: now,
+        },
+        "binary_sensor.west20_nvr_channel_01_online": {
+          entity_id: "binary_sensor.west20_nvr_channel_01_online",
+          state: "on",
+          attributes: {},
+          last_changed: now,
+          last_updated: now,
+        },
+        "sensor.west20_nvr_channel_01_audio_codec": {
+          entity_id: "sensor.west20_nvr_channel_01_audio_codec",
+          state: "aac",
+          attributes: {},
+          last_changed: now,
+          last_updated: now,
+        },
+      },
+      callService: async () => undefined,
+    };
+
+    const config: SurveillancePanelCardConfig = {
+      type: "custom:dahuabridge-surveillance-panel",
+    };
+
+    const model = buildPanelModel(hass, config, { kind: "overview" });
+
+    expect(model.cameras[0]?.audioMuteSupported).toBe(true);
+    expect(model.cameras[0]?.audioMuteActionUrl).toBeNull();
+    expect(model.cameras[0]?.audioMuted).toBe(false);
+  });
 });

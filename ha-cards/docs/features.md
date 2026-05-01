@@ -19,6 +19,7 @@ The cards can use:
 - a browser-side `browser_bridge_url` override when Home Assistant and the browser reach the bridge differently
 
 This is important for reverse-proxy and split-network deployments.
+It is also the supported fix when the bridge emits `public_base_url` media URLs that the local browser must rewrite to a different reachable base.
 
 ## 3. Topology And Presentation
 
@@ -44,6 +45,7 @@ The panel supports:
 The panel supports:
 
 - NVR archive search
+- archive search fallback from integration camera attributes when `bridge_features` metadata is incomplete
 - event type and date window filters for archive searches
 - selected-camera archive browsing
 - inline playback session creation
@@ -63,7 +65,7 @@ Depending on what the bridge exposes for a device, the cards can surface:
 
 - PTZ actions
 - aux/light/warning light/siren actions
-- audio mute or stream-audio toggles
+- browser-local stream audio toggles
 - bridge clip recording actions
 - VTO call, lock, and intercom actions
 

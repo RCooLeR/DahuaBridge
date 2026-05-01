@@ -1,4 +1,5 @@
 import type { HomeAssistant } from "../types/home-assistant";
+import { logCardInfo, redactUrlForLog } from "../utils/logging";
 
 export interface BridgeRequestOptions {
   method?: "POST" | "GET";
@@ -79,38 +80,10 @@ function logBridgeRequest(
   status?: number,
   durationMs?: number,
 ): void {
-  if (typeof console === "undefined" || typeof console.debug !== "function") {
-    return;
-  }
-  console.debug("[DahuaBridge]", `card bridge ${phase}`, {
+  logCardInfo(`card bridge ${phase}`, {
     method,
-    url: redactBridgeUrl(targetUrl),
+    url: redactUrlForLog(targetUrl),
     status,
     duration_ms: durationMs === undefined ? undefined : Math.round(durationMs),
   });
-}
-
-function redactBridgeUrl(targetUrl: string): string {
-  try {
-    const parsed = new URL(targetUrl, window.location.origin);
-    for (const key of [...parsed.searchParams.keys()]) {
-      if (shouldRedactUrlParam(key)) {
-        parsed.searchParams.set(key, "[redacted]");
-      }
-    }
-    return parsed.toString();
-  } catch {
-    return targetUrl;
-  }
-}
-
-function shouldRedactUrlParam(key: string): boolean {
-  const normalized = key.trim().toLowerCase();
-  return (
-    normalized.includes("password") ||
-    normalized.includes("passwd") ||
-    normalized.includes("pwd") ||
-    normalized.includes("token") ||
-    normalized.includes("secret")
-  );
 }

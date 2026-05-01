@@ -191,6 +191,11 @@ func (m *Manager) StartClip(ctx context.Context, request ClipStartRequest) (Clip
 	}
 	m.clipJobs[job.info.ID] = job
 	m.setMediaWorkerCountLocked()
+	job.logger.Info().
+		Str("clip_id", job.info.ID).
+		Dur("duration", duration).
+		Str("output_path", job.outputPath).
+		Msg("created clip job")
 	if m.metrics != nil {
 		m.metrics.ObserveMediaStart(entry.ID, resolvedProfileName, nil)
 	}
@@ -372,6 +377,12 @@ func (job *clipJob) run(parent *Manager, profile streams.Profile, duration time.
 	includeAudio := parent.shouldIncludeSourceAudio(profile, job.logger)
 	args := buildClipFFmpegArgs(parent.cfg, profile, duration, job.outputPath, includeAudio, disableStdin)
 	job.logger.Debug().Strs("ffmpeg_args", redactFFmpegArgs(args)).Msg("starting clip worker")
+	job.logger.Info().
+		Str("clip_id", job.info.ID).
+		Dur("duration", duration).
+		Bool("include_audio", includeAudio).
+		Bool("disable_stdin", disableStdin).
+		Msg("clip transcode starting")
 
 	cmd := exec.Command(parent.cfg.FFmpegPath, args...)
 	var stdin io.WriteCloser
@@ -402,6 +413,9 @@ func (job *clipJob) run(parent *Manager, profile streams.Profile, duration time.
 		job.complete(parent, err)
 		return
 	}
+	job.logger.Info().
+		Str("clip_id", job.info.ID).
+		Msg("clip transcode started")
 	started <- nil
 
 	stderrDone := drainFFmpegStderr(stderr, 64*1024)
@@ -436,7 +450,13 @@ func (job *clipJob) complete(parent *Manager, waitErr error) {
 	}
 	if waitErr != nil {
 		job.logger.Error().Err(waitErr).Msg("clip worker stopped")
+		return
 	}
+	job.logger.Info().
+		Str("clip_id", job.info.ID).
+		Int64("bytes", job.info.Bytes).
+		Str("status", string(job.info.Status)).
+		Msg("clip transcode completed")
 }
 
 func (job *clipJob) stop(ctx context.Context) error {
@@ -447,6 +467,7 @@ func (job *clipJob) stop(ctx context.Context) error {
 	job.mu.Unlock()
 
 	if stdin != nil {
+		job.logger.Info().Str("clip_id", job.info.ID).Msg("clip stop requested")
 		_, _ = io.WriteString(stdin, "q\n")
 		_ = stdin.Close()
 	}
@@ -480,6 +501,7 @@ func (m *Manager) removeClipJob(id string, job *clipJob) {
 	if existing, ok := m.clipJobs[id]; ok && existing == job {
 		delete(m.clipJobs, id)
 		m.setMediaWorkerCountLocked()
+		job.logger.Info().Str("clip_id", id).Msg("removed clip job")
 	}
 }
 

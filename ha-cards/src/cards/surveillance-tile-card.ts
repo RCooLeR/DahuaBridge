@@ -37,6 +37,8 @@ import {
   syncRemoteStreamStyles,
 } from "./surveillance-panel-media";
 import { surveillancePanelBaseStyles, surveillancePanelOverviewStyles } from "./surveillance-panel-styles";
+import { openExternalUrl } from "../utils/browser";
+import { logCardInfo, redactUrlForLog } from "../utils/logging";
 
 const vtoSchema = z
   .object({
@@ -439,9 +441,6 @@ export class DahuaBridgeSurveillanceTileCard
                           () => void this.toggleCameraAudio(camera),
                           this.renderIcon,
                           {
-                            disabled:
-                              camera.audioMuteSupported &&
-                              this._actions.isBusy(`${camera.deviceId}:audio:mute`),
                             active: !this._cameraAudioMuted,
                           },
                         )
@@ -640,19 +639,15 @@ export class DahuaBridgeSurveillanceTileCard
     this._cameraAudioMuted = nextMuted;
     this.requestUpdate("_cameraAudioMuted", previousMuted);
     this.syncCameraViewportAudioState(nextMuted);
+    this.logMedia("card tile camera audio toggled", {
+      device_id: camera.deviceId,
+      muted: nextMuted,
+      audio_supported: camera.audioMuteSupported,
+    });
 
     if (!camera.audioMuteSupported) {
       return;
     }
-
-    const succeeded = await this._actions.triggerCameraMuteAction(camera, nextMuted);
-    if (succeeded) {
-      return;
-    }
-
-    this._cameraAudioMuted = previousMuted;
-    this.requestUpdate("_cameraAudioMuted", nextMuted);
-    this.syncCameraViewportAudioState(previousMuted);
   }
 
   private async triggerVtoBridgeRecording(vto: VtoViewModel): Promise<void> {
@@ -669,7 +664,16 @@ export class DahuaBridgeSurveillanceTileCard
     this._busyActions = nextBusy;
     this._errorMessage = "";
     try {
+      this.logMedia("card tile vto bridge recording request", {
+        device_id: vto.deviceId,
+        active: vto.bridgeRecordingActive,
+        url: redactUrlForLog(targetUrl),
+      });
       await postBridgeRequest(targetUrl);
+      this.logMedia("card tile vto bridge recording completed", {
+        device_id: vto.deviceId,
+        active: vto.bridgeRecordingActive,
+      });
     } catch (error) {
       this._errorMessage =
         error instanceof Error ? error.message : "Bridge MP4 recording request failed.";
@@ -691,10 +695,15 @@ export class DahuaBridgeSurveillanceTileCard
       this._vtoStreamPlaying = true;
       this.requestUpdate("_vtoStreamPlaying", previousPlaying);
     }
+    this.logMedia("card tile vto microphone enable", {
+      device_id: vto.deviceId,
+      offer_url: redactUrlForLog(offerUrl),
+    });
     await this._intercomSession.enable(offerUrl);
   }
 
   private async stopVtoMicrophone(): Promise<void> {
+    this.logMedia("card tile vto microphone disable");
     await this._intercomSession.disable();
   }
 
@@ -765,7 +774,17 @@ export class DahuaBridgeSurveillanceTileCard
     if (!targetUrl.trim()) {
       return;
     }
-    window.open(targetUrl, "_blank", "noopener,noreferrer");
+    this.logMedia("card tile external open", {
+      url: redactUrlForLog(targetUrl),
+    });
+    openExternalUrl(targetUrl);
+  }
+
+  private logMedia(message: string, details?: Record<string, unknown>): void {
+    logCardInfo(message, {
+      card: "surveillance-tile",
+      ...details,
+    });
   }
 
   private vtoBadgeTone(vto: VtoViewModel): "success" | "warning" | "critical" | "info" {

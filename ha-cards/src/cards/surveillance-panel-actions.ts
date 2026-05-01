@@ -187,26 +187,6 @@ export class SurveillancePanelActions {
     });
   }
 
-  async triggerCameraMuteAction(
-    camera: CameraViewModel,
-    muted: boolean,
-  ): Promise<boolean> {
-    if (!camera.audioMuteActionUrl) {
-      this.host.setError(
-        "Camera stream-audio control is unavailable. The bridge did not expose a stream-audio toggle URL for this camera.",
-      );
-      return false;
-    }
-
-    return this.runAction(`${camera.deviceId}:audio:mute`, async () => {
-      await postBridgeRequest(camera.audioMuteActionUrl!, {
-        body: {
-          muted,
-        },
-      });
-    });
-  }
-
   async triggerRecordingAction(
     camera: CameraViewModel,
     action: "start" | "stop",

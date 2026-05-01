@@ -16,6 +16,7 @@ Current repo status:
   - `MP4`
   - `Settings`
 - archive-backed camera views support local-day filtering, event-type filtering for event clips, pagination, playback launch, and export/download actions
+- archive playback/export still works when the integration only exposes dedicated archive URL attributes and not full archive feature metadata
 - bridge-owned MP4 clips can be browsed by day and stopped or downloaded from the card
 
 ## What The Card Layer Owns
