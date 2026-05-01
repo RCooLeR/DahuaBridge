@@ -4,7 +4,9 @@ import {
   availableCameraViewportSources,
   availablePlaybackViewportSources,
   cameraImageSrc,
+  defaultOverviewStreamProfileKey,
   resolveInitialPlaybackViewportSource,
+  resolveOverviewCameraViewportSource,
   resolvePlaybackViewportSource,
   resolveSelectedCameraStreamProfile,
   resolveSelectedCameraViewportSource,
@@ -170,6 +172,29 @@ describe("camera media helpers", () => {
     ] satisfies CameraViewportSource[]);
     expect(resolveSelectedCameraViewportSource(camera, "webrtc", "quality")).toBe("webrtc");
     expect(resolveSelectedCameraViewportSource(camera, null, "quality")).toBe("webrtc");
+  });
+
+  it("prefers low-bandwidth sources for overview tiles", () => {
+    const camera = buildCamera({
+      stream: {
+        ...buildCamera().stream,
+        preferredVideoSource: "webrtc",
+        profiles: [
+          {
+            ...buildCamera().stream.profiles[0]!,
+            localWebRtcUrl: "http://bridge.local:9205/api/v1/media/webrtc/west20_nvr_channel_01/quality",
+          },
+          {
+            ...buildCamera().stream.profiles[1]!,
+            localHlsUrl: "http://bridge.local:9205/api/v1/media/hls/west20_nvr_channel_01/stable",
+          },
+        ],
+      },
+    });
+
+    const overviewProfileKey = defaultOverviewStreamProfileKey(camera.stream);
+    expect(overviewProfileKey).toBe("stable");
+    expect(resolveOverviewCameraViewportSource(camera, overviewProfileKey)).toBe("hls");
   });
 
   it("keeps playback on WebRTC when the session offers it", () => {
