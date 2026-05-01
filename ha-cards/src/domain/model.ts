@@ -22,6 +22,10 @@ import {
 import type {
   CameraArchiveCapabilities,
 } from "./archive";
+import {
+  buildTodayEventHeaderMetrics,
+  type PanelTodayEventSummaryModel,
+} from "./event-summary";
 import type {
   CameraAuxActionName,
   CameraAuxActionTargetModel,
@@ -370,6 +374,7 @@ export function buildPanelModel(
   bridgeEvents?: BridgeEvent[] | null,
   eventLookbackHoursOverride?: number,
   registrySnapshot?: RegistrySnapshot | null,
+  todayEventSummary?: PanelTodayEventSummaryModel | null,
 ): PanelModel {
   const browserBridgeUrl = normalizeBrowserBridgeUrl(config.browser_bridge_url);
   const topology = discoverBridgeTopology(hass, registrySnapshot);
@@ -397,38 +402,44 @@ export function buildPanelModel(
 
   const onlineCount =
     cameras.filter((camera) => camera.online).length + vtos.filter((entry) => entry.online).length;
-  const motionCount = cameras.filter((camera) =>
-    camera.detections.some((detection) => detection.key === "motion"),
-  ).length;
-  const humanCount = cameras.filter((camera) =>
-    camera.detections.some((detection) => detection.key === "human"),
-  ).length;
-  const transportCount = cameras.filter((camera) =>
-    camera.detections.some((detection) => detection.key === "vehicle"),
-  ).length;
-
   const headerMetrics: HeaderMetric[] = [
     {
       label: "Cameras Online",
       value: `${onlineCount}/${cameras.length + vtos.length}`,
       tone: onlineCount > 0 ? "success" : "critical",
     },
-    {
-      label: "Motion",
-      value: `${motionCount}`,
-      tone: motionCount > 0 ? "warning" : "neutral",
-    },
-    {
-      label: "Human",
-      value: `${humanCount}`,
-      tone: humanCount > 0 ? "info" : "neutral",
-    },
-    {
-      label: "Transport",
-      value: `${transportCount}`,
-      tone: transportCount > 0 ? "info" : "neutral",
-    },
   ];
+  const eventHeaderMetrics = buildTodayEventHeaderMetrics(todayEventSummary ?? null);
+  if (eventHeaderMetrics) {
+    headerMetrics.push(...eventHeaderMetrics);
+  } else {
+    const motionCount = cameras.filter((camera) =>
+      camera.detections.some((detection) => detection.key === "motion"),
+    ).length;
+    const humanCount = cameras.filter((camera) =>
+      camera.detections.some((detection) => detection.key === "human"),
+    ).length;
+    const vehicleCount = cameras.filter((camera) =>
+      camera.detections.some((detection) => detection.key === "vehicle"),
+    ).length;
+    headerMetrics.push(
+      {
+        label: "Motion",
+        value: `${motionCount}`,
+        tone: motionCount > 0 ? "warning" : "neutral",
+      },
+      {
+        label: "Human",
+        value: `${humanCount}`,
+        tone: humanCount > 0 ? "info" : "neutral",
+      },
+      {
+        label: "Vehicle",
+        value: `${vehicleCount}`,
+        tone: vehicleCount > 0 ? "info" : "neutral",
+      },
+    );
+  }
 
   if (nvrs.length > 0) {
     const healthy = nvrs.every((nvr) => nvr.healthy);

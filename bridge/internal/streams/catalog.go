@@ -1133,11 +1133,17 @@ func buildNVRChannelControlSummary(publicBaseURL string, deviceID string, channe
 		}
 	}
 	if auxSupported {
+		auxOutputs := anyStringSlice(state.Info, "control_aux_outputs")
+		auxFeatures := anyStringSlice(state.Info, "control_aux_features")
+		if !anyBool(state.Info, "control_imou_configured") {
+			auxOutputs = filterNVRDeterrenceValues(auxOutputs)
+			auxFeatures = filterNVRDeterrenceValues(auxFeatures)
+		}
 		summary.Aux = &AuxControlSummary{
 			URL:       buildNVRChannelAuxURL(publicBaseURL, deviceID, channel),
 			Supported: true,
-			Outputs:   anyStringSlice(state.Info, "control_aux_outputs"),
-			Features:  anyStringSlice(state.Info, "control_aux_features"),
+			Outputs:   auxOutputs,
+			Features:  auxFeatures,
 		}
 	}
 	if audioKnown {
@@ -1167,6 +1173,19 @@ func buildNVRChannelControlSummary(publicBaseURL string, deviceID string, channe
 	}
 	summary.ValidationNotes = anyStringSlice(state.Info, "validation_notes")
 	return summary
+}
+
+func filterNVRDeterrenceValues(values []string) []string {
+	filtered := make([]string, 0, len(values))
+	for _, value := range values {
+		switch strings.ToLower(strings.TrimSpace(value)) {
+		case "aux", "siren", "warning_light":
+			continue
+		default:
+			filtered = append(filtered, value)
+		}
+	}
+	return filtered
 }
 
 func conditionalString(enabled bool, value string) string {

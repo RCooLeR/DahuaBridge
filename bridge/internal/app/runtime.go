@@ -165,7 +165,6 @@ func (r *runtimeServices) NVRSnapshot(ctx context.Context, deviceID string, chan
 func (r *runtimeServices) NVRRecordings(ctx context.Context, deviceID string, query dahua.NVRRecordingQuery) (dahua.NVRRecordingSearchResult, error) {
 	r.mu.RLock()
 	searcher, ok := r.nvrRecordings[deviceID]
-	mediaReader := r.media
 	r.mu.RUnlock()
 	if !ok {
 		return dahua.NVRRecordingSearchResult{}, fmt.Errorf("%w: %s", dahua.ErrDeviceNotFound, deviceID)
@@ -178,29 +177,8 @@ func (r *runtimeServices) NVRRecordings(ctx context.Context, deviceID string, qu
 	if result.DeviceID == "" {
 		result.DeviceID = deviceID
 	}
-	if mediaReader != nil && isAllRecordingEventFilter(query.EventCode) {
-		clips, clipsErr := mediaReader.FindClips(media.ClipQuery{
-			RootDeviceID: deviceID,
-			Channel:      query.Channel,
-			StartTime:    query.StartTime,
-			EndTime:      query.EndTime,
-			Limit:        query.Limit,
-		})
-		if clipsErr == nil {
-			bridgeItems := bridgeClipsToRecordings(r.cfg.HomeAssistant.PublicBaseURL, clips)
-			sort.Slice(bridgeItems, func(i, j int) bool {
-				return bridgeItems[i].StartTime > bridgeItems[j].StartTime
-			})
-			if query.Limit <= 0 {
-				result.Items = append(result.Items, bridgeItems...)
-			} else if remaining := query.Limit - len(result.Items); remaining > 0 {
-				if len(bridgeItems) > remaining {
-					bridgeItems = bridgeItems[:remaining]
-				}
-				result.Items = append(result.Items, bridgeItems...)
-			}
-			result.ReturnedCount = len(result.Items)
-		}
+	if result.Items == nil {
+		result.Items = []dahua.NVRRecording{}
 	}
 	return result, nil
 }

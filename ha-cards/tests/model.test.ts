@@ -688,9 +688,69 @@ describe("buildPanelModel", () => {
     );
     expect(model.headerMetrics).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ label: "Transport", value: "1", tone: "info" }),
+        expect.objectContaining({ label: "Vehicle", value: "1", tone: "info" }),
       ]),
     );
+  });
+
+  it("prefers today's event summary metrics over fallback detection counters", () => {
+    const now = new Date().toISOString();
+    const hass: HomeAssistant = {
+      states: {
+        "camera.driveway_ipc_camera": {
+          entity_id: "camera.driveway_ipc_camera",
+          state: "streaming",
+          attributes: {
+            friendly_name: "Driveway IPC",
+            bridge_device_id: "driveway_ipc",
+            bridge_root_device_id: "driveway_ipc",
+            bridge_device_kind: "ipc",
+            stream_source: "http://bridge.local:9205/api/v1/ipc/driveway_ipc/stream",
+          },
+          last_changed: now,
+          last_updated: now,
+        },
+        "binary_sensor.driveway_ipc_online": {
+          entity_id: "binary_sensor.driveway_ipc_online",
+          state: "on",
+          attributes: {},
+          last_changed: now,
+          last_updated: now,
+        },
+      },
+      callService: async () => undefined,
+    };
+
+    const config: SurveillancePanelCardConfig = {
+      type: "custom:dahuabridge-surveillance-panel",
+    };
+
+    const model = buildPanelModel(
+      hass,
+      config,
+      { kind: "overview" },
+      undefined,
+      undefined,
+      undefined,
+      {
+        date: "2026-05-01",
+        totalCount: 9,
+        humanCount: 4,
+        vehicleCount: 3,
+        animalCount: 1,
+        ivsCount: 2,
+      },
+    );
+
+    expect(model.headerMetrics).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ label: "Events Today", value: "9", tone: "warning" }),
+        expect.objectContaining({ label: "Human", value: "4", tone: "info" }),
+        expect.objectContaining({ label: "Vehicle", value: "3", tone: "info" }),
+        expect.objectContaining({ label: "IVS", value: "2", tone: "warning" }),
+      ]),
+    );
+    expect(model.headerMetrics.some((metric) => metric.label === "Motion")).toBe(false);
   });
 
   it("preserves VTO lock, alarm, and intercom session detail in the panel model", () => {

@@ -1019,6 +1019,12 @@ func (w *hlsWorker) buildFFmpegArgs(attempt ffmpegStartAttempt) []string {
 	}
 	segmentSeconds := int(maxInt(int(w.parent.cfg.HLSSegmentTime/time.Second), 1))
 	gopSize := maxInt(frameRate*segmentSeconds, frameRate)
+	hlsListSize := strconv.Itoa(w.parent.cfg.HLSListSize)
+	hlsFlags := "delete_segments+independent_segments+append_list+omit_endlist+temp_file"
+	if w.isPlaybackStream() {
+		hlsListSize = "0"
+		hlsFlags = "independent_segments+append_list+temp_file"
+	}
 
 	args := []string{
 		"-hide_banner",
@@ -1042,12 +1048,16 @@ func (w *hlsWorker) buildFFmpegArgs(attempt ffmpegStartAttempt) []string {
 		"-ar", "48000",
 		"-f", "hls",
 		"-hls_time", formatFFmpegSeconds(w.parent.cfg.HLSSegmentTime),
-		"-hls_list_size", strconv.Itoa(w.parent.cfg.HLSListSize),
-		"-hls_flags", "delete_segments+independent_segments+append_list+omit_endlist+temp_file",
+		"-hls_list_size", hlsListSize,
+		"-hls_flags", hlsFlags,
 		"-hls_segment_filename", "segment_%03d.ts",
 		"index.m3u8",
 	)
 	return args
+}
+
+func (w *hlsWorker) isPlaybackStream() bool {
+	return strings.HasPrefix(strings.TrimSpace(w.streamID), "nvrpb_")
 }
 
 func (w *hlsWorker) stopWhenIdle() {

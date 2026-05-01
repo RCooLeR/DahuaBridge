@@ -130,10 +130,10 @@ func TestBuildCatalogForNVRChannel(t *testing.T) {
 	if entry.Controls.Aux.URL != "http://bridge.local:8080/api/v1/nvr/west20_nvr/channels/1/aux" {
 		t.Fatalf("unexpected aux url %q", entry.Controls.Aux.URL)
 	}
-	if len(entry.Controls.Aux.Outputs) != 3 || entry.Controls.Aux.Outputs[0] != "aux" {
+	if len(entry.Controls.Aux.Outputs) != 2 || entry.Controls.Aux.Outputs[0] != "light" {
 		t.Fatalf("unexpected aux outputs %+v", entry.Controls.Aux.Outputs)
 	}
-	if len(entry.Controls.Aux.Features) != 3 || entry.Controls.Aux.Features[0] != "siren" {
+	if len(entry.Controls.Aux.Features) != 1 || entry.Controls.Aux.Features[0] != "wiper" {
 		t.Fatalf("unexpected aux features %+v", entry.Controls.Aux.Features)
 	}
 	if entry.Controls.Audio.Supported || !entry.Controls.Audio.Mute || entry.Controls.Audio.Volume {

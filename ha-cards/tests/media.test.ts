@@ -4,6 +4,7 @@ import {
   availableCameraViewportSources,
   availablePlaybackViewportSources,
   cameraImageSrc,
+  resolveInitialPlaybackViewportSource,
   resolvePlaybackViewportSource,
   resolveSelectedCameraStreamProfile,
   resolveSelectedCameraViewportSource,
@@ -201,6 +202,35 @@ describe("camera media helpers", () => {
       "webrtc",
     ] satisfies CameraViewportSource[]);
     expect(resolvePlaybackViewportSource(session, "webrtc", "quality")).toBe("webrtc");
+  });
+
+  it("starts playback on HLS instead of inheriting live MJPEG", () => {
+    const session: NvrPlaybackSessionModel = {
+      id: "nvrpb_test",
+      streamId: "nvrpb_test",
+      deviceId: "west20_nvr",
+      sourceStreamId: "west20_nvr_channel_01",
+      name: "Entrance",
+      channel: 1,
+      startTime: "2026-05-01T10:00:00Z",
+      endTime: "2026-05-01T10:10:00Z",
+      seekTime: "2026-05-01T10:00:00Z",
+      recommendedProfile: "quality",
+      snapshotUrl: null,
+      createdAt: "2026-05-01T10:00:00Z",
+      expiresAt: "2026-05-01T10:10:00Z",
+      profiles: {
+        quality: {
+          name: "quality",
+          hlsUrl: "http://bridge.local:9205/api/v1/media/hls/nvrpb_test/quality/index.m3u8",
+          mjpegUrl: "http://bridge.local:9205/api/v1/media/mjpeg/nvrpb_test/quality",
+          webrtcOfferUrl: "http://bridge.local:9205/api/v1/media/webrtc/nvrpb_test/quality/offer",
+        },
+      },
+    };
+
+    expect(resolveInitialPlaybackViewportSource(session, "quality", "mjpeg")).toBe("hls");
+    expect(resolveInitialPlaybackViewportSource(session, "quality", "webrtc")).toBe("webrtc");
   });
 
   it("prefers the bridge snapshot URL over the entity picture fallback", () => {

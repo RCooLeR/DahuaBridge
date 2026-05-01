@@ -430,6 +430,98 @@ func TestDriverFindRecordingsEventFilterUsesRPCEventLog(t *testing.T) {
 	}
 }
 
+func TestDriverFindRecordingsEventOnlyUsesSMDFinder(t *testing.T) {
+	loginRequests := 0
+	var rpcCalls []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/RPC2_Login":
+			loginRequests++
+			if loginRequests == 1 {
+				_, _ = w.Write([]byte(`{"id":1,"params":{"realm":"Login to Test","random":"12345","encryption":"Default"},"result":false,"session":"sess1","error":{"code":268632079,"message":"challenge"}}`))
+				return
+			}
+			_, _ = w.Write([]byte(`{"id":2,"params":{},"result":true,"session":"sess2"}`))
+		case "/RPC2":
+			var payload struct {
+				Method string         `json:"method"`
+				Params map[string]any `json:"params"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				t.Fatalf("decode rpc request: %v", err)
+			}
+			rpcCalls = append(rpcCalls, payload.Method)
+			switch payload.Method {
+			case "SmdDataFinder.startFind":
+				condition, ok := payload.Params["Condition"].(map[string]any)
+				if !ok {
+					t.Fatalf("missing smd condition: %#v", payload.Params)
+				}
+				if channels, ok := condition["Channels"].([]any); !ok || len(channels) != 1 || channels[0] != float64(0) {
+					t.Fatalf("unexpected smd channels: %#v", condition["Channels"])
+				}
+				rawTypes, ok := condition["SmdType"].([]any)
+				if !ok || len(rawTypes) != 1 || rawTypes[0] != "smdTypeHuman" {
+					t.Fatalf("unexpected smd types: %#v", condition["SmdType"])
+				}
+				_, _ = w.Write([]byte(`{"id":10,"params":{"Count":2,"Token":10},"result":true,"session":"sess2"}`))
+			case "SmdDataFinder.doFind":
+				if payload.Params["Token"] != float64(10) || payload.Params["Offset"] != float64(0) {
+					t.Fatalf("unexpected smd doFind params: %+v", payload.Params)
+				}
+				_, _ = w.Write([]byte(`{"id":11,"params":{"SmdInfo":[{"Channel":0,"StartTime":"2026-05-01 15:09:07","EndTime":"2026-05-01 15:09:28","Type":"smdTypeHuman"},{"Channel":1,"StartTime":"2026-05-01 15:10:00","EndTime":"2026-05-01 15:10:20","Type":"smdTypeHuman"}]},"result":true,"session":"sess2"}`))
+			default:
+				http.Error(w, "unexpected rpc method", http.StatusBadRequest)
+			}
+		default:
+			http.Error(w, "unexpected path", http.StatusBadRequest)
+		}
+	}))
+	defer server.Close()
+
+	cfg := config.DeviceConfig{
+		ID:               "west20_nvr",
+		BaseURL:          server.URL,
+		Username:         "assistant",
+		Password:         "secret",
+		ChannelAllowlist: []int{1},
+		RequestTimeout:   5 * time.Second,
+	}
+	metricsRegistry := metrics.New(buildinfo.Info())
+	driver := New(cfg, config.ImouConfig{}, nil, nil, zerolog.Nop(), metricsRegistry, cgi.New(cfg, metricsRegistry))
+
+	got, err := driver.FindRecordings(context.Background(), dahua.NVRRecordingQuery{
+		Channel:   1,
+		StartTime: time.Date(2026, 5, 1, 0, 0, 0, 0, time.Local),
+		EndTime:   time.Date(2026, 5, 1, 23, 59, 59, 0, time.Local),
+		Limit:     10,
+		EventCode: "smdTypeHuman",
+		EventOnly: true,
+	})
+	if err != nil {
+		t.Fatalf("FindRecordings returned error: %v", err)
+	}
+	if got.DeviceID != "west20_nvr" || got.Channel != 1 || got.ReturnedCount != 1 {
+		t.Fatalf("unexpected search result %+v", got)
+	}
+	if len(got.Items) != 1 {
+		t.Fatalf("expected one smd event item, got %+v", got.Items)
+	}
+	item := got.Items[0]
+	if item.Source != "nvr_event" || item.FilePath != "" || item.Type != "Event.smdTypeHuman" {
+		t.Fatalf("unexpected smd event recording %+v", item)
+	}
+	if item.StartTime != "2026-05-01 15:09:07" || item.EndTime != "2026-05-01 15:09:28" {
+		t.Fatalf("unexpected smd event time window %+v", item)
+	}
+	if !containsString(item.Flags, "Event") || !containsString(item.Flags, "smdTypeHuman") {
+		t.Fatalf("expected smd event flags, got %+v", item.Flags)
+	}
+	if len(rpcCalls) != 2 || rpcCalls[0] != "SmdDataFinder.startFind" || rpcCalls[1] != "SmdDataFinder.doFind" {
+		t.Fatalf("unexpected rpc sequence %+v", rpcCalls)
+	}
+}
+
 func TestDriverFindRecordingsEventFilterUsesEventFlagAndDropsTimingResults(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Query().Get("action") {
@@ -492,6 +584,7 @@ func TestDriverFindRecordingsEventFilterUsesEventFlagAndDropsTimingResults(t *te
 
 func TestRecordingEventConditionSupportsArchiveAliases(t *testing.T) {
 	testCases := map[string]string{
+		"com.All":                  "*",
 		"com.Human":                "SmartMotionHuman",
 		"smdTypeHuman":             "SmartMotionHuman",
 		"ivs.MotorVehicle":         "SmartMotionVehicle",

@@ -73,6 +73,7 @@ export interface CameraArchiveCapabilities {
 }
 
 export interface NvrArchiveRecordingModel {
+  source: string | null;
   channel: number;
   startTime: string;
   endTime: string;

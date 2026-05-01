@@ -320,8 +320,27 @@ func New(
 			return
 		}
 
+		normalizeNVRRecordingSearchResult(&result)
 		attachNVRRecordingExportURLs(r, chi.URLParam(r, "deviceID"), &result)
 		writeJSON(w, http.StatusOK, result)
+	})
+	router.With(rateLimitMiddleware(adminLimiter)).Get("/api/v1/nvr/{deviceID}/events/summary", func(w http.ResponseWriter, r *http.Request) {
+		query, err := parseNVREventSummaryQuery(r)
+		if err != nil {
+			writeInvalidRequestError(w, err)
+			return
+		}
+
+		summaryCtx, cancel := context.WithTimeout(r.Context(), 45*time.Second)
+		defer cancel()
+
+		summary, err := buildNVREventSummary(summaryCtx, snapshots, chi.URLParam(r, "deviceID"), query)
+		if err != nil {
+			writeClassifiedActionError(w, err, http.StatusBadGateway)
+			return
+		}
+
+		writeJSON(w, http.StatusOK, summary)
 	})
 	router.With(rateLimitMiddleware(mediaLimiter)).Post("/api/v1/nvr/{deviceID}/recordings/export", func(w http.ResponseWriter, r *http.Request) {
 		if media == nil || !media.Enabled() {
@@ -1682,7 +1701,44 @@ func parseNVRRecordingQuery(r *http.Request) (dahua.NVRRecordingQuery, error) {
 		EndTime:   endTime,
 		Limit:     limit,
 		EventCode: firstNonEmptyQueryValue(r.URL.Query(), "event", "event_type", "event_code"),
+		EventOnly: parseQueryBool(r.URL.Query(), "event_only", "events_only"),
 	}, nil
+}
+
+type nvrEventSummaryQuery struct {
+	StartTime time.Time
+	EndTime   time.Time
+	EventCode string
+}
+
+func parseNVREventSummaryQuery(r *http.Request) (nvrEventSummaryQuery, error) {
+	startTime, err := parseFlexibleTimestamp(strings.TrimSpace(r.URL.Query().Get("start")), "start")
+	if err != nil {
+		return nvrEventSummaryQuery{}, err
+	}
+	endTime, err := parseFlexibleTimestamp(strings.TrimSpace(r.URL.Query().Get("end")), "end")
+	if err != nil {
+		return nvrEventSummaryQuery{}, err
+	}
+	if endTime.Before(startTime) {
+		return nvrEventSummaryQuery{}, fmt.Errorf("end must not be before start")
+	}
+
+	return nvrEventSummaryQuery{
+		StartTime: startTime,
+		EndTime:   endTime,
+		EventCode: firstNonEmptyQueryValue(r.URL.Query(), "event", "event_type", "event_code"),
+	}, nil
+}
+
+func parseQueryBool(values url.Values, keys ...string) bool {
+	for _, key := range keys {
+		switch strings.ToLower(strings.TrimSpace(values.Get(key))) {
+		case "1", "true", "yes", "on":
+			return true
+		}
+	}
+	return false
 }
 
 func firstNonEmptyQueryValue(values url.Values, keys ...string) string {
@@ -2206,6 +2262,175 @@ func attachNVRRecordingExportURLs(r *http.Request, deviceID string, result *dahu
 			continue
 		}
 		item.ExportURL = buildNVRRecordingExportURL(r, deviceID, channel, startTime, endTime)
+	}
+}
+
+func buildNVREventSummary(ctx context.Context, snapshots SnapshotReader, deviceID string, query nvrEventSummaryQuery) (dahua.NVREventSummary, error) {
+	summary := dahua.NVREventSummary{
+		DeviceID:  strings.TrimSpace(deviceID),
+		StartTime: query.StartTime.Format(time.RFC3339),
+		EndTime:   query.EndTime.Format(time.RFC3339),
+		Items:     []dahua.NVREventSummaryItem{},
+		Channels:  []dahua.NVREventChannelSummary{},
+	}
+	if snapshots == nil {
+		return summary, fmt.Errorf("snapshot reader is not configured")
+	}
+
+	channels := nvrSummaryChannels(snapshots.ListStreams(false), summary.DeviceID)
+	if len(channels) == 0 {
+		return summary, nil
+	}
+
+	const summaryLimitPerChannel = 2000
+
+	totalByCode := make(map[string]int)
+	channelSummaries := make([]dahua.NVREventChannelSummary, 0, len(channels))
+	for _, channel := range channels {
+		result, err := snapshots.NVRRecordings(ctx, summary.DeviceID, dahua.NVRRecordingQuery{
+			Channel:   channel,
+			StartTime: query.StartTime,
+			EndTime:   query.EndTime,
+			Limit:     summaryLimitPerChannel,
+			EventCode: query.EventCode,
+			EventOnly: true,
+		})
+		if err != nil {
+			return dahua.NVREventSummary{}, err
+		}
+
+		channelByCode := make(map[string]int)
+		for _, item := range result.Items {
+			code := nvrSummaryCodeForRecording(item)
+			if code == "" {
+				continue
+			}
+			channelByCode[code]++
+			totalByCode[code]++
+			summary.TotalCount++
+		}
+		channelItems := makeNVREventSummaryItems(channelByCode)
+		channelSummaries = append(channelSummaries, dahua.NVREventChannelSummary{
+			Channel:    channel,
+			TotalCount: countNVREventSummaryItems(channelItems),
+			Items:      channelItems,
+		})
+	}
+
+	sort.Slice(channelSummaries, func(i, j int) bool {
+		return channelSummaries[i].Channel < channelSummaries[j].Channel
+	})
+	summary.Items = makeNVREventSummaryItems(totalByCode)
+	summary.Channels = channelSummaries
+	return summary, nil
+}
+
+func nvrSummaryChannels(entries []streams.Entry, deviceID string) []int {
+	seen := make(map[int]struct{})
+	channels := make([]int, 0)
+	for _, entry := range entries {
+		if entry.RootDeviceID != deviceID || entry.DeviceKind != dahua.DeviceKindNVRChannel || entry.Channel <= 0 {
+			continue
+		}
+		if _, ok := seen[entry.Channel]; ok {
+			continue
+		}
+		seen[entry.Channel] = struct{}{}
+		channels = append(channels, entry.Channel)
+	}
+	sort.Ints(channels)
+	return channels
+}
+
+func makeNVREventSummaryItems(countByCode map[string]int) []dahua.NVREventSummaryItem {
+	items := make([]dahua.NVREventSummaryItem, 0, len(countByCode))
+	for code, count := range countByCode {
+		if count <= 0 {
+			continue
+		}
+		items = append(items, dahua.NVREventSummaryItem{
+			Code:  code,
+			Label: nvrEventSummaryLabel(code),
+			Count: count,
+		})
+	}
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].Count == items[j].Count {
+			return items[i].Code < items[j].Code
+		}
+		return items[i].Count > items[j].Count
+	})
+	return items
+}
+
+func countNVREventSummaryItems(items []dahua.NVREventSummaryItem) int {
+	total := 0
+	for _, item := range items {
+		total += item.Count
+	}
+	return total
+}
+
+func nvrSummaryCodeForRecording(item dahua.NVRRecording) string {
+	candidates := make([]string, 0, len(item.Flags)+1)
+	candidates = append(candidates, item.Type)
+	candidates = append(candidates, item.Flags...)
+	for _, candidate := range candidates {
+		normalized := normalizeNVREventSummaryCode(candidate)
+		if normalized != "" && !strings.EqualFold(normalized, "event") {
+			return normalized
+		}
+	}
+	return ""
+}
+
+func normalizeNVREventSummaryCode(value string) string {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return ""
+	}
+	if strings.HasPrefix(strings.ToLower(trimmed), "event.") {
+		trimmed = strings.TrimSpace(trimmed[len("event."):])
+	}
+	return trimmed
+}
+
+func nvrEventSummaryLabel(value string) string {
+	switch strings.ToLower(normalizeNVREventSummaryCode(value)) {
+	case "motion", "videomotion", "movedetection", "alarmpir":
+		return "Motion"
+	case "human", "humandetection", "smartmotionhuman", "intelliframehuman", "smdtypehuman":
+		return "Human"
+	case "vehicle", "vehicledetection", "smartmotionvehicle", "motorvehicle", "smdtypevehicle":
+		return "Vehicle"
+	case "animal", "animaldetection", "smdtypeanimal":
+		return "Animal"
+	case "crosslinedetection", "tripwire":
+		return "Cross Line"
+	case "crossregiondetection", "intrusion":
+		return "Cross Region"
+	case "leftdetection":
+		return "Left Detection"
+	case "access", "accesscontrol", "accessctl":
+		return "Access"
+	default:
+		return humanizeNVREventSummaryValue(value)
+	}
+}
+
+func humanizeNVREventSummaryValue(value string) string {
+	return strings.TrimSpace(strings.NewReplacer("_", " ", "-", " ").Replace(value))
+}
+
+func normalizeNVRRecordingSearchResult(result *dahua.NVRRecordingSearchResult) {
+	if result == nil {
+		return
+	}
+	if result.Items == nil {
+		result.Items = []dahua.NVRRecording{}
+	}
+	if result.ReturnedCount == 0 && len(result.Items) > 0 {
+		result.ReturnedCount = len(result.Items)
 	}
 }
 

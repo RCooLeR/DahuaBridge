@@ -34,6 +34,7 @@ interface RenderSurveillancePanelOverviewArgs {
   onToggleVtoStream: (vto: VtoViewModel) => void;
   onToggleVtoMicrophone: (vto: VtoViewModel) => void;
   renderIcon: (icon: string) => TemplateResult;
+  renderCameraViewport: (camera: CameraViewModel) => TemplateResult;
   cameraImageSrc: (cameraEntity: HassEntity | undefined, snapshotUrl?: string | null) => string;
   renderVtoViewport: (vto: VtoViewModel, playing: boolean) => TemplateResult;
   canOpenSnapshot: (camera: CameraViewModel) => boolean;
@@ -69,6 +70,7 @@ export function renderSurveillancePanelOverview({
   onToggleVtoStream,
   onToggleVtoMicrophone,
   renderIcon,
+  renderCameraViewport,
   cameraImageSrc,
   renderVtoViewport,
   canOpenSnapshot,
@@ -125,7 +127,7 @@ export function renderSurveillancePanelOverview({
                     onTriggerAux,
                     onEnablePtz,
                     renderIcon,
-                    cameraImageSrc,
+                    renderCameraViewport,
                     canOpenSnapshot,
                     isBridgeRecordingActive,
                     isAuxActive,
@@ -148,7 +150,7 @@ function renderCameraTile({
   onTriggerAux,
   onEnablePtz,
   renderIcon,
-  cameraImageSrc,
+  renderCameraViewport,
   canOpenSnapshot,
   isBridgeRecordingActive,
   isAuxActive,
@@ -163,7 +165,7 @@ function renderCameraTile({
   onTriggerAux: (camera: CameraViewModel, output: string) => void;
   onEnablePtz: (camera: CameraViewModel) => void;
   renderIcon: (icon: string) => TemplateResult;
-  cameraImageSrc: (cameraEntity: HassEntity | undefined, snapshotUrl?: string | null) => string;
+  renderCameraViewport: (camera: CameraViewModel) => TemplateResult;
   canOpenSnapshot: (camera: CameraViewModel) => boolean;
   isBridgeRecordingActive: (camera: CameraViewModel) => boolean;
   isAuxActive: (camera: CameraViewModel, output: string) => boolean;
@@ -197,12 +199,7 @@ function renderCameraTile({
         </div>
       </div>
       <div class="tile-media">
-        <img
-          class="tile-image"
-          src=${cameraImageSrc(camera.cameraEntity, camera.snapshotUrl)}
-          alt=${displayCameraLabel(camera)}
-          loading="lazy"
-        />
+        ${renderCameraViewport(camera)}
         <div class="media-overlay">
           <div class="media-bottom">
             <div class="tile-overlay-badges">

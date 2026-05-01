@@ -109,6 +109,7 @@ type NVRRecordingQuery struct {
 	EndTime   time.Time
 	Limit     int
 	EventCode string
+	EventOnly bool
 }
 
 type NVRRecording struct {
@@ -140,6 +141,27 @@ type NVRRecordingSearchResult struct {
 	Limit         int            `json:"limit"`
 	ReturnedCount int            `json:"returned_count"`
 	Items         []NVRRecording `json:"items"`
+}
+
+type NVREventSummaryItem struct {
+	Code  string `json:"code"`
+	Label string `json:"label,omitempty"`
+	Count int    `json:"count"`
+}
+
+type NVREventChannelSummary struct {
+	Channel    int                   `json:"channel"`
+	TotalCount int                   `json:"total_count"`
+	Items      []NVREventSummaryItem `json:"items"`
+}
+
+type NVREventSummary struct {
+	DeviceID   string                   `json:"device_id"`
+	StartTime  string                   `json:"start_time"`
+	EndTime    string                   `json:"end_time"`
+	TotalCount int                      `json:"total_count"`
+	Items      []NVREventSummaryItem    `json:"items"`
+	Channels   []NVREventChannelSummary `json:"channels"`
 }
 
 type NVRRecordingSearcher interface {

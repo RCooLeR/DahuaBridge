@@ -340,6 +340,10 @@ export class DahuaBridgeSurveillanceTileCard
                 selectedProfileKey,
                 selectedSource,
                 this._cameraAudioMuted,
+                {
+                  controls: false,
+                  preload: "none",
+                },
               )}
               <div class="tile-topbar">
                 <div class="tile-title-banner">
