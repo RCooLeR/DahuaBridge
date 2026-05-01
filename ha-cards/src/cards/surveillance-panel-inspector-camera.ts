@@ -145,10 +145,10 @@ function renderCameraAudioBridge(
 
   return html`
     <div class="panel">
-      <div class="panel-title">Audio Bridge</div>
+      <div class="panel-title">Stream Audio</div>
       <div class="chip-row">
         <span class="badge ${camera.audioMuteSupported ? "success" : "warning"}">
-          ${camera.audioMuteSupported ? "Browser mute supported" : "Browser mute unavailable"}
+          ${camera.audioMuteSupported ? "Browser audio toggle ready" : "Browser audio unavailable"}
         </span>
         ${camera.audioControlAuthority
           ? html`

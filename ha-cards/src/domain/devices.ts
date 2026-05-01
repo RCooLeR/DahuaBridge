@@ -27,6 +27,7 @@ import {
 import type { HassEntity, HomeAssistant } from "../types/home-assistant";
 import {
   buildCameraArchiveCapabilities,
+  normalizeArchiveSearchUrlTemplate,
   type CameraArchiveCapabilities,
 } from "./archive";
 import {
@@ -546,6 +547,11 @@ interface BridgeCaptureShape {
   active_clip_download_url?: unknown;
 }
 
+interface BridgeArchiveAttributeSummary {
+  searchUrl: string | null;
+  playbackUrl: string | null;
+}
+
 interface BridgeIntercomShape {
   [key: string]: unknown;
 }
@@ -842,6 +848,7 @@ function buildCameraDeviceBase(
   const cameraEntity = entityById(hass, descriptor.cameraEntityId);
   const controls = bridgeControlsForEntity(cameraEntity);
   const features = bridgeFeaturesForEntity(cameraEntity);
+  const archiveAttributes = bridgeArchiveAttributesForEntity(cameraEntity);
   const capture = bridgeCaptureForEntity(cameraEntity);
   const streamSource =
     stringValue(cameraEntity?.attributes.stream_source) ??
@@ -896,6 +903,7 @@ function buildCameraDeviceBase(
       parseChannelNumber(descriptor.deviceId),
       controls,
       features,
+      archiveAttributes,
     ),
   };
 }
@@ -1456,9 +1464,11 @@ function buildCameraCapabilities(
   channelNumber: number | null,
   controls: BridgeControlsSummary | null,
   features: BridgeFeatureSummary[],
+  archiveAttributes: BridgeArchiveAttributeSummary,
 ): CameraCapabilityModel {
+  const archiveFeatures = withArchiveFallbackFeatures(features, archiveAttributes);
   return {
-    archive: buildCameraArchiveCapabilities(channelNumber, features),
+    archive: buildCameraArchiveCapabilities(channelNumber, archiveFeatures),
     ptz: controls?.ptz ?? null,
     aux: buildCameraAuxCapabilities(controls?.aux ?? null, features),
     recording: controls?.recording ?? null,
@@ -1667,6 +1677,78 @@ function bridgeFeaturesForEntity(entity: HassEntity | undefined): BridgeFeatureS
         currentText: stringValue(typed.current_text),
       };
     });
+}
+
+function bridgeArchiveAttributesForEntity(
+  entity: HassEntity | undefined,
+): BridgeArchiveAttributeSummary {
+  return {
+    searchUrl: normalizeArchiveSearchUrlTemplate(
+      stringValue(entity?.attributes.bridge_archive_recordings_url_template),
+    ),
+    playbackUrl: stringValue(entity?.attributes.bridge_playback_sessions_url),
+  };
+}
+
+function withArchiveFallbackFeatures(
+  features: BridgeFeatureSummary[],
+  archiveAttributes: BridgeArchiveAttributeSummary,
+): BridgeFeatureSummary[] {
+  const merged = [...features];
+
+  if (
+    archiveAttributes.searchUrl &&
+    !merged.some((feature) => feature.key === "archive_search" && feature.url)
+  ) {
+    merged.push({
+      key: "archive_search",
+      label: "Recordings",
+      group: "archive",
+      kind: "query",
+      url: archiveAttributes.searchUrl,
+      supported: true,
+      parameterKey: null,
+      parameterValue: null,
+      commands: [],
+      actions: [],
+      targets: [],
+      allowedValues: [],
+      minValue: null,
+      maxValue: null,
+      stepValue: null,
+      currentValue: null,
+      active: null,
+      currentText: null,
+    });
+  }
+
+  if (
+    archiveAttributes.playbackUrl &&
+    !merged.some((feature) => feature.key === "archive_playback" && feature.url)
+  ) {
+    merged.push({
+      key: "archive_playback",
+      label: "Playback",
+      group: "archive",
+      kind: "session",
+      url: archiveAttributes.playbackUrl,
+      supported: true,
+      parameterKey: null,
+      parameterValue: null,
+      commands: [],
+      actions: [],
+      targets: [],
+      allowedValues: [],
+      minValue: null,
+      maxValue: null,
+      stepValue: null,
+      currentValue: null,
+      active: null,
+      currentText: null,
+    });
+  }
+
+  return merged;
 }
 
 function bridgeProfilesForEntity(

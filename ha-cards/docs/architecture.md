@@ -21,6 +21,13 @@ Reason:
 
 If the browser supports native HLS, the card can attach the playlist directly to the video element. Otherwise it uses `hls.js`. If neither path is available, the card falls back to MJPEG or snapshot behavior.
 
+Archive search is resolved from either:
+
+- archive feature metadata exposed by the bridge integration
+- integration archive URL attributes such as `bridge_archive_recordings_url_template` and `bridge_playback_sessions_url`
+
+Template-style archive search URLs are normalized in the card runtime before query parameters are appended.
+
 ## Module Layout
 
 The main frontend modules are split by responsibility:

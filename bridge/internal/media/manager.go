@@ -137,13 +137,14 @@ type hlsWorker struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 
-	mu           sync.Mutex
-	lastAccessAt time.Time
-	lastError    error
-	startedAt    time.Time
-	outputDir    string
-	cmd          *exec.Cmd
-	startErr     chan error
+	mu                  sync.Mutex
+	lastAccessAt        time.Time
+	lastError           error
+	startedAt           time.Time
+	outputDir           string
+	cmd                 *exec.Cmd
+	startErr            chan error
+	playlistReadyLogged bool
 }
 
 type ffmpegStartAttempt struct {
@@ -487,6 +488,7 @@ func (m *Manager) getOrCreateMJPEGWorker(entry streams.Entry, profileName string
 	}
 	m.mjpegWorkers[key] = w
 	m.setMediaWorkerCountLocked()
+	w.logger.Info().Str("worker_key", key).Msg("created mjpeg worker")
 	if m.metrics != nil {
 		m.metrics.ObserveMediaStart(entry.ID, profileName, nil)
 	}
@@ -530,6 +532,7 @@ func (m *Manager) getOrCreateHLSWorker(entry streams.Entry, profileName string, 
 	}
 	m.hlsWorkers[key] = w
 	m.setMediaWorkerCountLocked()
+	w.logger.Info().Str("worker_key", key).Msg("created hls worker")
 	if m.metrics != nil {
 		m.metrics.ObserveMediaStart(entry.ID, profileName, nil)
 	}
@@ -543,6 +546,7 @@ func (m *Manager) removeMJPEGWorker(key string, w *worker) {
 	if existing, ok := m.mjpegWorkers[key]; ok && existing == w {
 		delete(m.mjpegWorkers, key)
 		m.setMediaWorkerCountLocked()
+		w.logger.Info().Str("worker_key", key).Msg("removed mjpeg worker")
 		if m.metrics != nil {
 			m.metrics.SetMediaViewers(w.streamID, w.profileName, 0)
 		}
@@ -555,6 +559,7 @@ func (m *Manager) removeHLSWorker(key string, w *hlsWorker) {
 	if existing, ok := m.hlsWorkers[key]; ok && existing == w {
 		delete(m.hlsWorkers, key)
 		m.setMediaWorkerCountLocked()
+		w.logger.Info().Str("worker_key", key).Msg("removed hls worker")
 		if m.metrics != nil {
 			m.metrics.SetMediaViewers(w.streamID, w.profileName, 0)
 		}
@@ -567,6 +572,7 @@ func (m *Manager) removeWebRTCSession(key string, session *webrtcSession) {
 	if existing, ok := m.webrtcPeers[key]; ok && existing == session {
 		delete(m.webrtcPeers, key)
 		m.setMediaWorkerCountLocked()
+		session.logger.Info().Str("session_key", key).Msg("removed webrtc session")
 		if m.metrics != nil {
 			m.metrics.SetMediaViewers(session.streamID, session.profileName, 0)
 		}
@@ -591,6 +597,7 @@ func (w *worker) addSubscriber(ch chan []byte) {
 	if w.parent.metrics != nil {
 		w.parent.metrics.SetMediaViewers(w.streamID, w.profileName, len(w.subscribers))
 	}
+	w.logger.Info().Int("viewers", len(w.subscribers)).Msg("mjpeg subscriber added")
 	if len(w.lastFrame) > 0 {
 		frame := append([]byte(nil), w.lastFrame...)
 		select {
@@ -620,6 +627,9 @@ func (w *worker) removeSubscriber(ch chan []byte) {
 	}
 	if w.parent.metrics != nil {
 		w.parent.metrics.SetMediaViewers(w.streamID, w.profileName, viewers)
+	}
+	if ok {
+		w.logger.Info().Int("viewers", viewers).Msg("mjpeg subscriber removed")
 	}
 	if empty {
 		go w.stopWhenIdle(idleGeneration)
@@ -688,6 +698,10 @@ func (w *worker) run() {
 			w.setError(fmt.Errorf("start ffmpeg: %w", err))
 			return
 		}
+		w.logger.Info().
+			Bool("hwaccel", attempt.useHWAccel).
+			Str("input_preset", attempt.inputPreset).
+			Msg("mjpeg ffmpeg started")
 
 		stderrDone := drainFFmpegStderr(stderr, 64*1024)
 
@@ -737,6 +751,7 @@ func (w *worker) run() {
 			w.setError(waitErr)
 			return
 		default:
+			w.logger.Info().Msg("mjpeg worker exited cleanly")
 			return
 		}
 	}
@@ -853,6 +868,7 @@ func (w *worker) publishFrame(frame []byte) {
 		w.parent.metrics.ObserveMediaFrame(w.streamID, w.profileName)
 	}
 	w.readyOnce.Do(func() {
+		w.logger.Info().Msg("mjpeg worker ready")
 		close(w.ready)
 	})
 }
@@ -984,6 +1000,11 @@ func (w *hlsWorker) run() {
 		w.setError(fmt.Errorf("create hls temp dir: %w", err))
 		return
 	}
+	w.logger.Info().
+		Str("worker_key", w.key).
+		Str("hls_output_dir", outputDir).
+		Bool("include_audio", includeAudio).
+		Msg("prepared hls worker output")
 
 	w.mu.Lock()
 	w.outputDir = outputDir
@@ -1020,6 +1041,12 @@ func (w *hlsWorker) run() {
 			w.setError(fmt.Errorf("start ffmpeg: %w", err))
 			return
 		}
+		w.logger.Info().
+			Bool("hwaccel", attempt.useHWAccel).
+			Str("input_preset", attempt.inputPreset).
+			Bool("include_audio", includeAudio).
+			Str("hls_output_dir", outputDir).
+			Msg("hls ffmpeg started")
 
 		stderrDone := drainFFmpegStderr(stderr, 128*1024)
 
@@ -1056,6 +1083,7 @@ func (w *hlsWorker) run() {
 		if w.isPlaybackStream() || w.parent.cfg.HLSKeepAfterExit > 0 {
 			retainOutput = true
 		}
+		w.logger.Info().Bool("retain_output", retainOutput).Msg("hls worker exited cleanly")
 		return
 	}
 }
@@ -1179,6 +1207,14 @@ func (w *hlsWorker) readFileWhenReady(ctx context.Context, fileName string) ([]b
 			body, err := os.ReadFile(filepath.Join(outputDir, fileName))
 			if err == nil && len(body) > 0 {
 				w.touch()
+				if fileName == "index.m3u8" {
+					w.mu.Lock()
+					if !w.playlistReadyLogged {
+						w.playlistReadyLogged = true
+						w.logger.Info().Str("file_name", fileName).Msg("hls playlist ready")
+					}
+					w.mu.Unlock()
+				}
 				return body, nil
 			}
 			if err != nil && !errors.Is(err, os.ErrNotExist) {

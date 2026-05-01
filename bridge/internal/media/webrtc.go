@@ -90,6 +90,7 @@ func (m *Manager) WebRTCAnswer(ctx context.Context, streamID string, profileName
 	}
 	m.webrtcPeers[key] = session
 	m.setMediaWorkerCountLocked()
+	session.logger.Info().Str("session_key", key).Msg("created webrtc session")
 	if m.metrics != nil {
 		m.metrics.SetMediaViewers(entry.ID, resolvedProfileName, 1)
 	}
@@ -133,6 +134,11 @@ func (s *webrtcSession) start(ctx context.Context, offer WebRTCSessionDescriptio
 		}
 		audioPort = udpPort(audioConn.LocalAddr())
 	}
+	s.logger.Info().
+		Bool("include_audio", includeAudio).
+		Int("video_port", videoPort).
+		Int("audio_port", audioPort).
+		Msg("starting webrtc session")
 
 	peerConnection, tracks, err := newPeerConnection(s.parent.WebRTCICEServers(), includeAudio)
 	if err != nil {
@@ -150,6 +156,7 @@ func (s *webrtcSession) start(ctx context.Context, offer WebRTCSessionDescriptio
 
 	peerConnection.OnConnectionStateChange(func(state webrtc.PeerConnectionState) {
 		s.touch()
+		s.logger.Info().Str("state", state.String()).Msg("webrtc peer state changed")
 		switch state {
 		case webrtc.PeerConnectionStateFailed, webrtc.PeerConnectionStateDisconnected, webrtc.PeerConnectionStateClosed:
 			s.cancel()
@@ -230,6 +237,7 @@ func (s *webrtcSession) start(ctx context.Context, offer WebRTCSessionDescriptio
 	s.mu.Unlock()
 
 	go s.closePeerOnCancel()
+	s.logger.Info().Bool("include_audio", includeAudio).Msg("webrtc session started")
 
 	localDescription := peerConnection.LocalDescription()
 	if localDescription == nil {
@@ -363,6 +371,11 @@ func (s *webrtcSession) startFFmpeg(videoPort int, audioPort int, includeAudio b
 			}
 			return nil, fmt.Errorf("start ffmpeg: %w", err)
 		}
+		s.logger.Info().
+			Bool("hwaccel", attempt.useHWAccel).
+			Bool("include_audio", attempt.includeAudio).
+			Str("input_preset", attempt.inputPreset).
+			Msg("webrtc ffmpeg started")
 
 		waitDone := make(chan error, 1)
 		stderrDone := drainFFmpegStderr(stderr, 64*1024)
@@ -428,6 +441,11 @@ func (s *webrtcSession) startFFmpeg(videoPort int, audioPort int, includeAudio b
 			}
 			return nil, errors.New("webrtc ffmpeg exited before producing media")
 		case <-timer.C:
+			s.logger.Info().
+				Bool("hwaccel", attempt.useHWAccel).
+				Bool("include_audio", attempt.includeAudio).
+				Str("input_preset", attempt.inputPreset).
+				Msg("webrtc ffmpeg startup probe passed")
 			go s.waitForFFmpeg(cmd, waitDone, stderrDone, attempt.ffmpegStartAttempt, conns...)
 			return cmd, nil
 		}
@@ -644,7 +662,12 @@ func (s *webrtcSession) waitForFFmpeg(cmd *exec.Cmd, waitDone <-chan error, stde
 	}
 	if stderrText != "" {
 		s.setError(errors.New(stderrText))
+		return
 	}
+	s.logger.Info().
+		Bool("hwaccel", attempt.useHWAccel).
+		Str("input_preset", attempt.inputPreset).
+		Msg("webrtc ffmpeg exited cleanly")
 }
 
 func (s *webrtcSession) touch() {

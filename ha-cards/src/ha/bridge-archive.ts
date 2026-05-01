@@ -7,6 +7,8 @@ import type {
   NvrArchiveRecordingModel,
   NvrArchiveSearchResultModel,
 } from "../domain/archive";
+import { normalizeArchiveSearchUrlTemplate } from "../domain/archive";
+import { logCardInfo, redactUrlForLog } from "../utils/logging";
 import { rewriteBridgeUrl } from "./bridge-url";
 
 const optionalIntegerSchema = z.preprocess((value) => {
@@ -144,7 +146,8 @@ export async function fetchArchiveRecordings(
   query: ArchiveRecordingsQuery,
   signal?: AbortSignal,
 ): Promise<NvrArchiveSearchResultModel> {
-  const url = new URL(searchUrl, window.location.origin);
+  const normalizedSearchUrl = normalizeArchiveSearchUrlTemplate(searchUrl) ?? searchUrl;
+  const url = new URL(normalizedSearchUrl, window.location.origin);
   url.searchParams.set("channel", String(query.channel));
   url.searchParams.set("start", query.startTime);
   url.searchParams.set("end", query.endTime);
@@ -396,12 +399,9 @@ function logArchiveRequest(
   status?: number,
   durationMs?: number,
 ): void {
-  if (typeof console === "undefined" || typeof console.debug !== "function") {
-    return;
-  }
-  console.debug("[DahuaBridge]", `card archive ${phase}`, {
+  logCardInfo(`card archive ${phase}`, {
     method,
-    url: targetUrl,
+    url: redactUrlForLog(targetUrl),
     status,
     duration_ms: durationMs === undefined ? undefined : Math.round(durationMs),
   });

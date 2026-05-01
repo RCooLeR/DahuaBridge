@@ -514,7 +514,6 @@ function buildCameraViewModel(
     camera.capabilities.recording ?? null,
     browserBridgeUrl,
   );
-  const muteFeature = bridgeFeatureByKey(camera.features, "mute");
   return {
     type: "camera",
     deviceKind: camera.kind,
@@ -568,10 +567,9 @@ function buildCameraViewModel(
     audioCodec: camera.media.audioCodec,
     microphoneAvailable: camera.media.audioCodec.trim().length > 0,
     speakerAvailable: camera.capabilities.audio.playback.supported,
-    audioMuted: muteFeature?.active === true,
-    audioMuteSupported:
-      camera.capabilities.audio.mute === true && !!rewriteBridgeUrl(muteFeature?.url ?? null, browserBridgeUrl),
-    audioMuteActionUrl: rewriteBridgeUrl(muteFeature?.url ?? null, browserBridgeUrl),
+    audioMuted: false,
+    audioMuteSupported: camera.media.audioCodec.trim().length > 0,
+    audioMuteActionUrl: null,
     validationNotes: [...camera.capabilities.validationNotes],
     audioControlAuthority: camera.diagnostics.controlAudioAuthority,
     audioControlSemantic: camera.diagnostics.controlAudioSemantic,
@@ -634,18 +632,6 @@ function buildCameraRecordingViewModel(
     mode: recording.mode,
     url: rewriteBridgeUrl(recording.url, browserBridgeUrl),
   };
-}
-
-function bridgeFeatureByKey(
-  features: CameraDeviceModel["features"],
-  key: string,
-): CameraDeviceModel["features"][number] | null {
-  for (const feature of features) {
-    if (feature.key === key) {
-      return feature;
-    }
-  }
-  return null;
 }
 
 function buildCameraStreamViewModel(

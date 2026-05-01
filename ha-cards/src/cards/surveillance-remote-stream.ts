@@ -3,6 +3,7 @@ import { css, html, LitElement, type PropertyValues, type TemplateResult } from 
 import { createRef, ref } from "lit/directives/ref.js";
 
 import type { CameraViewportSource } from "./surveillance-panel-viewport-sources";
+import { logCardInfo, logCardWarn, redactUrlForLog } from "../utils/logging";
 
 const STARTUP_TIMEOUT_MS = 35_000;
 const STARTUP_GRACE_TIMEOUT_MS = 15_000;
@@ -108,6 +109,11 @@ class DahuaBridgeRemoteStreamElement extends LitElement {
   private _hlsNetworkRecoveryAttempts = 0;
   private _startupTimer: number | null = null;
 
+  connectedCallback(): void {
+    super.connectedCallback();
+    logCardInfo("card remote stream element connected", this.streamLogContext());
+  }
+
   protected willUpdate(changedProperties: PropertyValues<this>): void {
     const previousDescriptor = changedProperties.get("descriptor") as
       | RemoteStreamDescriptor
@@ -147,6 +153,7 @@ class DahuaBridgeRemoteStreamElement extends LitElement {
   }
 
   disconnectedCallback(): void {
+    logCardInfo("card remote stream element disconnected", this.streamLogContext());
     this.cleanupPlayback();
     super.disconnectedCallback();
   }
@@ -240,6 +247,10 @@ class DahuaBridgeRemoteStreamElement extends LitElement {
     this._attachedVideo = video;
     this._attachedSourceKey = sourceKey;
     this._videoListenersCleanup = this.attachVideoListeners(video, sourceKey);
+    logCardInfo("card remote stream attach source", {
+      ...this.streamLogContext(source),
+      source_key: sourceKey,
+    });
     await this.attachHls(video, source.url, sourceKey);
   }
 
@@ -252,6 +263,12 @@ class DahuaBridgeRemoteStreamElement extends LitElement {
         return;
       }
       this.clearStartupTimer();
+      logCardInfo("card remote stream ready", {
+        ...this.streamLogContext(),
+        source_key: sourceKey,
+        ready_state: video.readyState,
+        network_state: video.networkState,
+      });
       this.queuePlayback(video);
     };
     const onError = () => {
@@ -259,18 +276,33 @@ class DahuaBridgeRemoteStreamElement extends LitElement {
         return;
       }
       const details = getVideoElementDiagnostics(video);
-      console.warn("[DahuaBridge] video element error", details);
+      logCardWarn("card remote stream video element error", {
+        ...this.streamLogContext(),
+        ...details,
+      });
       this.advanceToNextSource(`video element error: ${details.codeName}`);
+    };
+    const onPlay = () => {
+      if (!this.isCurrentSource(sourceKey)) {
+        return;
+      }
+      logCardInfo("card remote stream playing", {
+        ...this.streamLogContext(),
+        source_key: sourceKey,
+        current_src: redactUrlForLog(video.currentSrc),
+      });
     };
 
     video.addEventListener("loadedmetadata", onReady);
     video.addEventListener("canplay", onReady);
     video.addEventListener("playing", onReady);
+    video.addEventListener("play", onPlay);
     video.addEventListener("error", onError);
     return () => {
       video.removeEventListener("loadedmetadata", onReady);
       video.removeEventListener("canplay", onReady);
       video.removeEventListener("playing", onReady);
+      video.removeEventListener("play", onPlay);
       video.removeEventListener("error", onError);
     };
   }
@@ -290,6 +322,10 @@ class DahuaBridgeRemoteStreamElement extends LitElement {
     this.startStartupTimer(sourceKey);
 
     if (canPlayNativeHls(video)) {
+      logCardInfo("card remote stream attach native hls", {
+        ...this.streamLogContext({ kind: "hls", url: normalizedSource }),
+        source_key: sourceKey,
+      });
       video.src = normalizedSource;
       video.load();
       this.queuePlayback(video);
@@ -308,6 +344,10 @@ class DahuaBridgeRemoteStreamElement extends LitElement {
     this._hls = hls;
     this._hlsMediaRecoveryAttempts = 0;
     this._hlsNetworkRecoveryAttempts = 0;
+    logCardInfo("card remote stream attach hls.js", {
+      ...this.streamLogContext({ kind: "hls", url: normalizedSource }),
+      source_key: sourceKey,
+    });
 
     hls.on(Hls.Events.MANIFEST_PARSED, () => {
       if (!this.isCurrentSource(sourceKey)) {
@@ -315,6 +355,10 @@ class DahuaBridgeRemoteStreamElement extends LitElement {
       }
       this.startStartupTimer(sourceKey, STARTUP_GRACE_TIMEOUT_MS);
       this._hlsNetworkRecoveryAttempts = 0;
+      logCardInfo("card remote stream hls manifest parsed", {
+        ...this.streamLogContext({ kind: "hls", url: normalizedSource }),
+        source_key: sourceKey,
+      });
       this.queuePlayback(video);
     });
     hls.on(Hls.Events.LEVEL_LOADED, () => {
@@ -322,6 +366,10 @@ class DahuaBridgeRemoteStreamElement extends LitElement {
         return;
       }
       this.startStartupTimer(sourceKey, STARTUP_GRACE_TIMEOUT_MS);
+      logCardInfo("card remote stream hls level loaded", {
+        ...this.streamLogContext({ kind: "hls", url: normalizedSource }),
+        source_key: sourceKey,
+      });
     });
     hls.on(Hls.Events.FRAG_LOADED, () => {
       if (!this.isCurrentSource(sourceKey)) {
@@ -335,15 +383,18 @@ class DahuaBridgeRemoteStreamElement extends LitElement {
         return;
       }
       this.clearStartupTimer();
+      logCardInfo("card remote stream hls buffer appended", {
+        ...this.streamLogContext({ kind: "hls", url: normalizedSource }),
+        source_key: sourceKey,
+      });
       this.queuePlayback(video);
     });
     hls.on(Hls.Events.ERROR, (_event, data) => {
       if (!this.isCurrentSource(sourceKey)) {
         return;
       }
-      console.warn("[DahuaBridge] hls.js error", {
-        descriptor: this.descriptor?.cacheKey ?? "",
-        source: normalizedSource,
+      logCardWarn("card remote stream hls.js error", {
+        ...this.streamLogContext({ kind: "hls", url: normalizedSource }),
         fatal: data.fatal,
         type: data.type,
         details: data.details,
@@ -383,7 +434,7 @@ class DahuaBridgeRemoteStreamElement extends LitElement {
       return;
     }
 
-    console.warn("[DahuaBridge] remote stream fallback", {
+    logCardWarn("card remote stream fallback", {
       reason,
       descriptor: descriptor.cacheKey,
       source_index: this._activeSourceIndex,
@@ -425,6 +476,10 @@ class DahuaBridgeRemoteStreamElement extends LitElement {
 
   private queuePlayback(video: HTMLVideoElement): void {
     this.prepareVideo(video);
+    logCardInfo("card remote stream queue playback", {
+      ...this.streamLogContext(),
+      current_src: redactUrlForLog(video.currentSrc),
+    });
     window.requestAnimationFrame(() => {
       void video.play().catch(() => undefined);
     });
@@ -461,6 +516,9 @@ class DahuaBridgeRemoteStreamElement extends LitElement {
   }
 
   private cleanupPlayback(): void {
+    if (this._attachedVideo || this._hls) {
+      logCardInfo("card remote stream cleanup playback", this.streamLogContext());
+    }
     this.clearStartupTimer();
     this._videoListenersCleanup?.();
     this._videoListenersCleanup = null;
@@ -491,6 +549,20 @@ class DahuaBridgeRemoteStreamElement extends LitElement {
       video.networkState === HTMLMediaElement.NETWORK_LOADING ||
       video.currentSrc.trim().length > 0
     );
+  }
+
+  private streamLogContext(
+    source?: RemoteStreamDescriptor["sources"][number] | null,
+  ): Record<string, unknown> {
+    const currentSource = source ?? this.currentSource();
+    return {
+      descriptor: this.descriptor?.cacheKey ?? "",
+      source_index: this._activeSourceIndex,
+      source_kind: currentSource?.kind ?? null,
+      source_url: currentSource ? redactUrlForLog(currentSource.url) : null,
+      muted: this.muted,
+      controls: this.controls,
+    };
   }
 }
 

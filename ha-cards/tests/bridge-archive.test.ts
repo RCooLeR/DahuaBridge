@@ -98,6 +98,43 @@ describe("bridge archive", () => {
     expect(requestedUrl.searchParams.get("event")).toBe("all");
   });
 
+  it("normalizes archive search templates before adding live query parameters", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        items: [],
+      }),
+    } as Response);
+
+    Object.defineProperty(globalThis, "window", {
+      configurable: true,
+      value: {
+        location: {
+          origin: "https://ha.example.com",
+        },
+      },
+    });
+
+    await fetchArchiveRecordings(
+      "http://bridge.local:9205/api/v1/nvr/west20_nvr/recordings?channel={channel}&start={start}&end={end}&limit={limit}&event={event}",
+      {
+        channel: 1,
+        startTime: "2026-05-01T00:00:00Z",
+        endTime: "2026-05-02T00:00:00Z",
+        limit: 100,
+        eventCode: "human",
+      },
+    );
+
+    const requestedUrl = new URL(String(fetchMock.mock.calls[0]?.[0]));
+    expect(requestedUrl.searchParams.getAll("channel")).toEqual(["1"]);
+    expect(requestedUrl.searchParams.getAll("start")).toEqual(["2026-05-01T00:00:00Z"]);
+    expect(requestedUrl.searchParams.getAll("end")).toEqual(["2026-05-02T00:00:00Z"]);
+    expect(requestedUrl.searchParams.getAll("limit")).toEqual(["100"]);
+    expect(requestedUrl.searchParams.getAll("event")).toEqual(["human"]);
+  });
+
   it("accepts null item arrays from empty event searches", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue({
       ok: true,

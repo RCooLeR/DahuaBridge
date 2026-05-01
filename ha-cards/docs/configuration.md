@@ -12,6 +12,8 @@ The cards expect:
 
 If Home Assistant reaches the bridge on one URL but the browser must use another, set `browser_bridge_url`.
 
+This matters for playback and export flows because the bridge can emit media URLs based on its configured `public_base_url`. The cards rewrite those browser-side when `browser_bridge_url` is set.
+
 ## `custom:dahuabridge-surveillance-panel`
 
 This is the full dashboard surface.
@@ -43,6 +45,7 @@ vto:
 Field notes:
 
 - `browser_bridge_url` overrides the bridge base URL for browser-side requests only
+- set `browser_bridge_url` whenever the browser cannot directly use the media URLs returned by the bridge, including local testing against a bridge that advertises a public host name
 - `event_lookback_hours` controls the initial event query window
 - `bridge_event_poll_seconds` controls how often the card refreshes bridge events
 - `max_events` limits the visible event timeline window in the card

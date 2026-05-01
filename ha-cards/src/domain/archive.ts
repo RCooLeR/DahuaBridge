@@ -237,6 +237,36 @@ export function createPlaybackSeekRequest(seekTime: string): NvrPlaybackSeekRequ
   return { seekTime };
 }
 
+export function normalizeArchiveSearchUrlTemplate(
+  value: string | null | undefined,
+): string | null {
+  const trimmed = value?.trim() ?? "";
+  if (!trimmed) {
+    return null;
+  }
+
+  try {
+    const url = new URL(trimmed, "https://dahuabridge.invalid");
+    for (const key of ["channel", "start", "end", "limit", "event", "event_only"]) {
+      url.searchParams.delete(key);
+    }
+
+    for (const [key, candidateValue] of [...url.searchParams.entries()]) {
+      if (candidateValue.includes("{") || candidateValue.includes("}")) {
+        url.searchParams.delete(key);
+      }
+    }
+
+    if (/^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed)) {
+      return url.toString();
+    }
+
+    return `${url.pathname}${url.search}${url.hash}`;
+  } catch {
+    return trimmed;
+  }
+}
+
 function buildRequestField(
   key: ArchiveRequestFieldKey,
   required: boolean,

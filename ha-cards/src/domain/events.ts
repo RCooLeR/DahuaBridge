@@ -515,7 +515,7 @@ function pushDetail(
 }
 
 function firstEventDataValue(
-  data: Record<string, string>,
+  data: Record<string, unknown>,
   keys: string[],
 ): string | null {
   for (const key of keys) {
@@ -525,7 +525,11 @@ function firstEventDataValue(
     }
 
     for (const [candidateKey, candidateValue] of Object.entries(data)) {
-      if (candidateKey.toLowerCase() === key.toLowerCase() && candidateValue.trim()) {
+      if (
+        candidateKey.toLowerCase() === key.toLowerCase() &&
+        typeof candidateValue === "string" &&
+        candidateValue.trim()
+      ) {
         return candidateValue.trim();
       }
     }

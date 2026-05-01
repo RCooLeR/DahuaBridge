@@ -20,6 +20,7 @@ bridge/dist/
 bridge/var/
 bridge/data/
 bridge/.tmp-go/
+bridge/.tmp/
 bridge/config.yaml
 bridge/config.local.yaml
 bridge/.env
