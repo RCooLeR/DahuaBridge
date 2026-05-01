@@ -46,9 +46,12 @@ The integration camera entity provides:
 - stream support
 - bridge snapshot fetching
 - stream source resolution from bridge-generated URLs
+- direct `rtsp://` passthrough when the bridge catalog advertises RTSP sources
+- reverse-proxy-safe bridge URL rewriting when the configured bridge base URL includes a path prefix
 - bridge capture metadata in attributes
 - bridge recording state exposure
 - bridge-backed start/stop recording services
+- archive workflow attributes for NVR channels so Home Assistant can discover bridge search, playback, and export endpoints for regular recordings and event-backed recordings such as SMD and IVS
 
 Read more:
 
@@ -99,6 +102,20 @@ The integration can expose bridge-backed toggles such as:
 ## 11. Diagnostics
 
 The integration supports diagnostics downloads for troubleshooting.
+
+Bridge and archive URLs are redacted from diagnostics payloads.
+
+## 12. Archive Playback And Export
+
+For NVR channel cameras, the integration exposes bridge endpoints that support:
+
+- archive search
+- playback session creation
+- MP4 export through the bridge
+
+This is the supported path for event-backed recordings such as SMD and IVS.
+
+The integration does not depend on direct recorder file transfer for those workflows.
 
 ## Related Docs
 

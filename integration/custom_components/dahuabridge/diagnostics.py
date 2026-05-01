@@ -67,7 +67,7 @@ def redact_payload(value: Any) -> Any:
     if isinstance(value, dict):
         redacted: dict[str, Any] = {}
         for key, item in value.items():
-            if key in PAYLOAD_REDACT_KEYS:
+            if should_redact_payload_key(key):
                 redacted[key] = REDACTED
                 continue
             redacted[key] = redact_payload(item)
@@ -77,3 +77,11 @@ def redact_payload(value: Any) -> Any:
         return [redact_payload(item) for item in value]
 
     return value
+
+
+def should_redact_payload_key(key: Any) -> bool:
+    normalized = str(key).strip()
+    if normalized in PAYLOAD_REDACT_KEYS:
+        return True
+    lowered = normalized.lower()
+    return lowered == "url" or lowered.endswith("_url") or lowered.endswith("_urls")

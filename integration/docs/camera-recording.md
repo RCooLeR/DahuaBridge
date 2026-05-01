@@ -19,6 +19,24 @@ The camera platform registers bridge-backed entity services for DahuaBridge came
 
 These services map to the bridge clip capture APIs, not to device-side NVR manual recording mode changes.
 
+## Archive Playback And Export
+
+For NVR channel cameras, the integration also exposes bridge archive endpoints in entity attributes:
+
+- `bridge_archive_recordings_url_template`
+- `bridge_archive_export_url`
+- `bridge_playback_sessions_url`
+
+These attributes are for archive workflows, not for live clip capture.
+
+They are the integration-supported path for:
+
+- regular 24/7 recorder playback
+- event-backed archive playback such as SMD and IVS
+- MP4 export through the bridge
+
+The bridge owns the transcode and export behavior. If the source stream has audio, the bridge includes it. If the source stream has no audio, the bridge emits video-only output instead of mutating NVR audio settings.
+
 ## What These Services Do
 
 `start_recording`:
@@ -49,6 +67,7 @@ They do not:
 - toggle long-running NVR recorder configuration
 - replace the NVR's own circular recording policy
 - convert Home Assistant into the owner of the bridge clip file
+- require direct recorder-side file download for SMD or IVS playback/export
 
 ## Important Home Assistant Boundary
 
@@ -65,6 +84,8 @@ Because of that, the bridge-backed services documented here are the integration-
 Bridge-generated recording metadata and URLs come from the bridge catalog and from the bridge recording APIs.
 
 After starting a recording, the bridge returns clip metadata with the clip ID, current status, and download URL. The integration refreshes its catalog view after the service call so the camera entity can expose the updated recording state.
+
+For archive playback and export, Home Assistant should use the bridge archive endpoints advertised in camera attributes. Those endpoints map to bridge-side search, playback session creation, and MP4 export.
 
 For the bridge side, see:
 
