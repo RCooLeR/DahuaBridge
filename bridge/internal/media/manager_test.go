@@ -47,15 +47,16 @@ func TestExtractFramesPublishesJPEG(t *testing.T) {
 	defer cancel()
 
 	w := &worker{
-		key:         "test:stable",
-		streamID:    "test",
-		profileName: "stable",
-		parent:      manager,
-		ctx:         ctx,
-		cancel:      cancel,
-		subscribers: map[chan []byte]struct{}{},
-		ready:       make(chan struct{}),
-		startErr:    make(chan error, 1),
+		key:            "test:stable",
+		streamID:       "test",
+		profileName:    "stable",
+		parent:         manager,
+		ctx:            ctx,
+		cancel:         cancel,
+		subscribers:    map[chan []byte]struct{}{},
+		idleGeneration: 1,
+		ready:          make(chan struct{}),
+		startErr:       make(chan error, 1),
 	}
 
 	received := make(chan []byte, 2)
@@ -96,15 +97,16 @@ func TestReadMJPEGTreatsEOFAsUnexpected(t *testing.T) {
 	defer cancel()
 
 	w := &worker{
-		key:         "test:stable",
-		streamID:    "test",
-		profileName: "stable",
-		parent:      manager,
-		ctx:         ctx,
-		cancel:      cancel,
-		subscribers: map[chan []byte]struct{}{},
-		ready:       make(chan struct{}),
-		startErr:    make(chan error, 1),
+		key:            "test:stable",
+		streamID:       "test",
+		profileName:    "stable",
+		parent:         manager,
+		ctx:            ctx,
+		cancel:         cancel,
+		subscribers:    map[chan []byte]struct{}{},
+		idleGeneration: 1,
+		ready:          make(chan struct{}),
+		startErr:       make(chan error, 1),
 	}
 
 	err := w.readMJPEG(bytes.NewReader([]byte{0xFF, 0xD8, 0x01, 0x02, 0xFF, 0xD9}))
@@ -185,15 +187,16 @@ func TestWaitUntilReadyReturnsWorkerError(t *testing.T) {
 	defer cancel()
 
 	w := &worker{
-		key:         "test:stable",
-		streamID:    "test",
-		profileName: "stable",
-		parent:      manager,
-		ctx:         ctx,
-		cancel:      cancel,
-		subscribers: map[chan []byte]struct{}{},
-		ready:       make(chan struct{}),
-		startErr:    make(chan error, 1),
+		key:            "test:stable",
+		streamID:       "test",
+		profileName:    "stable",
+		parent:         manager,
+		ctx:            ctx,
+		cancel:         cancel,
+		subscribers:    map[chan []byte]struct{}{},
+		idleGeneration: 1,
+		ready:          make(chan struct{}),
+		startErr:       make(chan error, 1),
 	}
 
 	wantErr := errors.New("ffmpeg failed")
@@ -222,20 +225,21 @@ func TestStopWhenIdleCancelsWorker(t *testing.T) {
 	defer cancel()
 
 	w := &worker{
-		key:         "test:stable",
-		streamID:    "test",
-		profileName: "stable",
-		parent:      manager,
-		ctx:         ctx,
-		cancel:      cancel,
-		subscribers: map[chan []byte]struct{}{},
-		ready:       make(chan struct{}),
-		startErr:    make(chan error, 1),
+		key:            "test:stable",
+		streamID:       "test",
+		profileName:    "stable",
+		parent:         manager,
+		ctx:            ctx,
+		cancel:         cancel,
+		subscribers:    map[chan []byte]struct{}{},
+		idleGeneration: 1,
+		ready:          make(chan struct{}),
+		startErr:       make(chan error, 1),
 	}
 
 	done := make(chan struct{})
 	go func() {
-		w.stopWhenIdle()
+		w.stopWhenIdle(1)
 		close(done)
 	}()
 
@@ -249,6 +253,51 @@ func TestStopWhenIdleCancelsWorker(t *testing.T) {
 	case <-done:
 	case <-time.After(250 * time.Millisecond):
 		t.Fatal("expected stopWhenIdle to return")
+	}
+}
+
+func TestStopWhenIdleIgnoresStaleIdleWindow(t *testing.T) {
+	manager := New(config.MediaConfig{
+		Enabled:        true,
+		StartTimeout:   time.Second,
+		IdleTimeout:    40 * time.Millisecond,
+		MaxWorkers:     2,
+		FrameRate:      5,
+		JPEGQuality:    7,
+		Threads:        1,
+		ScaleWidth:     960,
+		HLSSegmentTime: 2 * time.Second,
+		HLSListSize:    6,
+	}, testResolver{}, zerolog.Nop(), nil)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	w := &worker{
+		key:            "test:stable",
+		streamID:       "test",
+		profileName:    "stable",
+		parent:         manager,
+		ctx:            ctx,
+		cancel:         cancel,
+		subscribers:    map[chan []byte]struct{}{},
+		idleGeneration: 1,
+		ready:          make(chan struct{}),
+		startErr:       make(chan error, 1),
+	}
+
+	go w.stopWhenIdle(1)
+
+	time.Sleep(10 * time.Millisecond)
+	w.mu.Lock()
+	w.idleGeneration = 2
+	w.subscribers[make(chan []byte)] = struct{}{}
+	w.mu.Unlock()
+
+	select {
+	case <-w.ctx.Done():
+		t.Fatal("expected stale idle timer not to cancel active worker")
+	case <-time.After(80 * time.Millisecond):
 	}
 }
 
@@ -364,6 +413,12 @@ func TestBuildHLSArgs(t *testing.T) {
 	}
 	if !strings.Contains(joined, "-hls_list_size 6") || !strings.Contains(joined, "delete_segments") {
 		t.Fatalf("expected live hls to keep a bounded deleting playlist, got %q", joined)
+	}
+	if !strings.Contains(joined, "-force_key_frames expr:gte(t,n_forced*2)") {
+		t.Fatalf("expected segment-aligned keyframe forcing, got %q", joined)
+	}
+	if !strings.Contains(joined, "-fps_mode cfr") {
+		t.Fatalf("expected cfr output mode, got %q", joined)
 	}
 	if !strings.Contains(joined, "index.m3u8") {
 		t.Fatalf("expected playlist output arg, got %q", joined)
@@ -553,7 +608,7 @@ func TestBuildWebRTCArgs(t *testing.T) {
 		cancel: cancel,
 	}
 
-	args := session.buildFFmpegArgs(51000, 51002, ffmpegStartAttempt{useHWAccel: false, inputPreset: manager.cfg.InputPreset})
+	args := session.buildFFmpegArgs(51000, 51002, ffmpegStartAttempt{useHWAccel: false, inputPreset: manager.cfg.InputPreset}, true)
 	joined := strings.Join(args, " ")
 	if !strings.Contains(joined, "-f rtp") {
 		t.Fatalf("expected rtp output args, got %q", joined)
@@ -575,6 +630,48 @@ func TestBuildWebRTCArgs(t *testing.T) {
 	}
 	if strings.Contains(joined, "-an") {
 		t.Fatalf("did not expect audio to be disabled in webrtc args, got %q", joined)
+	}
+}
+
+func TestBuildWebRTCArgsWithoutAudio(t *testing.T) {
+	manager := New(config.MediaConfig{
+		Enabled:        true,
+		StartTimeout:   time.Second,
+		IdleTimeout:    time.Second,
+		MaxWorkers:     2,
+		FrameRate:      5,
+		Threads:        1,
+		ScaleWidth:     960,
+		HLSSegmentTime: 2 * time.Second,
+		HLSListSize:    6,
+	}, testResolver{}, zerolog.Nop(), nil)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	session := &webrtcSession{
+		key:         "test:stable:webrtc",
+		streamID:    "test",
+		profileName: "stable",
+		profile: streams.Profile{
+			Name:         "stable",
+			StreamURL:    "rtsp://example.local/stream",
+			FrameRate:    5,
+			SourceWidth:  640,
+			SourceHeight: 480,
+		},
+		parent: manager,
+		ctx:    ctx,
+		cancel: cancel,
+	}
+
+	args := session.buildFFmpegArgs(51000, 51002, ffmpegStartAttempt{useHWAccel: false, inputPreset: manager.cfg.InputPreset}, false)
+	joined := strings.Join(args, " ")
+	if strings.Contains(joined, "rtp://127.0.0.1:51002?pkt_size=1200") {
+		t.Fatalf("did not expect local audio rtp target, got %q", joined)
+	}
+	if strings.Contains(joined, "-map 0:a:0?") || strings.Contains(joined, "-c:a libopus") {
+		t.Fatalf("did not expect audio mapping or opus encoding args, got %q", joined)
 	}
 }
 
@@ -612,7 +709,7 @@ func TestBuildWebRTCArgsWithQSVEncoder(t *testing.T) {
 		cancel: cancel,
 	}
 
-	args := session.buildFFmpegArgs(51000, 51002, ffmpegStartAttempt{useHWAccel: true, inputPreset: manager.cfg.InputPreset})
+	args := session.buildFFmpegArgs(51000, 51002, ffmpegStartAttempt{useHWAccel: true, inputPreset: manager.cfg.InputPreset}, true)
 	joined := strings.Join(args, " ")
 	if !strings.Contains(joined, "-c:v h264_qsv") {
 		t.Fatalf("expected qsv encoder args, got %q", joined)
@@ -751,7 +848,7 @@ func TestBuildFFmpegStartAttemptsStableOnly(t *testing.T) {
 func TestBuildRTSPInputArgsLowLatency(t *testing.T) {
 	args := buildRTSPInputArgs(streams.Profile{StreamURL: "rtsp://example.local/stream"}, "low_latency")
 	joined := strings.Join(args, " ")
-	if !strings.Contains(joined, "-fflags +discardcorrupt+nobuffer") {
+	if !strings.Contains(joined, "-fflags +discardcorrupt+genpts+nobuffer") {
 		t.Fatalf("expected low-latency fflags, got %q", joined)
 	}
 	if !strings.Contains(joined, "-flags low_delay") {
@@ -762,11 +859,22 @@ func TestBuildRTSPInputArgsLowLatency(t *testing.T) {
 func TestBuildRTSPInputArgsStable(t *testing.T) {
 	args := buildRTSPInputArgs(streams.Profile{StreamURL: "rtsp://example.local/stream"}, "stable")
 	joined := strings.Join(args, " ")
-	if !strings.Contains(joined, "-fflags +discardcorrupt") {
+	if !strings.Contains(joined, "-fflags +discardcorrupt+genpts") {
 		t.Fatalf("expected stable discardcorrupt flag, got %q", joined)
 	}
 	if strings.Contains(joined, "nobuffer") || strings.Contains(joined, "low_delay") {
 		t.Fatalf("did not expect low-latency flags in stable mode, got %q", joined)
+	}
+}
+
+func TestBuildRTSPInputArgsAddsWallclockTimestampsWhenRequested(t *testing.T) {
+	args := buildRTSPInputArgs(streams.Profile{
+		StreamURL:                "rtsp://example.local/stream",
+		UseWallclockAsTimestamps: true,
+	}, "stable")
+	joined := strings.Join(args, " ")
+	if !strings.Contains(joined, "-use_wallclock_as_timestamps 1") {
+		t.Fatalf("expected wallclock timestamp arg, got %q", joined)
 	}
 }
 
@@ -776,6 +884,16 @@ func TestIsHardwareAccelFailure(t *testing.T) {
 	}
 	if isHardwareAccelFailure("unexpected status 401 Unauthorized") {
 		t.Fatal("did not expect unrelated error to trigger fallback")
+	}
+}
+
+func TestIsOptionalAudioOutputFailure(t *testing.T) {
+	stderrText := "Stream map '?' matches no streams; ignoring.\nOutput #1, rtp, to 'rtp://127.0.0.1:52637?pkt_size=1200':\nOutput file does not contain any stream"
+	if !isOptionalAudioOutputFailure(stderrText) {
+		t.Fatal("expected missing input audio to trigger audio-less retry")
+	}
+	if isOptionalAudioOutputFailure("unexpected status 401 Unauthorized") {
+		t.Fatal("did not expect unrelated error to trigger audio-less retry")
 	}
 }
 

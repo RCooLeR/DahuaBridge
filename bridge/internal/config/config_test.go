@@ -49,7 +49,7 @@ func TestStateStoreDefaultsFlushInterval(t *testing.T) {
 
 func TestMediaDefaults(t *testing.T) {
 	cfg := defaultConfig()
-	if cfg.Media.MaxWorkers != 14 {
+	if cfg.Media.MaxWorkers != 32 {
 		t.Fatalf("unexpected default media max_workers %d", cfg.Media.MaxWorkers)
 	}
 	if cfg.Media.VideoEncoder != "software" {
