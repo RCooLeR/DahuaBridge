@@ -45,7 +45,13 @@ export function renderSelectedCameraViewport(
   selectedProfileKey: string | null,
   selectedSource: CameraViewportSource | null,
   muted: boolean,
+  options?: {
+    controls?: boolean;
+    preload?: "none" | "metadata" | "auto";
+  },
 ): TemplateResult {
+  const controls = options?.controls ?? true;
+  const preload = options?.preload ?? "auto";
   const resolvedProfile = resolveSelectedStreamProfile(camera.stream, selectedProfileKey);
   const resolvedSource = resolveStreamViewportSource(
     camera.stream,
@@ -74,7 +80,8 @@ export function renderSelectedCameraViewport(
         data-audio-muted=${muted ? "true" : "false"}
         autoplay
         playsinline
-        controls
+        ?controls=${controls}
+        preload=${preload}
         ?muted=${muted}
       ></video>
     `;
@@ -91,7 +98,8 @@ export function renderSelectedCameraViewport(
           data-audio-muted=${muted ? "true" : "false"}
           autoplay
           playsinline
-          controls
+          ?controls=${controls}
+          preload=${preload}
           ?muted=${muted}
         ></video>
       `;
@@ -118,7 +126,8 @@ export function renderSelectedCameraViewport(
         data-audio-muted=${muted ? "true" : "false"}
         autoplay
         playsinline
-        controls
+        ?controls=${controls}
+        preload=${preload}
         ?muted=${muted}
       ></video>
     `;
@@ -135,7 +144,8 @@ export function renderSelectedCameraViewport(
           data-audio-muted=${muted ? "true" : "false"}
           autoplay
           playsinline
-          controls
+          ?controls=${controls}
+          preload=${preload}
           ?muted=${muted}
         ></video>
       `;
@@ -760,6 +770,21 @@ export function resolvePlaybackViewportSource(
   const availableSources = availablePlaybackViewportSources(session, selectedProfileKey);
   if (selectedSource && availableSources.includes(selectedSource)) {
     return selectedSource;
+  }
+  return availableSources[0] ?? null;
+}
+
+export function resolveInitialPlaybackViewportSource(
+  session: NvrPlaybackSessionModel,
+  selectedProfileKey: string | null,
+  previousSource: CameraViewportSource | null,
+): CameraViewportSource | null {
+  const availableSources = availablePlaybackViewportSources(session, selectedProfileKey);
+  if (previousSource === "webrtc" && availableSources.includes("webrtc")) {
+    return "webrtc";
+  }
+  if (availableSources.includes("hls")) {
+    return "hls";
   }
   return availableSources[0] ?? null;
 }

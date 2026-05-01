@@ -20,6 +20,8 @@ const optionalIntegerSchema = z.preprocess((value) => {
 }, z.coerce.number().int().optional().nullable());
 
 const archiveRecordingSchema = z.object({
+  source: z.string().optional().nullable(),
+  Source: z.string().optional().nullable(),
   channel: optionalIntegerSchema,
   Channel: optionalIntegerSchema,
   start_time: z.string().optional().nullable(),
@@ -50,6 +52,11 @@ const archiveRecordingSchema = z.object({
   Flags: z.array(z.union([z.string(), z.number()])).optional().default([]),
 });
 
+const archiveRecordingArraySchema = z.preprocess(
+  (value) => (Array.isArray(value) ? value : []),
+  z.array(archiveRecordingSchema),
+);
+
 const archiveSearchResultSchema = z.object({
   device_id: z.string().optional().nullable(),
   deviceId: z.string().optional().nullable(),
@@ -63,10 +70,10 @@ const archiveSearchResultSchema = z.object({
   Limit: optionalIntegerSchema,
   returned_count: optionalIntegerSchema,
   found: optionalIntegerSchema,
-  items: z.array(archiveRecordingSchema).optional().default([]),
-  event: z.array(archiveRecordingSchema).optional().default([]),
-  events: z.array(archiveRecordingSchema).optional().default([]),
-  recordings: z.array(archiveRecordingSchema).optional().default([]),
+  items: archiveRecordingArraySchema,
+  event: archiveRecordingArraySchema,
+  events: archiveRecordingArraySchema,
+  recordings: archiveRecordingArraySchema,
 });
 
 const archiveExportClipSchema = z.object({
@@ -104,9 +111,14 @@ const bridgeRecordingSchema = z.object({
   error: z.string().optional().nullable(),
 });
 
+const bridgeRecordingArraySchema = z.preprocess(
+  (value) => (Array.isArray(value) ? value : []),
+  z.array(bridgeRecordingSchema),
+);
+
 const bridgeRecordingListSchema = z.object({
-  returned_count: z.number().int(),
-  items: z.array(bridgeRecordingSchema),
+  returned_count: optionalIntegerSchema,
+  items: bridgeRecordingArraySchema,
 });
 
 export interface ArchiveRecordingsQuery {
@@ -115,6 +127,7 @@ export interface ArchiveRecordingsQuery {
   endTime: string;
   limit: number;
   eventCode?: string;
+  eventOnly?: boolean;
 }
 
 export interface BridgeRecordingsQuery {
@@ -133,7 +146,10 @@ export async function fetchArchiveRecordings(
   url.searchParams.set("start", query.startTime);
   url.searchParams.set("end", query.endTime);
   url.searchParams.set("limit", String(Math.max(1, Math.trunc(query.limit))));
-  if (query.eventCode && query.eventCode !== "__all__") {
+  if (query.eventOnly) {
+    url.searchParams.set("event_only", "true");
+    url.searchParams.set("event", query.eventCode && query.eventCode !== "__all__" ? query.eventCode : "all");
+  } else if (query.eventCode && query.eventCode !== "__all__") {
     url.searchParams.set("event", query.eventCode);
   }
 
@@ -208,7 +224,7 @@ export async function fetchBridgeRecordings(
 
   const payload = bridgeRecordingListSchema.parse(await response.json());
   return {
-    returnedCount: payload.returned_count,
+    returnedCount: firstNumber(payload.returned_count, payload.items.length),
     items: payload.items.map(mapBridgeRecording),
   };
 }
@@ -222,6 +238,7 @@ function mapArchiveRecording(
   },
 ): NvrArchiveRecordingModel {
   return {
+    source: firstNullableString(item.source, item.Source),
     channel: firstNumber(item.channel, item.Channel, fallback.channel),
     startTime: firstString(item.start_time, item.StartTime, fallback.startTime),
     endTime: firstString(item.end_time, item.EndTime, fallback.endTime),

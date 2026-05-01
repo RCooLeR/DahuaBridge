@@ -230,7 +230,7 @@ func TestRuntimeServicesNVRSnapshotUsesMediaCaptureFirst(t *testing.T) {
 	}
 }
 
-func TestRuntimeServicesNVRRecordingsMergesBridgeClips(t *testing.T) {
+func TestRuntimeServicesNVRRecordingsDoesNotMergeBridgeClips(t *testing.T) {
 	probes := store.NewProbeStore()
 	services := newRuntimeServices(config.Config{
 		HomeAssistant: config.HomeAssistantConfig{
@@ -261,23 +261,8 @@ func TestRuntimeServicesNVRRecordingsMergesBridgeClips(t *testing.T) {
 	}, config.DeviceConfig{ID: "west20_nvr"})
 	services.AttachMedia(stubRuntimeMedia{
 		findClips: func(query media.ClipQuery) ([]media.ClipInfo, error) {
-			if query.RootDeviceID != "west20_nvr" || query.Channel != 5 {
-				t.Fatalf("unexpected clip query %+v", query)
-			}
-			return []media.ClipInfo{{
-				ID:           "clip_1",
-				StreamID:     "west20_nvr_channel_05",
-				RootDeviceID: "west20_nvr",
-				DeviceKind:   dahua.DeviceKindNVRChannel,
-				Channel:      5,
-				Profile:      "stable",
-				Status:       media.ClipStatusCompleted,
-				StartedAt:    time.Date(2026, 4, 28, 0, 30, 0, 0, time.UTC),
-				EndedAt:      time.Date(2026, 4, 28, 0, 30, 15, 0, time.UTC),
-				Duration:     15 * time.Second,
-				Bytes:        4096,
-				FileName:     "clip_1.mp4",
-			}}, nil
+			t.Fatalf("NVR archive search must not query bridge MP4 clips, got %+v", query)
+			return nil, nil
 		},
 	})
 
@@ -290,20 +275,14 @@ func TestRuntimeServicesNVRRecordingsMergesBridgeClips(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NVRRecordings returned error: %v", err)
 	}
-	if len(result.Items) != 2 {
-		t.Fatalf("expected 2 items, got %d", len(result.Items))
+	if len(result.Items) != 1 {
+		t.Fatalf("expected 1 native NVR item, got %d", len(result.Items))
 	}
 	if result.Items[0].Source != "nvr" {
 		t.Fatalf("expected NVR item first, got %+v", result.Items[0])
 	}
 	if result.Items[0].DownloadURL != "" {
 		t.Fatalf("NVR archive items must not expose unverified direct download URLs, got %q", result.Items[0].DownloadURL)
-	}
-	if result.Items[1].Source != "bridge" || result.Items[1].ClipID != "clip_1" {
-		t.Fatalf("expected bridge clip second, got %+v", result.Items[1])
-	}
-	if !strings.Contains(result.Items[1].DownloadURL, "/api/v1/media/recordings/clip_1/download") {
-		t.Fatalf("unexpected bridge download url %q", result.Items[1].DownloadURL)
 	}
 }
 

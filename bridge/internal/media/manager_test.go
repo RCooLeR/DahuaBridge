@@ -325,8 +325,52 @@ func TestBuildHLSArgs(t *testing.T) {
 	if strings.Contains(joined, "-an") {
 		t.Fatalf("did not expect audio to be disabled in hls args, got %q", joined)
 	}
+	if !strings.Contains(joined, "-hls_list_size 6") || !strings.Contains(joined, "delete_segments") {
+		t.Fatalf("expected live hls to keep a bounded deleting playlist, got %q", joined)
+	}
 	if !strings.Contains(joined, "index.m3u8") {
 		t.Fatalf("expected playlist output arg, got %q", joined)
+	}
+}
+
+func TestBuildPlaybackHLSArgsKeepsSegmentsForPlayerFetches(t *testing.T) {
+	manager := New(config.MediaConfig{
+		Enabled:        true,
+		StartTimeout:   time.Second,
+		IdleTimeout:    time.Second,
+		MaxWorkers:     2,
+		FrameRate:      5,
+		Threads:        1,
+		HLSSegmentTime: 2 * time.Second,
+		HLSListSize:    6,
+	}, testResolver{}, zerolog.Nop(), nil)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	w := &hlsWorker{
+		key:         "nvrpb_test:stable",
+		streamID:    "nvrpb_test",
+		profileName: "stable",
+		profile: streams.Profile{
+			Name:      "stable",
+			StreamURL: "rtsp://example.local/playback",
+			FrameRate: 5,
+		},
+		parent:       manager,
+		ctx:          ctx,
+		cancel:       cancel,
+		lastAccessAt: time.Now(),
+		startErr:     make(chan error, 1),
+	}
+
+	args := w.buildFFmpegArgs(ffmpegStartAttempt{useHWAccel: false, inputPreset: manager.cfg.InputPreset})
+	joined := strings.Join(args, " ")
+	if !strings.Contains(joined, "-hls_list_size 0") {
+		t.Fatalf("expected playback hls to keep a complete playlist, got %q", joined)
+	}
+	if strings.Contains(joined, "delete_segments") || strings.Contains(joined, "omit_endlist") {
+		t.Fatalf("expected playback hls to keep segments until worker cleanup, got %q", joined)
 	}
 }
 

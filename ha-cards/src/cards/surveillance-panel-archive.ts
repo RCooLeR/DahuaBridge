@@ -227,8 +227,12 @@ export function renderArchiveRecordings({
               <div class="event-card">
                 <div class="muted">
                   ${archiveLoading
-                    ? "Loading archive recordings."
-                    : `No recordings found for ${formatArchiveDateBadge(archiveDate).toLowerCase()}.`}
+                    ? showEventFilter
+                      ? "Loading events."
+                      : "Loading archive recordings."
+                    : showEventFilter
+                      ? `No events found for ${formatArchiveDateBadge(archiveDate).toLowerCase()}.`
+                      : `No recordings found for ${formatArchiveDateBadge(archiveDate).toLowerCase()}.`}
                 </div>
               </div>
             `}

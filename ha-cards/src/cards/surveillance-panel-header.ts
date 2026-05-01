@@ -173,12 +173,16 @@ function headerChipIcon(label: string): string {
   switch (label) {
     case "Cameras Online":
       return "mdi:cctv";
+    case "Events Today":
+      return "mdi:calendar-today";
     case "Motion":
       return "mdi:motion-sensor";
     case "Human":
       return "mdi:account-alert-outline";
-    case "Transport":
+    case "Vehicle":
       return "mdi:car";
+    case "IVS":
+      return "mdi:shield-search";
     case "NVR Health":
       return "mdi:harddisk";
     case "Focus":

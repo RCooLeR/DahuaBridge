@@ -13,9 +13,11 @@ jobs:
   bridge:
     name: Bridge Go Tests
     runs-on: ubuntu-latest
+
     defaults:
       run:
         working-directory: bridge
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -29,13 +31,27 @@ jobs:
       - name: Test
         run: go test ./...
 
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
       - name: Build container
-        working-directory: .
-        run: docker build -f bridge/Dockerfile -t dahuabridge:ci .
+        uses: docker/build-push-action@v6
+        with:
+          context: ./bridge
+          file: ./bridge/Dockerfile
+          platforms: linux/amd64
+          push: false
+          load: true
+          tags: dahuabridge:ci
+          build-args: |
+            VERSION=ci
+            COMMIT=${{ github.sha }}
+            BUILD_DATE=${{ github.event.head_commit.timestamp || github.run_id }}
 
   integration:
     name: Home Assistant Integration Tests
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -51,9 +67,11 @@ jobs:
   ha-cards:
     name: HA Cards Checks
     runs-on: ubuntu-latest
+
     defaults:
       run:
         working-directory: ha-cards
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4

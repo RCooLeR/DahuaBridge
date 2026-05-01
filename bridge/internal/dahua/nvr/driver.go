@@ -125,6 +125,29 @@ type nvrLogItem struct {
 	User     string   `json:"User"`
 }
 
+type nvrSMDStartFindResponse struct {
+	Count int   `json:"Count"`
+	Token int64 `json:"Token"`
+}
+
+type nvrSMDFindResponse struct {
+	SMDInfo []nvrSMDInfo `json:"SmdInfo"`
+}
+
+type nvrSMDInfo struct {
+	Channel   int    `json:"Channel"`
+	StartTime string `json:"StartTime"`
+	EndTime   string `json:"EndTime"`
+	Type      string `json:"Type"`
+	SMDType   string `json:"SmdType"`
+	Event     string `json:"Event"`
+}
+
+type nvrMediaFileCountResponse struct {
+	Count int `json:"count"`
+	Found int `json:"found"`
+}
+
 var (
 	channelNamePattern            = regexp.MustCompile(`^table\.ChannelTitle\[(\d+)\]\.Name$`)
 	encodeResolutionPattern       = regexp.MustCompile(`^table\.Encode\[(\d+)\]\.(MainFormat|ExtraFormat)\[0\]\.Video\.resolution$`)
@@ -540,6 +563,10 @@ func (d *Driver) FindRecordings(ctx context.Context, query dahua.NVRRecordingQue
 		query.Limit = 25
 	}
 
+	if query.EventOnly {
+		return d.findEventRecordings(ctx, query)
+	}
+
 	eventCode := recordingEventCondition(query.EventCode)
 	if d.rpc != nil && eventCode != "*" {
 		result, err := d.findEventRecordingsViaLogRPC(ctx, query)
@@ -566,7 +593,7 @@ func (d *Driver) FindRecordings(ctx context.Context, query dahua.NVRRecordingQue
 
 func recordingEventCondition(eventCode string) string {
 	switch strings.ToLower(strings.TrimSpace(eventCode)) {
-	case "", "*", "all", "any", "__all__":
+	case "", "*", "all", "any", "__all__", "com.all":
 		return "*"
 	default:
 		code := canonicalRecordingEventCode(eventCode)
@@ -575,6 +602,364 @@ func recordingEventCondition(eventCode string) string {
 		}
 		return normalizeRecordingEventCode(eventCode)
 	}
+}
+
+func (d *Driver) findEventRecordings(ctx context.Context, query dahua.NVRRecordingQuery) (dahua.NVRRecordingSearchResult, error) {
+	result := emptyNVRRecordingSearchResult(d.ID(), query)
+	if d.rpc == nil {
+		return result, nil
+	}
+
+	var firstErr error
+	appendResult := func(next dahua.NVRRecordingSearchResult, err error) {
+		if err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+			return
+		}
+		result.Items = append(result.Items, next.Items...)
+	}
+
+	if smdTypes := recordingSMDTypesForEvent(query.EventCode); len(smdTypes) > 0 {
+		next, err := d.findEventRecordingsViaSMDRPC(ctx, query, smdTypes)
+		appendResult(next, err)
+	}
+
+	for _, ivsCode := range recordingIVSEventCodesForEvent(query.EventCode) {
+		ivsQuery := query
+		ivsQuery.EventCode = ivsCode
+		next, err := d.findEventRecordingsViaIVSRPC(ctx, ivsQuery, ivsCode)
+		appendResult(next, err)
+	}
+
+	if len(result.Items) == 0 {
+		if firstErr != nil {
+			return dahua.NVRRecordingSearchResult{}, firstErr
+		}
+		result.ReturnedCount = 0
+		return result, nil
+	}
+
+	result.Items = dedupeNVRRecordings(result.Items)
+	sort.SliceStable(result.Items, func(i, j int) bool {
+		return nvrRecordingStartSortKey(result.Items[i]).After(nvrRecordingStartSortKey(result.Items[j]))
+	})
+	if query.Limit > 0 && len(result.Items) > query.Limit {
+		result.Items = result.Items[:query.Limit]
+	}
+	result.ReturnedCount = len(result.Items)
+	return result, nil
+}
+
+func emptyNVRRecordingSearchResult(deviceID string, query dahua.NVRRecordingQuery) dahua.NVRRecordingSearchResult {
+	return dahua.NVRRecordingSearchResult{
+		DeviceID:  deviceID,
+		Channel:   query.Channel,
+		StartTime: query.StartTime.In(time.Local).Format(recordingTimeLayout),
+		EndTime:   query.EndTime.In(time.Local).Format(recordingTimeLayout),
+		Limit:     query.Limit,
+		Items:     []dahua.NVRRecording{},
+	}
+}
+
+func (d *Driver) findEventRecordingsViaSMDRPC(ctx context.Context, query dahua.NVRRecordingQuery, smdTypes []string) (dahua.NVRRecordingSearchResult, error) {
+	result := emptyNVRRecordingSearchResult(d.ID(), query)
+
+	var startResp nvrSMDStartFindResponse
+	if err := d.rpc.Call(ctx, "SmdDataFinder.startFind", map[string]any{
+		"Condition": map[string]any{
+			"StartTime": formatRecordingWallTime(query.StartTime),
+			"EndTime":   formatRecordingWallTime(query.EndTime),
+			"Orders": []map[string]any{{
+				"Field": "SystemTime",
+				"Type":  "Descent",
+			}},
+			"Channels": []int{query.Channel - 1},
+			"Order":    "descOrder",
+			"SmdType":  smdTypes,
+		},
+	}, &startResp); err != nil {
+		return dahua.NVRRecordingSearchResult{}, fmt.Errorf("start smd event search: %w", err)
+	}
+	if startResp.Token == 0 || startResp.Count == 0 {
+		return result, nil
+	}
+
+	pageSize := recordingEventSearchPageSize(query.Limit)
+	for offset := 0; offset < startResp.Count && len(result.Items) < query.Limit; offset += pageSize {
+		count := pageSize
+		if remaining := query.Limit - len(result.Items); remaining > 0 && remaining < count {
+			count = remaining
+		}
+		if count <= 0 {
+			break
+		}
+
+		var findResp nvrSMDFindResponse
+		if err := d.rpc.Call(ctx, "SmdDataFinder.doFind", map[string]any{
+			"Token":  startResp.Token,
+			"Offset": offset,
+			"Count":  count,
+		}, &findResp); err != nil {
+			return dahua.NVRRecordingSearchResult{}, fmt.Errorf("fetch smd event results: %w", err)
+		}
+		if len(findResp.SMDInfo) == 0 {
+			break
+		}
+
+		for _, info := range findResp.SMDInfo {
+			recording, ok := smdInfoToRecording(info, query)
+			if !ok {
+				continue
+			}
+			result.Items = append(result.Items, recording)
+			if len(result.Items) >= query.Limit {
+				break
+			}
+		}
+		if len(findResp.SMDInfo) < count {
+			break
+		}
+	}
+
+	result.ReturnedCount = len(result.Items)
+	return result, nil
+}
+
+func (d *Driver) findEventRecordingsViaIVSRPC(ctx context.Context, query dahua.NVRRecordingQuery, eventCode string) (dahua.NVRRecordingSearchResult, error) {
+	result := emptyNVRRecordingSearchResult(d.ID(), query)
+
+	var handle int64
+	if err := d.rpc.Call(ctx, "mediaFileFind.factory.create", nil, &handle); err != nil {
+		return dahua.NVRRecordingSearchResult{}, fmt.Errorf("create ivs event search handle: %w", err)
+	}
+	if handle == 0 {
+		return dahua.NVRRecordingSearchResult{}, fmt.Errorf("ivs event search handle is empty")
+	}
+	defer d.closeRecordingSearchHandle(handle)
+
+	findParams := map[string]any{
+		"condition": map[string]any{
+			"StartTime": formatRecordingWallTime(query.StartTime),
+			"EndTime":   formatRecordingWallTime(query.EndTime),
+			"Channel":   []int{query.Channel - 1},
+			"DB": map[string]any{
+				"IVS": map[string]any{
+					"Order":      "Descent",
+					"Events":     []string{eventCode},
+					"Rule":       eventCode,
+					"ObjectType": []string{"Vehicle", "Human"},
+				},
+			},
+			"Events": []string{eventCode},
+		},
+	}
+	if err := d.rpc.CallObject(ctx, "mediaFileFind.findFile", findParams, handle, nil); err != nil {
+		return dahua.NVRRecordingSearchResult{}, fmt.Errorf("start ivs event search: %w", err)
+	}
+
+	var countResp nvrMediaFileCountResponse
+	if err := d.rpc.CallObject(ctx, "mediaFileFind.getCount", nil, handle, &countResp); err != nil {
+		d.logger.Debug().Err(err).Int64("handle", handle).Msg("ivs event count failed")
+	} else if countResp.Count == 0 && countResp.Found == 0 {
+		return result, nil
+	}
+
+	if err := d.rpc.CallObject(ctx, "mediaFileFind.setQueryResultOptions", map[string]any{
+		"options": map[string]any{"offset": 0},
+	}, handle, nil); err != nil {
+		d.logger.Debug().Err(err).Int64("handle", handle).Msg("ivs event result option setup failed")
+	}
+
+	var rawResult map[string]any
+	if err := d.rpc.CallObject(ctx, "mediaFileFind.findNextFile", map[string]any{
+		"count": query.Limit,
+	}, handle, &rawResult); err != nil {
+		return dahua.NVRRecordingSearchResult{}, fmt.Errorf("fetch ivs event results: %w", err)
+	}
+
+	result = parseRPCRecordingSearchResult(rawResult)
+	result.DeviceID = d.ID()
+	result.Channel = query.Channel
+	result.StartTime = query.StartTime.In(time.Local).Format(recordingTimeLayout)
+	result.EndTime = query.EndTime.In(time.Local).Format(recordingTimeLayout)
+	result.Limit = query.Limit
+	for i := range result.Items {
+		result.Items[i] = normalizeIVSEventRecording(result.Items[i], query, eventCode)
+	}
+	result.ReturnedCount = len(result.Items)
+	return result, nil
+}
+
+func recordingSMDTypesForEvent(eventCode string) []string {
+	switch strings.ToLower(recordingEventCondition(eventCode)) {
+	case "*":
+		return []string{"smdTypeHuman", "smdTypeVehicle", "smdTypeAnimal"}
+	case "smartmotionhuman":
+		return []string{"smdTypeHuman"}
+	case "smartmotionvehicle":
+		return []string{"smdTypeVehicle"}
+	case "animaldetection":
+		return []string{"smdTypeAnimal"}
+	default:
+		return nil
+	}
+}
+
+func recordingIVSEventCodesForEvent(eventCode string) []string {
+	switch strings.ToLower(recordingEventCondition(eventCode)) {
+	case "*":
+		return []string{"CrossLineDetection", "CrossRegionDetection", "LeftDetection", "MoveDetection"}
+	case "crosslinedetection":
+		return []string{"CrossLineDetection"}
+	case "crossregiondetection":
+		return []string{"CrossRegionDetection"}
+	case "leftdetection":
+		return []string{"LeftDetection"}
+	case "movedetection":
+		return []string{"MoveDetection"}
+	default:
+		return nil
+	}
+}
+
+func recordingEventSearchPageSize(limit int) int {
+	pageSize := limit
+	if pageSize < 25 {
+		pageSize = 25
+	}
+	if pageSize > 100 {
+		pageSize = 100
+	}
+	return pageSize
+}
+
+func smdInfoToRecording(info nvrSMDInfo, query dahua.NVRRecordingQuery) (dahua.NVRRecording, bool) {
+	channel := info.Channel + 1
+	if channel != query.Channel {
+		return dahua.NVRRecording{}, false
+	}
+
+	startTime, ok := parseNVRRecordingLocalTime(info.StartTime)
+	if !ok {
+		return dahua.NVRRecording{}, false
+	}
+	endTime, ok := parseNVRRecordingLocalTime(info.EndTime)
+	if !ok || !endTime.After(startTime) {
+		endTime = startTime.Add(time.Minute)
+	}
+	startTime, endTime = clampNVRRecordingWindow(startTime, endTime, query.StartTime, query.EndTime)
+	if !endTime.After(startTime) {
+		return dahua.NVRRecording{}, false
+	}
+
+	eventType := firstNonEmpty(info.Type, info.SMDType, info.Event)
+	if eventType == "" {
+		eventType = "smd"
+	}
+
+	return dahua.NVRRecording{
+		Source:      "nvr_event",
+		Channel:     channel,
+		StartTime:   startTime.In(time.Local).Format(recordingTimeLayout),
+		EndTime:     endTime.In(time.Local).Format(recordingTimeLayout),
+		Type:        "Event." + eventType,
+		VideoStream: "Main",
+		Flags:       []string{"Event", eventType},
+	}, true
+}
+
+func normalizeIVSEventRecording(recording dahua.NVRRecording, query dahua.NVRRecordingQuery, eventCode string) dahua.NVRRecording {
+	recording.Source = "nvr_event"
+	if recording.Channel <= 0 {
+		recording.Channel = query.Channel
+	}
+	if strings.TrimSpace(recording.Type) == "" || strings.EqualFold(recording.Type, "dav") {
+		recording.Type = "Event." + eventCode
+	}
+	recording.Flags = appendRecordingFlags(recording.Flags, "Event", eventCode)
+	if recording.VideoStream == "" {
+		recording.VideoStream = "Main"
+	}
+	return recording
+}
+
+func appendRecordingFlags(flags []string, values ...string) []string {
+	seen := make(map[string]struct{}, len(flags)+len(values))
+	result := make([]string, 0, len(flags)+len(values))
+	for _, flag := range append(flags, values...) {
+		trimmed := strings.TrimSpace(flag)
+		if trimmed == "" {
+			continue
+		}
+		key := strings.ToLower(trimmed)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		result = append(result, trimmed)
+	}
+	return result
+}
+
+func parseNVRRecordingLocalTime(raw string) (time.Time, bool) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return time.Time{}, false
+	}
+	for _, layout := range []string{recordingTimeLayout, recordingRPCTimeLayout, time.RFC3339} {
+		var (
+			parsed time.Time
+			err    error
+		)
+		if layout == time.RFC3339 {
+			parsed, err = time.Parse(layout, raw)
+		} else {
+			parsed, err = time.ParseInLocation(layout, raw, time.Local)
+		}
+		if err == nil {
+			return parsed, true
+		}
+	}
+	return time.Time{}, false
+}
+
+func clampNVRRecordingWindow(startTime time.Time, endTime time.Time, queryStart time.Time, queryEnd time.Time) (time.Time, time.Time) {
+	if !queryStart.IsZero() && startTime.Before(queryStart) {
+		startTime = queryStart
+	}
+	if !queryEnd.IsZero() && endTime.After(queryEnd) {
+		endTime = queryEnd
+	}
+	return startTime, endTime
+}
+
+func dedupeNVRRecordings(items []dahua.NVRRecording) []dahua.NVRRecording {
+	seen := make(map[string]struct{}, len(items))
+	result := make([]dahua.NVRRecording, 0, len(items))
+	for _, item := range items {
+		key := strings.Join([]string{
+			strconv.Itoa(item.Channel),
+			strings.ToLower(strings.TrimSpace(item.Type)),
+			strings.TrimSpace(item.StartTime),
+			strings.TrimSpace(item.EndTime),
+			strings.TrimSpace(item.FilePath),
+		}, "|")
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		result = append(result, item)
+	}
+	return result
+}
+
+func nvrRecordingStartSortKey(item dahua.NVRRecording) time.Time {
+	if parsed, ok := parseNVRRecordingLocalTime(item.StartTime); ok {
+		return parsed
+	}
+	return time.Time{}
 }
 
 func (d *Driver) findEventRecordingsViaLogRPC(ctx context.Context, query dahua.NVRRecordingQuery) (dahua.NVRRecordingSearchResult, error) {
@@ -1738,6 +2123,10 @@ func escapeRecordingFilePath(filePath string) string {
 
 func formatRecordingRPCTime(value time.Time) string {
 	return value.In(time.Local).Format(recordingRPCTimeLayout)
+}
+
+func formatRecordingWallTime(value time.Time) string {
+	return value.In(time.Local).Format(recordingTimeLayout)
 }
 
 func stringFromAny(value any) string {

@@ -1,12 +1,11 @@
 # syntax=docker/dockerfile:1.7
 
 ARG GO_VERSION=1.26.2
-FROM --platform=$BUILDPLATFORM golang:${GO_VERSION}-alpine AS build
+
+FROM golang:${GO_VERSION}-alpine AS build
 
 WORKDIR /src
 
-ARG TARGETOS
-ARG TARGETARCH
 ARG VERSION=dev
 ARG COMMIT=unknown
 ARG BUILD_DATE=unknown
@@ -26,7 +25,6 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     cd "${MODULE_ROOT}"; \
     go mod download
 
-
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
     set -eux; \
@@ -40,7 +38,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     fi; \
     cd "${MODULE_ROOT}"; \
     MODULE="$(go list -m)"; \
-    CGO_ENABLED=0 GOOS="${TARGETOS:-linux}" GOARCH="${TARGETARCH:-amd64}" \
+    CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
     go build \
       -trimpath \
       -ldflags="-s -w \
@@ -49,11 +47,17 @@ RUN --mount=type=cache,target=/go/pkg/mod \
         -X ${MODULE}/internal/buildinfo.BuildDate=${BUILD_DATE}" \
       -o /out/dahuabridge \
       ./cmd/dahuabridge; \
-    install -Dm755 docker-entrypoint.sh /out/docker-entrypoint.sh
+    if [ -f "${MODULE_ROOT}/docker-entrypoint.sh" ]; then \
+        ENTRYPOINT_SRC="${MODULE_ROOT}/docker-entrypoint.sh"; \
+    elif [ -f /src/docker-entrypoint.sh ]; then \
+        ENTRYPOINT_SRC=/src/docker-entrypoint.sh; \
+    else \
+        echo "unable to locate docker-entrypoint.sh" >&2; \
+        exit 1; \
+    fi; \
+    install -Dm755 "${ENTRYPOINT_SRC}" /out/docker-entrypoint.sh
 
-FROM --platform=$TARGETPLATFORM debian:bookworm-slim
-
-ARG TARGETARCH
+FROM --platform=linux/amd64 debian:bookworm-slim
 
 RUN set -eux; \
     sed -i 's/Components: main/Components: main contrib non-free non-free-firmware/g' /etc/apt/sources.list.d/debian.sources; \
@@ -63,13 +67,14 @@ RUN set -eux; \
         tzdata \
         wget \
         ffmpeg \
-        gosu; \
-    if [ "${TARGETARCH:-amd64}" = "amd64" ]; then \
-        apt-get install -y --no-install-recommends \
-            vainfo \
-            intel-media-va-driver-non-free \
-            libvpl2 \
-            libmfx-gen1.2; \
+        gosu \
+        vainfo \
+        libvpl2 \
+        intel-media-va-driver-non-free; \
+    if apt-cache show libmfx-gen1.2 >/dev/null 2>&1; then \
+        apt-get install -y --no-install-recommends libmfx-gen1.2; \
+    elif apt-cache show libmfx1 >/dev/null 2>&1; then \
+        apt-get install -y --no-install-recommends libmfx1; \
     fi; \
     rm -rf /var/lib/apt/lists/*; \
     groupadd --system dahuabridge; \

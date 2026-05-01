@@ -63,6 +63,7 @@ describe("bridge playback", () => {
 
   it("creates a session request from an archive recording at the recording start time", () => {
     const request = createPlaybackSessionFromRecording({
+      source: null,
       channel: 4,
       startTime: "2026-04-28T03:00:00Z",
       endTime: "2026-04-28T03:10:00Z",
