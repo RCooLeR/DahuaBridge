@@ -1545,7 +1545,7 @@ export const surveillancePanelResponsiveStyles = css`
 
   @media (max-width: 720px) {
     .shell {
-      display:block
+      display:block;
       padding: 12px;
       gap: 12px;
     }

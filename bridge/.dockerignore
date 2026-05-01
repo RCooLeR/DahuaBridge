@@ -9,6 +9,4 @@ bin/
 dist/
 var/
 *.log
-config.yaml
-config.local.yaml
 dahuabridge.exe
