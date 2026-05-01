@@ -50,6 +50,13 @@ The panel supports:
 - playback seek and playback source switching
 - native NVR archive export to bridge MP4, followed by download when the export clip completes
 
+Browser viewport playback currently uses:
+
+- HLS as the primary stream path
+- MJPEG as the fallback path
+
+This is an intentional stability choice for multi-camera dashboards.
+
 ## 6. Device Actions
 
 Depending on what the bridge exposes for a device, the cards can surface:

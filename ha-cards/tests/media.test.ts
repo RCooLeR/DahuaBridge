@@ -150,7 +150,7 @@ describe("camera media helpers", () => {
     expect(resolveSelectedCameraViewportSource(camera, "mjpeg", "stable")).toBe("mjpeg");
   });
 
-  it("includes WebRTC when the selected profile exposes it", () => {
+  it("ignores WebRTC and keeps browser-safe viewport sources", () => {
     const camera = buildCamera({
       stream: {
         ...buildCamera().stream,
@@ -167,11 +167,10 @@ describe("camera media helpers", () => {
 
     expect(availableCameraViewportSources(camera, "quality")).toEqual([
       "hls",
-      "webrtc",
       "mjpeg",
     ] satisfies CameraViewportSource[]);
-    expect(resolveSelectedCameraViewportSource(camera, "webrtc", "quality")).toBe("webrtc");
-    expect(resolveSelectedCameraViewportSource(camera, null, "quality")).toBe("webrtc");
+    expect(resolveSelectedCameraViewportSource(camera, "mjpeg", "quality")).toBe("mjpeg");
+    expect(resolveSelectedCameraViewportSource(camera, null, "quality")).toBe("hls");
   });
 
   it("prefers low-bandwidth sources for overview tiles", () => {
@@ -197,7 +196,7 @@ describe("camera media helpers", () => {
     expect(resolveOverviewCameraViewportSource(camera, overviewProfileKey)).toBe("hls");
   });
 
-  it("keeps playback on WebRTC when the session offers it", () => {
+  it("keeps playback on HLS/MJPEG even when the session exposes WebRTC", () => {
     const session: NvrPlaybackSessionModel = {
       id: "nvrpb_test",
       streamId: "nvrpb_test",
@@ -224,9 +223,8 @@ describe("camera media helpers", () => {
 
     expect(availablePlaybackViewportSources(session, "quality")).toEqual([
       "hls",
-      "webrtc",
     ] satisfies CameraViewportSource[]);
-    expect(resolvePlaybackViewportSource(session, "webrtc", "quality")).toBe("webrtc");
+    expect(resolvePlaybackViewportSource(session, "hls", "quality")).toBe("hls");
   });
 
   it("starts playback on HLS instead of inheriting live MJPEG", () => {
@@ -255,7 +253,7 @@ describe("camera media helpers", () => {
     };
 
     expect(resolveInitialPlaybackViewportSource(session, "quality", "mjpeg")).toBe("hls");
-    expect(resolveInitialPlaybackViewportSource(session, "quality", "webrtc")).toBe("webrtc");
+    expect(resolveInitialPlaybackViewportSource(session, "quality", null)).toBe("hls");
   });
 
   it("prefers the bridge snapshot URL over the entity picture fallback", () => {

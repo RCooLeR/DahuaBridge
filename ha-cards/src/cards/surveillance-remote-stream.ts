@@ -2,11 +2,11 @@ import Hls from "hls.js";
 import { css, html, LitElement, type PropertyValues, type TemplateResult } from "lit";
 import { createRef, ref } from "lit/directives/ref.js";
 
-import { buildWebRtcOfferUrl } from "../ha/bridge-intercom";
-import type { CameraViewportSource } from "./surveillance-panel-media";
+import type { CameraViewportSource } from "./surveillance-panel-viewport-sources";
 
-const STARTUP_TIMEOUT_MS = 20_000;
-const MAX_WEBRTC_RECONNECT_ATTEMPTS = 3;
+const STARTUP_TIMEOUT_MS = 35_000;
+const STARTUP_GRACE_TIMEOUT_MS = 15_000;
+const MAX_HLS_NETWORK_RECOVERY_ATTEMPTS = 2;
 const HLS_RETRY_CONFIG = {
   manifestLoadingMaxRetry: 6,
   manifestLoadingRetryDelay: 1_000,
@@ -105,21 +105,21 @@ class DahuaBridgeRemoteStreamElement extends LitElement {
   private _videoListenersCleanup: (() => void) | null = null;
   private _hls: Hls | null = null;
   private _hlsMediaRecoveryAttempts = 0;
-  private _webrtcPeer: RTCPeerConnection | null = null;
-  private _webrtcStream: MediaStream | null = null;
-  private _webrtcReconnectAttempts = 0;
-  private _webrtcReconnectTimer: number | null = null;
+  private _hlsNetworkRecoveryAttempts = 0;
   private _startupTimer: number | null = null;
 
   protected willUpdate(changedProperties: PropertyValues<this>): void {
-    const previousDescriptor = changedProperties.get("descriptor") as RemoteStreamDescriptor | null | undefined;
+    const previousDescriptor = changedProperties.get("descriptor") as
+      | RemoteStreamDescriptor
+      | null
+      | undefined;
     if (
       changedProperties.has("descriptor") &&
       (previousDescriptor?.cacheKey ?? "") !== (this.descriptor?.cacheKey ?? "")
     ) {
       this._activeSourceIndex = 0;
-      this._webrtcReconnectAttempts = 0;
       this._hlsMediaRecoveryAttempts = 0;
+      this._hlsNetworkRecoveryAttempts = 0;
       this.cleanupPlayback();
     }
   }
@@ -214,7 +214,9 @@ class DahuaBridgeRemoteStreamElement extends LitElement {
     return this.descriptor.sources[this._activeSourceIndex] ?? null;
   }
 
-  private sourceRuntimeKey(source: RemoteStreamDescriptor["sources"][number]): string {
+  private sourceRuntimeKey(
+    source: RemoteStreamDescriptor["sources"][number],
+  ): string {
     return `${this.descriptor?.cacheKey ?? ""}:${this._activeSourceIndex}:${source.kind}:${source.url}`;
   }
 
@@ -238,17 +240,7 @@ class DahuaBridgeRemoteStreamElement extends LitElement {
     this._attachedVideo = video;
     this._attachedSourceKey = sourceKey;
     this._videoListenersCleanup = this.attachVideoListeners(video, sourceKey);
-
-    switch (source.kind) {
-      case "hls":
-        await this.attachHls(video, source.url, sourceKey);
-        return;
-      case "webrtc":
-        await this.attachWebRtc(video, source.url, sourceKey);
-        return;
-      default:
-        return;
-    }
+    await this.attachHls(video, source.url, sourceKey);
   }
 
   private attachVideoListeners(
@@ -297,10 +289,15 @@ class DahuaBridgeRemoteStreamElement extends LitElement {
     this.prepareVideo(video);
     this.startStartupTimer(sourceKey);
 
-    if (canPlayNativeHls(video) || !Hls.isSupported()) {
+    if (canPlayNativeHls(video)) {
       video.src = normalizedSource;
       video.load();
       this.queuePlayback(video);
+      return;
+    }
+
+    if (!Hls.isSupported()) {
+      this.advanceToNextSource("hls unsupported");
       return;
     }
 
@@ -310,11 +307,34 @@ class DahuaBridgeRemoteStreamElement extends LitElement {
     });
     this._hls = hls;
     this._hlsMediaRecoveryAttempts = 0;
+    this._hlsNetworkRecoveryAttempts = 0;
 
     hls.on(Hls.Events.MANIFEST_PARSED, () => {
       if (!this.isCurrentSource(sourceKey)) {
         return;
       }
+      this.startStartupTimer(sourceKey, STARTUP_GRACE_TIMEOUT_MS);
+      this._hlsNetworkRecoveryAttempts = 0;
+      this.queuePlayback(video);
+    });
+    hls.on(Hls.Events.LEVEL_LOADED, () => {
+      if (!this.isCurrentSource(sourceKey)) {
+        return;
+      }
+      this.startStartupTimer(sourceKey, STARTUP_GRACE_TIMEOUT_MS);
+    });
+    hls.on(Hls.Events.FRAG_LOADED, () => {
+      if (!this.isCurrentSource(sourceKey)) {
+        return;
+      }
+      this.startStartupTimer(sourceKey, STARTUP_GRACE_TIMEOUT_MS);
+      this._hlsNetworkRecoveryAttempts = 0;
+    });
+    hls.on(Hls.Events.BUFFER_APPENDED, () => {
+      if (!this.isCurrentSource(sourceKey)) {
+        return;
+      }
+      this.clearStartupTimer();
       this.queuePlayback(video);
     });
     hls.on(Hls.Events.ERROR, (_event, data) => {
@@ -338,144 +358,23 @@ class DahuaBridgeRemoteStreamElement extends LitElement {
         this._hlsMediaRecoveryAttempts < 1
       ) {
         this._hlsMediaRecoveryAttempts += 1;
+        this.startStartupTimer(sourceKey, STARTUP_GRACE_TIMEOUT_MS);
         hls.recoverMediaError();
+        return;
+      }
+      if (
+        data.type === Hls.ErrorTypes.NETWORK_ERROR &&
+        this._hlsNetworkRecoveryAttempts < MAX_HLS_NETWORK_RECOVERY_ATTEMPTS
+      ) {
+        this._hlsNetworkRecoveryAttempts += 1;
+        this.startStartupTimer(sourceKey, STARTUP_GRACE_TIMEOUT_MS);
+        hls.startLoad(-1);
         return;
       }
       this.advanceToNextSource(`hls fatal ${data.type}`);
     });
     hls.attachMedia(video);
     hls.loadSource(normalizedSource);
-  }
-
-  private async attachWebRtc(
-    video: HTMLVideoElement,
-    sourceUrl: string,
-    sourceKey: string,
-  ): Promise<void> {
-    const offerUrl = buildWebRtcOfferUrl(sourceUrl);
-    if (!offerUrl) {
-      this.advanceToNextSource("empty webrtc offer url");
-      return;
-    }
-    if (typeof RTCPeerConnection !== "function") {
-      this.advanceToNextSource("webrtc unsupported");
-      return;
-    }
-
-    this.prepareVideo(video);
-    this._webrtcStream = new MediaStream();
-    video.srcObject = this._webrtcStream;
-    this.startStartupTimer(sourceKey);
-    await this.startWebRtcNegotiation(video, offerUrl, sourceKey);
-  }
-
-  private async startWebRtcNegotiation(
-    video: HTMLVideoElement,
-    offerUrl: string,
-    sourceKey: string,
-  ): Promise<void> {
-    this.clearWebRtcReconnectTimer();
-    this.closeWebRtcPeer();
-
-    const peer = new RTCPeerConnection({ iceServers: [] });
-    this._webrtcPeer = peer;
-    peer.addTransceiver("video", { direction: "recvonly" });
-    peer.addTransceiver("audio", { direction: "recvonly" });
-    peer.ontrack = (event) => {
-      if (!this.isCurrentSource(sourceKey) || !this._webrtcStream) {
-        return;
-      }
-      this._webrtcStream.addTrack(event.track);
-      this._webrtcReconnectAttempts = 0;
-      this.clearStartupTimer();
-      this.queuePlayback(video);
-    };
-    peer.onconnectionstatechange = () => {
-      if (!this.isCurrentSource(sourceKey)) {
-        return;
-      }
-      switch (peer.connectionState) {
-        case "connected":
-          this._webrtcReconnectAttempts = 0;
-          this.clearStartupTimer();
-          this.queuePlayback(video);
-          return;
-        case "disconnected":
-        case "failed":
-          this.scheduleWebRtcReconnect(video, offerUrl, sourceKey);
-          return;
-        case "closed":
-          this.scheduleWebRtcReconnect(video, offerUrl, sourceKey);
-          return;
-        default:
-          return;
-      }
-    };
-
-    try {
-      const offer = await peer.createOffer();
-      if (!this.isCurrentSource(sourceKey)) {
-        peer.close();
-        return;
-      }
-      await peer.setLocalDescription(offer);
-      await waitForIceComplete(peer);
-      if (!this.isCurrentSource(sourceKey)) {
-        peer.close();
-        return;
-      }
-
-      const response = await fetch(offerUrl, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(peer.localDescription),
-      });
-      if (!response.ok) {
-        throw new Error(`offer request failed with status ${response.status}`);
-      }
-
-      const answer = (await response.json()) as RTCSessionDescriptionInit;
-      if (!this.isCurrentSource(sourceKey)) {
-        peer.close();
-        return;
-      }
-      await peer.setRemoteDescription(answer);
-      this.queuePlayback(video);
-    } catch (error) {
-      if (!this.isCurrentSource(sourceKey)) {
-        return;
-      }
-      this.scheduleWebRtcReconnect(video, offerUrl, sourceKey, error);
-    }
-  }
-
-  private scheduleWebRtcReconnect(
-    video: HTMLVideoElement,
-    offerUrl: string,
-    sourceKey: string,
-    error?: unknown,
-  ): void {
-    if (!this.isCurrentSource(sourceKey) || this._webrtcReconnectTimer !== null) {
-      return;
-    }
-
-    if (this._webrtcReconnectAttempts >= MAX_WEBRTC_RECONNECT_ATTEMPTS) {
-      this.advanceToNextSource(
-        error instanceof Error ? error.message : "webrtc reconnect limit reached",
-      );
-      return;
-    }
-
-    this._webrtcReconnectAttempts += 1;
-    this._webrtcReconnectTimer = window.setTimeout(() => {
-      this._webrtcReconnectTimer = null;
-      if (!this.isCurrentSource(sourceKey)) {
-        return;
-      }
-      void this.attachWebRtc(video, offerUrl, sourceKey);
-    }, Math.min(1000 * 2 ** this._webrtcReconnectAttempts, 8_000));
   }
 
   private advanceToNextSource(reason: string): void {
@@ -535,15 +434,22 @@ class DahuaBridgeRemoteStreamElement extends LitElement {
     return this.isConnected && this._attachedSourceKey === sourceKey;
   }
 
-  private startStartupTimer(sourceKey: string): void {
+  private startStartupTimer(
+    sourceKey: string,
+    timeoutMs = STARTUP_TIMEOUT_MS,
+  ): void {
     this.clearStartupTimer();
     this._startupTimer = window.setTimeout(() => {
       this._startupTimer = null;
       if (!this.isCurrentSource(sourceKey)) {
         return;
       }
+      if (this.shouldExtendStartupTimer()) {
+        this.startStartupTimer(sourceKey, STARTUP_GRACE_TIMEOUT_MS);
+        return;
+      }
       this.advanceToNextSource("startup timeout");
-    }, STARTUP_TIMEOUT_MS);
+    }, timeoutMs);
   }
 
   private clearStartupTimer(): void {
@@ -554,32 +460,8 @@ class DahuaBridgeRemoteStreamElement extends LitElement {
     this._startupTimer = null;
   }
 
-  private clearWebRtcReconnectTimer(): void {
-    if (this._webrtcReconnectTimer === null) {
-      return;
-    }
-    window.clearTimeout(this._webrtcReconnectTimer);
-    this._webrtcReconnectTimer = null;
-  }
-
-  private closeWebRtcPeer(): void {
-    if (!this._webrtcPeer) {
-      return;
-    }
-    try {
-      this._webrtcPeer.ontrack = null;
-      this._webrtcPeer.onconnectionstatechange = null;
-      this._webrtcPeer.close();
-    } catch {
-      // Ignore cleanup failures.
-    } finally {
-      this._webrtcPeer = null;
-    }
-  }
-
   private cleanupPlayback(): void {
     this.clearStartupTimer();
-    this.clearWebRtcReconnectTimer();
     this._videoListenersCleanup?.();
     this._videoListenersCleanup = null;
 
@@ -587,10 +469,8 @@ class DahuaBridgeRemoteStreamElement extends LitElement {
       this._hls.destroy();
       this._hls = null;
     }
-    this.closeWebRtcPeer();
-    this._webrtcStream = null;
-    this._webrtcReconnectAttempts = 0;
     this._hlsMediaRecoveryAttempts = 0;
+    this._hlsNetworkRecoveryAttempts = 0;
 
     if (this._attachedVideo) {
       resetVideoElement(this._attachedVideo);
@@ -598,6 +478,19 @@ class DahuaBridgeRemoteStreamElement extends LitElement {
 
     this._attachedVideo = null;
     this._attachedSourceKey = "";
+  }
+
+  private shouldExtendStartupTimer(): boolean {
+    const video = this._attachedVideo;
+    if (!video || !this._hls) {
+      return false;
+    }
+
+    return (
+      video.readyState > HTMLMediaElement.HAVE_NOTHING ||
+      video.networkState === HTMLMediaElement.NETWORK_LOADING ||
+      video.currentSrc.trim().length > 0
+    );
   }
 }
 
@@ -678,7 +571,10 @@ function normalizeHlsPlaybackUrl(value: string | null | undefined): string {
   }
   try {
     const parsed = new URL(source, globalThis.location?.href);
-    if (parsed.pathname.includes("/api/v1/media/hls/") && !parsed.pathname.endsWith(".m3u8")) {
+    if (
+      parsed.pathname.includes("/api/v1/media/hls/") &&
+      !parsed.pathname.endsWith(".m3u8")
+    ) {
       parsed.pathname = `${parsed.pathname.replace(/\/+$/, "")}/index.m3u8`;
     }
     return parsed.toString();
@@ -688,43 +584,6 @@ function normalizeHlsPlaybackUrl(value: string | null | undefined): string {
     }
     return source;
   }
-}
-
-function buildWebRtcOfferPayload(peer: RTCPeerConnection): RTCSessionDescriptionInit | null {
-  const description = peer.localDescription;
-  const type = description?.type;
-  const rawSdp = description?.sdp ?? "";
-  const sdp = rawSdp
-    .replace(/\r\n/g, "\n")
-    .replace(/\r/g, "\n")
-    .split("\n")
-    .map((line) => line.trimEnd())
-    .filter((line) => line.length > 0)
-    .join("\r\n");
-
-  if (!type || !sdp.trim()) {
-    return null;
-  }
-
-  return {
-    type,
-    sdp: `${sdp}\r\n`,
-  };
-}
-
-async function waitForIceComplete(peer: RTCPeerConnection): Promise<void> {
-  if (peer.iceGatheringState === "complete") {
-    return;
-  }
-  await new Promise<void>((resolve) => {
-    const onChange = () => {
-      if (peer.iceGatheringState === "complete") {
-        peer.removeEventListener("icegatheringstatechange", onChange);
-        resolve();
-      }
-    };
-    peer.addEventListener("icegatheringstatechange", onChange);
-  });
 }
 
 if (!customElements.get("dahuabridge-remote-stream")) {
