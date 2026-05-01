@@ -31,7 +31,11 @@ import type {
   CameraAuxActionTargetModel,
   CameraAuxCapabilities,
 } from "./camera-aux";
-import { normalizeBrowserBridgeUrl, rewriteBridgeUrl } from "../ha/bridge-url";
+import {
+  buildBridgeEndpointUrl,
+  normalizeBrowserBridgeUrl,
+  rewriteBridgeUrl,
+} from "../ha/bridge-url";
 import type { RegistrySnapshot } from "../ha/registry";
 import { formatBytes } from "../utils/format";
 
@@ -1107,7 +1111,10 @@ export function buildPtzUrl(camera: CameraViewModel): string | null {
     return null;
   }
 
-  return `${camera.bridgeBaseUrl}/api/v1/nvr/${camera.rootDeviceId}/channels/${channel}/ptz`;
+  return buildBridgeEndpointUrl(
+    camera.bridgeBaseUrl,
+    `/api/v1/nvr/${camera.rootDeviceId}/channels/${channel}/ptz`,
+  );
 }
 
 export function buildAuxUrl(camera: CameraViewModel): string | null {
@@ -1120,7 +1127,10 @@ export function buildAuxUrl(camera: CameraViewModel): string | null {
     return null;
   }
 
-  return `${camera.bridgeBaseUrl}/api/v1/nvr/${camera.rootDeviceId}/channels/${channel}/aux`;
+  return buildBridgeEndpointUrl(
+    camera.bridgeBaseUrl,
+    `/api/v1/nvr/${camera.rootDeviceId}/channels/${channel}/aux`,
+  );
 }
 
 export function findAuxTarget(
@@ -1155,7 +1165,10 @@ export function buildRecordingUrl(camera: CameraViewModel): string | null {
     return null;
   }
 
-  return `${camera.bridgeBaseUrl}/api/v1/nvr/${camera.rootDeviceId}/channels/${channel}/recording`;
+  return buildBridgeEndpointUrl(
+    camera.bridgeBaseUrl,
+    `/api/v1/nvr/${camera.rootDeviceId}/channels/${channel}/recording`,
+  );
 }
 
 export function resolveCameraRecordingActionUrl(

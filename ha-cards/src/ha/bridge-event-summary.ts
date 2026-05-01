@@ -5,6 +5,7 @@ import type {
   NvrEventSummaryCountModel,
   NvrEventSummaryModel,
 } from "../domain/event-summary";
+import { buildBridgeEndpointUrl } from "./bridge-url";
 
 const summaryCountSchema = z.object({
   code: z.string(),
@@ -63,11 +64,13 @@ export function buildNvrEventSummaryUrl(
   bridgeBaseUrl: string | null,
   deviceId: string,
 ): string | null {
-  const baseUrl = bridgeBaseUrl?.trim();
-  if (!baseUrl || !deviceId.trim()) {
+  if (!bridgeBaseUrl?.trim() || !deviceId.trim()) {
     return null;
   }
-  return `${baseUrl}/api/v1/nvr/${encodeURIComponent(deviceId)}/events/summary`;
+  return buildBridgeEndpointUrl(
+    bridgeBaseUrl,
+    `/api/v1/nvr/${encodeURIComponent(deviceId)}/events/summary`,
+  );
 }
 
 function mapNvrEventSummary(

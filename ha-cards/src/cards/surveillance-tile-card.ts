@@ -4,9 +4,11 @@ import { z } from "zod";
 import { SurveillancePanelActions } from "./surveillance-panel-actions";
 import {
   cameraImageSrc,
+  defaultOverviewStreamProfileKey,
   defaultSelectedStreamProfileKey,
   renderSelectedCameraViewport,
   renderSelectedVtoViewport,
+  resolveOverviewCameraViewportSource,
   resolveStreamViewportSource,
 } from "./surveillance-panel-media";
 import { renderIconButton } from "./surveillance-panel-primitives";
@@ -318,8 +320,8 @@ export class DahuaBridgeSurveillanceTileCard
   }
 
   private renderCameraTile(camera: CameraViewModel): TemplateResult {
-    const selectedProfileKey = defaultSelectedStreamProfileKey(camera.stream);
-    const selectedSource = resolveStreamViewportSource(camera.stream, null, selectedProfileKey);
+    const selectedProfileKey = defaultOverviewStreamProfileKey(camera.stream);
+    const selectedSource = resolveOverviewCameraViewportSource(camera, selectedProfileKey);
     const lightAvailable = supportsAuxTarget(camera, "light");
     const warningLightAvailable = supportsAuxTarget(camera, "warning_light");
     const sirenAvailable = supportsAuxTarget(camera, "siren");
@@ -343,6 +345,7 @@ export class DahuaBridgeSurveillanceTileCard
                 {
                   controls: false,
                   preload: "none",
+                  fallbackOrder: ["hls", "mjpeg", "webrtc"],
                 },
               )}
               <div class="tile-topbar">

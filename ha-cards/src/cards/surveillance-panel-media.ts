@@ -5,6 +5,10 @@ import type { CameraStreamViewModel, CameraViewModel, VtoViewModel } from "../do
 import type { NvrPlaybackSessionModel } from "../domain/archive";
 import { buildWebRtcOfferUrl } from "../ha/bridge-intercom";
 import type { HassEntity, HomeAssistant } from "../types/home-assistant";
+import {
+  renderRemoteStream,
+  type RemoteStreamDescriptor,
+} from "./surveillance-remote-stream";
 
 export type CameraViewportSource = "hls" | "webrtc" | "mjpeg";
 
@@ -48,6 +52,8 @@ export function renderSelectedCameraViewport(
   options?: {
     controls?: boolean;
     preload?: "none" | "metadata" | "auto";
+    fallbackOrder?: CameraViewportSource[];
+    className?: string;
   },
 ): TemplateResult {
   const controls = options?.controls ?? true;
@@ -61,118 +67,36 @@ export function renderSelectedCameraViewport(
   const fallbackPreviewUrl = cameraImageSrc(camera.cameraEntity, camera.snapshotUrl);
 
   if (!camera.streamAvailable && fallbackPreviewUrl) {
-    return html`
-      <img
-        id="remote-stream"
-        class="remote-stream preview-fallback"
-        src=${fallbackPreviewUrl}
-        alt=${camera.label}
-      />
-    `;
+    return renderRemoteStream(
+      {
+        cacheKey: `${camera.deviceId}:fallback:${fallbackPreviewUrl}`,
+        alt: camera.label,
+        fallbackImageUrl: fallbackPreviewUrl,
+        className: options?.className,
+        sources: [],
+      },
+      { muted, controls, preload },
+    );
   }
 
-  if (resolvedSource === "hls" && resolvedProfile?.localHlsUrl) {
-    return html`
-      <video
-        id="remote-stream"
-        class="remote-stream"
-        data-hls-src=${normalizeHlsPlaybackUrl(resolvedProfile.localHlsUrl)}
-        data-audio-muted=${muted ? "true" : "false"}
-        autoplay
-        playsinline
-        ?controls=${controls}
-        preload=${preload}
-        ?muted=${muted}
-      ></video>
-    `;
+  const descriptor = buildRemoteStreamDescriptor(
+    `${camera.deviceId}:${resolvedProfile?.key ?? "none"}:${resolvedSource ?? "auto"}`,
+    camera.label,
+    fallbackPreviewUrl,
+    options?.className,
+    {
+      hls: resolvedProfile?.localHlsUrl ?? null,
+      webrtc: buildWebRtcOfferUrl(resolvedProfile?.localWebRtcUrl ?? null),
+      mjpeg: resolvedProfile?.localMjpegUrl ?? null,
+    },
+    resolvedSource,
+    options?.fallbackOrder ?? ["hls", "webrtc", "mjpeg"],
+  );
+  if (descriptor.sources.length > 0 || descriptor.fallbackImageUrl) {
+    return renderRemoteStream(descriptor, { muted, controls, preload });
   }
 
-  if (resolvedSource === "webrtc") {
-    const offerUrl = buildWebRtcOfferUrl(resolvedProfile?.localWebRtcUrl ?? null);
-    if (offerUrl) {
-      return html`
-        <video
-          id="remote-stream"
-          class="remote-stream"
-          data-webrtc-offer-src=${offerUrl}
-          data-audio-muted=${muted ? "true" : "false"}
-          autoplay
-          playsinline
-          ?controls=${controls}
-          preload=${preload}
-          ?muted=${muted}
-        ></video>
-      `;
-    }
-  }
-
-  if (resolvedSource === "mjpeg" && resolvedProfile?.localMjpegUrl) {
-    return html`
-      <img
-        id="remote-stream"
-        class="remote-stream"
-        src=${resolvedProfile.localMjpegUrl}
-        alt=${camera.label}
-      />
-    `;
-  }
-
-  if (resolvedProfile?.localHlsUrl) {
-    return html`
-      <video
-        id="remote-stream"
-        class="remote-stream"
-        data-hls-src=${normalizeHlsPlaybackUrl(resolvedProfile.localHlsUrl)}
-        data-audio-muted=${muted ? "true" : "false"}
-        autoplay
-        playsinline
-        ?controls=${controls}
-        preload=${preload}
-        ?muted=${muted}
-      ></video>
-    `;
-  }
-
-  {
-    const offerUrl = buildWebRtcOfferUrl(resolvedProfile?.localWebRtcUrl ?? null);
-    if (offerUrl) {
-      return html`
-        <video
-          id="remote-stream"
-          class="remote-stream"
-          data-webrtc-offer-src=${offerUrl}
-          data-audio-muted=${muted ? "true" : "false"}
-          autoplay
-          playsinline
-          ?controls=${controls}
-          preload=${preload}
-          ?muted=${muted}
-        ></video>
-      `;
-    }
-  }
-
-  if (resolvedProfile?.localMjpegUrl) {
-    return html`
-      <img
-        id="remote-stream"
-        class="remote-stream"
-        src=${resolvedProfile.localMjpegUrl}
-        alt=${camera.label}
-      />
-    `;
-  }
-
-  return fallbackPreviewUrl
-    ? html`
-        <img
-          id="remote-stream"
-          class="remote-stream preview-fallback"
-          src=${fallbackPreviewUrl}
-          alt=${camera.label}
-        />
-      `
-    : renderLiveViewport(hass, camera.cameraEntity);
+  return renderLiveViewport(hass, camera.cameraEntity);
 }
 
 export function renderSelectedVtoViewport(
@@ -190,110 +114,34 @@ export function renderSelectedVtoViewport(
   );
 
   if (!playing || !vto.streamAvailable) {
-    return fallbackPreviewUrl
-      ? html`
-          <img
-            id="remote-stream"
-            class="remote-stream preview-fallback"
-            src=${fallbackPreviewUrl}
-            alt=${vto.label}
-          />
-        `
-      : html`<div class="viewport empty">Stream unavailable.</div>`;
+    return renderRemoteStream(
+      {
+        cacheKey: `${vto.deviceId}:fallback:${fallbackPreviewUrl}`,
+        alt: vto.label,
+        fallbackImageUrl: fallbackPreviewUrl || null,
+        className: "vto-live-stream",
+        sources: [],
+      },
+      { muted: true, controls: false, preload: "none" },
+    );
   }
 
-  if (resolvedSource === "hls" && resolvedProfile?.localHlsUrl) {
-    return html`
-      <video
-        id="remote-stream"
-        class="remote-stream vto-live-stream"
-        data-hls-src=${normalizeHlsPlaybackUrl(resolvedProfile.localHlsUrl)}
-        muted
-        playsinline
-        preload="none"
-      ></video>
-    `;
-  }
-
-  if (resolvedSource === "webrtc") {
-    const offerUrl = buildWebRtcOfferUrl(resolvedProfile?.localWebRtcUrl ?? null);
-    if (offerUrl) {
-      return html`
-        <video
-          id="remote-stream"
-          class="remote-stream vto-live-stream"
-          data-webrtc-offer-src=${offerUrl}
-          data-audio-muted="true"
-          muted
-          playsinline
-          preload="none"
-        ></video>
-      `;
-    }
-  }
-
-  if (resolvedSource === "mjpeg" && resolvedProfile?.localMjpegUrl) {
-    return html`
-      <img
-        id="remote-stream"
-        class="remote-stream"
-        src=${resolvedProfile.localMjpegUrl}
-        alt=${vto.label}
-      />
-    `;
-  }
-
-  if (resolvedProfile?.localHlsUrl) {
-    return html`
-      <video
-        id="remote-stream"
-        class="remote-stream vto-live-stream"
-        data-hls-src=${normalizeHlsPlaybackUrl(resolvedProfile.localHlsUrl)}
-        muted
-        playsinline
-        preload="none"
-      ></video>
-    `;
-  }
-
-  {
-    const offerUrl = buildWebRtcOfferUrl(resolvedProfile?.localWebRtcUrl ?? null);
-    if (offerUrl) {
-      return html`
-        <video
-          id="remote-stream"
-          class="remote-stream vto-live-stream"
-          data-webrtc-offer-src=${offerUrl}
-          data-audio-muted="true"
-          muted
-          playsinline
-          preload="none"
-        ></video>
-      `;
-    }
-  }
-
-  if (resolvedProfile?.localMjpegUrl) {
-    return html`
-      <img
-        id="remote-stream"
-        class="remote-stream"
-        src=${resolvedProfile.localMjpegUrl}
-        alt=${vto.label}
-      />
-    `;
-  }
-
-  return fallbackPreviewUrl
-    ? html`
-        <img
-          id="remote-stream"
-          class="remote-stream preview-fallback"
-          src=${fallbackPreviewUrl}
-          alt=${vto.label}
-        />
-      `
-    : html`<div class="viewport empty">Stream unavailable.</div>`;
+  return renderRemoteStream(
+    buildRemoteStreamDescriptor(
+      `${vto.deviceId}:${resolvedProfile?.key ?? "none"}:${resolvedSource ?? "auto"}`,
+      vto.label,
+      fallbackPreviewUrl || null,
+      "vto-live-stream",
+      {
+        hls: resolvedProfile?.localHlsUrl ?? null,
+        webrtc: buildWebRtcOfferUrl(resolvedProfile?.localWebRtcUrl ?? null),
+        mjpeg: resolvedProfile?.localMjpegUrl ?? null,
+      },
+      resolvedSource,
+      ["hls", "webrtc", "mjpeg"],
+    ),
+    { muted: true, controls: false, preload: "none" },
+  );
 }
 
 export function renderPlaybackViewport(
@@ -304,103 +152,68 @@ export function renderPlaybackViewport(
 ): TemplateResult {
   const resolvedProfile = resolvePlaybackProfile(session, selectedProfileKey);
   const resolvedSource = resolvePlaybackViewportSource(session, selectedSource, resolvedProfile?.key ?? null);
+  return renderRemoteStream(
+    buildRemoteStreamDescriptor(
+      `${session.id}:${resolvedProfile?.key ?? "none"}:${resolvedSource ?? "auto"}:${session.seekTime}`,
+      session.name,
+      session.snapshotUrl ?? null,
+      "playback-stream",
+      {
+        hls: resolvedProfile?.hlsUrl ?? null,
+        webrtc: resolvedProfile?.webrtcOfferUrl ?? null,
+        mjpeg: resolvedProfile?.mjpegUrl ?? null,
+      },
+      resolvedSource,
+      ["hls", "webrtc", "mjpeg"],
+    ),
+    { muted, controls: true, preload: "auto" },
+  );
+}
 
-  if (resolvedSource === "hls" && resolvedProfile?.hlsUrl) {
-    return html`
-      <video
-        id="remote-stream"
-        class="remote-stream playback-stream"
-        data-hls-src=${normalizeHlsPlaybackUrl(resolvedProfile.hlsUrl)}
-        data-audio-muted=${muted ? "true" : "false"}
-        autoplay
-        playsinline
-        controls
-        preload="auto"
-        ?muted=${muted}
-      ></video>
-    `;
+function buildRemoteStreamDescriptor(
+  cacheKey: string,
+  alt: string,
+  fallbackImageUrl: string | null,
+  className: string | undefined,
+  sources: Partial<Record<CameraViewportSource, string | null>>,
+  preferredSource: CameraViewportSource | null,
+  fallbackOrder: readonly CameraViewportSource[],
+): RemoteStreamDescriptor {
+  const availableSources = new Map<CameraViewportSource, string>();
+  for (const [kind, url] of Object.entries(sources) as Array<[CameraViewportSource, string | null | undefined]>) {
+    const normalizedUrl = url?.trim() ?? "";
+    if (normalizedUrl) {
+      availableSources.set(kind, normalizedUrl);
+    }
   }
 
-  if (resolvedSource === "webrtc" && resolvedProfile?.webrtcOfferUrl) {
-    return html`
-      <video
-        id="remote-stream"
-        class="remote-stream playback-stream"
-        data-webrtc-offer-src=${resolvedProfile.webrtcOfferUrl}
-        data-audio-muted=${muted ? "true" : "false"}
-        autoplay
-        playsinline
-        controls
-        preload="auto"
-        ?muted=${muted}
-      ></video>
-    `;
-  }
+  const orderedKinds = uniqueSourceOrder(preferredSource, fallbackOrder);
+  return {
+    cacheKey,
+    alt,
+    fallbackImageUrl,
+    className,
+    sources: orderedKinds.flatMap((kind) => {
+      const url = availableSources.get(kind);
+      return url ? [{ kind, url }] : [];
+    }),
+  };
+}
 
-  if (resolvedSource === "mjpeg" && resolvedProfile?.mjpegUrl) {
-    return html`
-      <img
-        id="remote-stream"
-        class="remote-stream"
-        src=${resolvedProfile.mjpegUrl}
-        alt=${session.name}
-      />
-    `;
+function uniqueSourceOrder(
+  preferredSource: CameraViewportSource | null,
+  fallbackOrder: readonly CameraViewportSource[],
+): CameraViewportSource[] {
+  const seen = new Set<CameraViewportSource>();
+  const ordered: CameraViewportSource[] = [];
+  for (const candidate of [preferredSource, ...fallbackOrder]) {
+    if (!candidate || seen.has(candidate)) {
+      continue;
+    }
+    seen.add(candidate);
+    ordered.push(candidate);
   }
-
-  if (resolvedProfile?.hlsUrl) {
-    return html`
-      <video
-        id="remote-stream"
-        class="remote-stream playback-stream"
-        data-hls-src=${normalizeHlsPlaybackUrl(resolvedProfile.hlsUrl)}
-        data-audio-muted=${muted ? "true" : "false"}
-        autoplay
-        playsinline
-        controls
-        preload="auto"
-        ?muted=${muted}
-      ></video>
-    `;
-  }
-
-  if (resolvedProfile?.webrtcOfferUrl) {
-    return html`
-      <video
-        id="remote-stream"
-        class="remote-stream playback-stream"
-        data-webrtc-offer-src=${resolvedProfile.webrtcOfferUrl}
-        data-audio-muted=${muted ? "true" : "false"}
-        autoplay
-        playsinline
-        controls
-        preload="auto"
-        ?muted=${muted}
-      ></video>
-    `;
-  }
-
-  if (resolvedProfile?.mjpegUrl) {
-    return html`
-      <img
-        id="remote-stream"
-        class="remote-stream"
-        src=${resolvedProfile.mjpegUrl}
-        alt=${session.name}
-      />
-    `;
-  }
-
-  return session.snapshotUrl
-    ? html`
-        <img
-          id="remote-stream"
-          class="remote-stream preview-fallback"
-          src=${session.snapshotUrl}
-          alt=${session.name}
-        />
-      `
-    : html`<div class="viewport empty">Playback unavailable.</div>`;
+  return ordered;
 }
 
 export function syncRemoteStreamStyles(renderRoot: ParentNode): void {
@@ -675,6 +488,25 @@ export function defaultSelectedStreamProfileKey(stream: CameraStreamViewModel): 
   return (stream.profiles.find((profile) => profile.recommended) ?? stream.profiles[0] ?? null)?.key ?? null;
 }
 
+export function defaultOverviewStreamProfileKey(stream: CameraStreamViewModel): string | null {
+  const bandwidthProfile =
+    stream.profiles.find((profile) => isBandwidthOptimizedProfile(profile.key, profile.name)) ??
+    null;
+  if (bandwidthProfile) {
+    return bandwidthProfile.key;
+  }
+
+  const recommendedNonQuality =
+    stream.profiles.find(
+      (profile) => profile.recommended && !isQualityProfile(profile.key, profile.name),
+    ) ?? null;
+  if (recommendedNonQuality) {
+    return recommendedNonQuality.key;
+  }
+
+  return defaultSelectedStreamProfileKey(stream);
+}
+
 export function availableCameraViewportSources(
   camera: CameraViewModel,
   selectedProfileKey: string | null,
@@ -688,6 +520,16 @@ export function resolveSelectedCameraViewportSource(
   selectedProfileKey: string | null,
 ): CameraViewportSource | null {
   return resolveStreamViewportSource(camera.stream, selectedSource, selectedProfileKey);
+}
+
+export function resolveOverviewCameraViewportSource(
+  camera: CameraViewModel,
+  selectedProfileKey: string | null,
+): CameraViewportSource | null {
+  return selectSourceByPriority(
+    availableCameraViewportSources(camera, selectedProfileKey),
+    ["hls", "mjpeg", "webrtc"],
+  );
 }
 
 export function resolveSelectedStreamProfile(
@@ -1071,4 +913,27 @@ async function waitForIceComplete(peer: RTCPeerConnection): Promise<void> {
 function isQualityProfile(key: string, name: string): boolean {
   const haystack = `${key} ${name}`.trim().toLowerCase();
   return haystack === "quality quality" || haystack.includes("quality");
+}
+
+function isBandwidthOptimizedProfile(key: string, name: string): boolean {
+  const haystack = `${key} ${name}`.trim().toLowerCase();
+  return (
+    haystack.includes("stable") ||
+    haystack.includes("substream") ||
+    haystack.includes("sub stream") ||
+    haystack.includes("preview") ||
+    haystack.includes("low")
+  );
+}
+
+function selectSourceByPriority(
+  availableSources: readonly CameraViewportSource[],
+  priority: readonly CameraViewportSource[],
+): CameraViewportSource | null {
+  for (const candidate of priority) {
+    if (availableSources.includes(candidate)) {
+      return candidate;
+    }
+  }
+  return availableSources[0] ?? null;
 }
