@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -49,6 +50,8 @@ type ClipInfo struct {
 	Status         ClipStatus       `json:"status"`
 	StartedAt      time.Time        `json:"started_at"`
 	EndedAt        time.Time        `json:"ended_at,omitempty"`
+	SourceStartAt  time.Time        `json:"source_start_at,omitempty"`
+	SourceEndAt    time.Time        `json:"source_end_at,omitempty"`
 	Duration       time.Duration    `json:"duration,omitempty"`
 	Bytes          int64            `json:"bytes,omitempty"`
 	FileName       string           `json:"file_name,omitempty"`
@@ -142,6 +145,7 @@ func (m *Manager) StartClip(ctx context.Context, request ClipStartRequest) (Clip
 	if duration < 0 {
 		duration = 0
 	}
+	sourceStartAt, sourceEndAt := clipSourceWindow(profile.StreamURL, duration)
 
 	job := &clipJob{
 		info: ClipInfo{
@@ -155,6 +159,8 @@ func (m *Manager) StartClip(ctx context.Context, request ClipStartRequest) (Clip
 			Profile:        resolvedProfileName,
 			Status:         ClipStatusRecording,
 			StartedAt:      time.Now().UTC(),
+			SourceStartAt:  sourceStartAt,
+			SourceEndAt:    sourceEndAt,
 			Duration:       duration,
 			FileName:       "",
 		},
@@ -476,18 +482,54 @@ func matchesClipQuery(info ClipInfo, query ClipQuery) bool {
 		return false
 	}
 	if !query.StartTime.IsZero() {
-		end := info.EndedAt
-		if end.IsZero() {
-			end = info.StartedAt
-		}
+		_, end := clipQueryWindow(info)
 		if end.Before(query.StartTime) {
 			return false
 		}
 	}
-	if !query.EndTime.IsZero() && info.StartedAt.After(query.EndTime) {
+	start, _ := clipQueryWindow(info)
+	if !query.EndTime.IsZero() && start.After(query.EndTime) {
 		return false
 	}
 	return true
+}
+
+func clipQueryWindow(info ClipInfo) (time.Time, time.Time) {
+	start := info.SourceStartAt
+	if start.IsZero() {
+		start = info.StartedAt
+	}
+	end := info.SourceEndAt
+	if end.IsZero() {
+		end = info.EndedAt
+	}
+	if end.IsZero() {
+		end = start
+	}
+	return start, end
+}
+
+func clipSourceWindow(streamURL string, duration time.Duration) (time.Time, time.Time) {
+	sourceURL, err := url.Parse(strings.TrimSpace(streamURL))
+	if err != nil {
+		return time.Time{}, time.Time{}
+	}
+	query := sourceURL.Query()
+	startTime, err := time.Parse("2006_01_02_15_04_05", strings.TrimSpace(query.Get("starttime")))
+	if err != nil {
+		return time.Time{}, time.Time{}
+	}
+	endTime, err := time.Parse("2006_01_02_15_04_05", strings.TrimSpace(query.Get("endtime")))
+	if err != nil {
+		endTime = time.Time{}
+	}
+	if duration > 0 {
+		durationEnd := startTime.Add(duration)
+		if endTime.IsZero() || durationEnd.Before(endTime) {
+			endTime = durationEnd
+		}
+	}
+	return startTime.UTC(), endTime.UTC()
 }
 
 func buildClipFFmpegArgs(cfg config.MediaConfig, profile streams.Profile, duration time.Duration, outputPath string) []string {

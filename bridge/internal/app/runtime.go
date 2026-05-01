@@ -468,7 +468,7 @@ func buildCaptureSummary(publicBaseURL string, entry streams.Entry, mediaReader 
 	summary := &streams.CaptureSummary{
 		SnapshotURL:       buildMediaSnapshotURL(publicBaseURL, entry.ID, captureProfile),
 		StartRecordingURL: buildMediaStreamRecordingStartURL(publicBaseURL, entry.ID, captureProfile),
-		RecordingsURL:     buildMediaRecordingsURL(publicBaseURL, entry.ID),
+		RecordingsURL:     buildMediaRecordingsURL(publicBaseURL, entry),
 	}
 	if clip, ok := mediaReader.ActiveClip(entry.ID); ok {
 		summary.Active = true
@@ -505,9 +505,17 @@ func buildMediaStreamRecordingStartURL(publicBaseURL string, streamID string, pr
 	return publicBaseURL + path
 }
 
-func buildMediaRecordingsURL(publicBaseURL string, streamID string) string {
+func buildMediaRecordingsURL(publicBaseURL string, entry streams.Entry) string {
 	publicBaseURL = strings.TrimRight(strings.TrimSpace(publicBaseURL), "/")
-	path := "/api/v1/media/recordings?stream_id=" + url.QueryEscape(streamID)
+	path := "/api/v1/media/recordings"
+	query := url.Values{}
+	if strings.TrimSpace(entry.RootDeviceID) != "" && entry.Channel > 0 {
+		query.Set("root_device_id", entry.RootDeviceID)
+		query.Set("channel", fmt.Sprintf("%d", entry.Channel))
+	} else {
+		query.Set("stream_id", entry.ID)
+	}
+	path += "?" + query.Encode()
 	if publicBaseURL == "" {
 		return path
 	}

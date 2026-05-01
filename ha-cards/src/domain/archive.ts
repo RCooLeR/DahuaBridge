@@ -121,9 +121,12 @@ export interface BridgeRecordingClipModel {
   status: string;
   startedAt: string;
   endedAt: string | null;
+  sourceStartTime: string | null;
+  sourceEndTime: string | null;
   durationMs: number | null;
   bytes: number | null;
   fileName: string | null;
+  playbackUrl: string | null;
   downloadUrl: string | null;
   selfUrl: string | null;
   stopUrl: string | null;

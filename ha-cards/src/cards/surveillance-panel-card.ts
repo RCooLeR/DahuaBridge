@@ -23,6 +23,7 @@ import {
   availableStreamViewportSources,
   defaultOverviewStreamProfileKey,
   defaultSelectedStreamProfileKey,
+  renderClipPlaybackViewport,
   renderPlaybackViewport,
   renderSelectedCameraViewport,
   renderSelectedVtoViewport,
@@ -156,6 +157,11 @@ interface SelectedPlaybackState {
   session: NvrPlaybackSessionModel;
 }
 
+interface SelectedBridgeRecordingPlaybackState {
+  sourceDeviceId: string;
+  recording: BridgeRecordingClipModel;
+}
+
 const INITIAL_VTO_MICROPHONE_STATE: BridgeIntercomSnapshot = {
   enabled: false,
   phase: "idle",
@@ -227,6 +233,7 @@ export class DahuaBridgeSurveillancePanelCard
     _selectedVtoStreamPlaying: { state: true },
     _selectedVtoMicrophoneState: { state: true },
     _selectedPlayback: { state: true },
+    _selectedBridgeRecordingPlayback: { state: true },
     _auxStateOverrides: { state: true },
     _recordingStateOverrides: { state: true },
   } as const;
@@ -275,6 +282,7 @@ export class DahuaBridgeSurveillancePanelCard
   private _selectedVtoStreamPlaying = false;
   private _selectedVtoMicrophoneState = INITIAL_VTO_MICROPHONE_STATE;
   private _selectedPlayback: SelectedPlaybackState | null = null;
+  private _selectedBridgeRecordingPlayback: SelectedBridgeRecordingPlaybackState | null = null;
   private _auxStateOverrides = new Map<string, TimedActionStateOverride>();
   private _recordingStateOverrides = new Map<string, TimedActionStateOverride>();
   private readonly _actions = new SurveillancePanelActions({
@@ -363,6 +371,7 @@ export class DahuaBridgeSurveillancePanelCard
     this._selectedVtoStreamPlaying = false;
     this._selectedVtoMicrophoneState = INITIAL_VTO_MICROPHONE_STATE;
     this._selectedPlayback = null;
+    this._selectedBridgeRecordingPlayback = null;
     void this.stopSelectedVtoMicrophone();
     this._auxStateOverrides = new Map();
     this._recordingStateOverrides = new Map();
@@ -541,8 +550,12 @@ export class DahuaBridgeSurveillancePanelCard
       const sirenActive = this.isAuxTargetActive(camera, "siren");
       const bridgeRecordingActive = this.isBridgeRecordingActive(camera);
       const selectedPlayback = this.selectedPlaybackForCamera(camera);
+      const selectedBridgeRecordingPlayback =
+        this.selectedBridgeRecordingPlaybackForCamera(camera);
+      const playbackActive =
+        selectedPlayback !== null || selectedBridgeRecordingPlayback !== null;
       const selectedLiveProfile =
-        selectedPlayback === null
+        !playbackActive
           ? resolveSelectedCameraStreamProfile(camera, this._selectedCameraStreamProfile)
           : null;
       const selectedPlaybackProfileKey =
@@ -550,33 +563,40 @@ export class DahuaBridgeSurveillancePanelCard
           ? this._selectedPlaybackStreamProfile ?? selectedPlayback.session.recommendedProfile
           : null;
       const selectedStreamProfileKey =
-        selectedPlayback === null
+        !playbackActive
           ? selectedLiveProfile?.key ?? null
-          : selectedPlaybackProfileKey;
+          : selectedPlayback !== null
+            ? selectedPlaybackProfileKey
+            : null;
       const selectedStreamSource =
-        selectedPlayback === null
+        !playbackActive
           ? resolveSelectedCameraViewportSource(
               camera,
               this._selectedCameraStreamSource,
               selectedStreamProfileKey,
             )
-          : resolvePlaybackViewportSource(
-              selectedPlayback.session,
-              this._selectedPlaybackStreamSource,
-              selectedStreamProfileKey,
-            );
+          : selectedPlayback !== null
+            ? resolvePlaybackViewportSource(
+                selectedPlayback.session,
+                this._selectedPlaybackStreamSource,
+                selectedStreamProfileKey,
+              )
+            : null;
       const availableStreamSources =
-        selectedPlayback === null
+        !playbackActive
           ? availableCameraViewportSources(camera, selectedStreamProfileKey)
-          : availablePlaybackViewportSources(
-              selectedPlayback.session,
-              selectedStreamProfileKey,
-            );
+          : selectedPlayback !== null
+            ? availablePlaybackViewportSources(
+                selectedPlayback.session,
+                selectedStreamProfileKey,
+              )
+            : [];
       const playbackProfileKeys =
         selectedPlayback !== null ? Object.keys(selectedPlayback.session.profiles) : [];
       const cameraAudioAvailable = this.canPlaySelectedCameraAudio(
         camera,
         selectedPlayback,
+        selectedBridgeRecordingPlayback,
         selectedStreamProfileKey,
         selectedStreamSource,
       );
@@ -587,7 +607,7 @@ export class DahuaBridgeSurveillancePanelCard
           <div class="detail-shell">
             <div class="detail-header">
               <div class="detail-title">
-                ${displayCameraLabel(camera)} - ${camera.roomLabel} - ${selectedPlayback ? "Playback" : "Live"}
+                ${displayCameraLabel(camera)} - ${camera.roomLabel} - ${playbackActive ? "Playback" : "Live"}
               </div>
               <div class="split-row">
                 <span class="badge ${camera.online ? "success" : "critical"}">
@@ -614,12 +634,12 @@ export class DahuaBridgeSurveillancePanelCard
               </div>
             </div>
             <div class="video-panel">
-              ${((selectedPlayback === null && camera.stream.profiles.length > 1) ||
+              ${((!playbackActive && camera.stream.profiles.length > 1) ||
               (selectedPlayback !== null && playbackProfileKeys.length > 1) ||
               availableStreamSources.length > 1)
                 ? html`
                     <div class="detail-media-toolbar">
-                      ${selectedPlayback === null && camera.stream.profiles.length > 1
+                      ${!playbackActive && camera.stream.profiles.length > 1
                         ? html`
                             <div class="detail-media-group chip-row">
                               ${camera.stream.profiles.map((profile) =>
@@ -672,7 +692,7 @@ export class DahuaBridgeSurveillancePanelCard
                               </div>
                             `
                         : nothing}
-                      ${((selectedPlayback === null && camera.stream.profiles.length > 1) ||
+                      ${((!playbackActive && camera.stream.profiles.length > 1) ||
                       (selectedPlayback !== null && playbackProfileKeys.length > 1)) &&
                       availableStreamSources.length > 1
                         ? html`<div class="detail-media-separator" aria-hidden="true"></div>`
@@ -720,6 +740,12 @@ export class DahuaBridgeSurveillancePanelCard
                       selectedStreamSource,
                       this._selectedCameraAudioMuted,
                     )
+                  : selectedBridgeRecordingPlayback?.recording.playbackUrl
+                    ? renderClipPlaybackViewport(
+                        selectedBridgeRecordingPlayback.recording.playbackUrl,
+                        displayCameraLabel(camera),
+                        this._selectedCameraAudioMuted,
+                      )
                   : renderSelectedCameraViewport(
                       this.hass,
                       camera,
@@ -727,7 +753,7 @@ export class DahuaBridgeSurveillancePanelCard
                       selectedStreamSource,
                       this._selectedCameraAudioMuted,
                     )}
-                ${selectedPlayback === null && this._ptzAdjusting && camera.supportsPtz
+                ${!playbackActive && this._ptzAdjusting && camera.supportsPtz
                   ? this.renderPtzOverlay(camera)
                   : nothing}
                 <div class="viewport-controls">
@@ -771,6 +797,52 @@ export class DahuaBridgeSurveillancePanelCard
                             )
                           : nothing}
                       `
+                    : selectedBridgeRecordingPlayback
+                      ? html`
+                          ${this.renderControlButton(
+                            "Return Live",
+                            "mdi:cctv",
+                            () => this.stopSelectedBridgeRecordingPlayback(),
+                            {
+                              compact: true,
+                              tone: "primary",
+                            },
+                          )}
+                          ${selectedBridgeRecordingPlayback.recording.downloadUrl
+                            ? this.renderControlButton(
+                                "Download",
+                                "mdi:download",
+                                () =>
+                                  this.downloadBridgeRecording(
+                                    selectedBridgeRecordingPlayback.recording,
+                                  ),
+                                {
+                                  compact: true,
+                                  disabled: this.isBusy(
+                                    this.bridgeRecordingDownloadBusyKey(
+                                      selectedBridgeRecordingPlayback.recording,
+                                    ),
+                                  ),
+                                },
+                              )
+                            : nothing}
+                          ${cameraAudioAvailable
+                            ? this.renderControlButton(
+                                this._selectedCameraAudioMuted
+                                  ? "Enable Stream Audio"
+                                  : "Disable Stream Audio",
+                                this._selectedCameraAudioMuted
+                                  ? "mdi:volume-high"
+                                  : "mdi:volume-off",
+                                () => void this.toggleSelectedCameraAudio(camera),
+                                {
+                                  tone: this._selectedCameraAudioMuted ? "neutral" : "primary",
+                                  compact: true,
+                                  active: !this._selectedCameraAudioMuted,
+                                },
+                              )
+                            : nothing}
+                        `
                     : html`
                         ${this.hasSnapshot(camera)
                           ? this.renderControlButton(
@@ -1357,14 +1429,14 @@ export class DahuaBridgeSurveillancePanelCard
       page,
       pageCount,
       visibleItems: slicePage(recordings, page, MP4_PAGE_SIZE),
-      isStoppingRecording: (recording) =>
-        this.isBusy(this.bridgeRecordingStopBusyKey(recording)),
+      playbackSupported: true,
+      isPlaybackActive: (recording) => this.isBridgeRecordingPlaybackActive(recording),
       isDownloadingRecording: (recording) =>
         this.isBusy(this.bridgeRecordingDownloadBusyKey(recording)),
       onSelectDate: (value) => this.selectArchiveDate(value),
       onSelectPage: (nextPage) => this.selectMp4Page(nextPage),
-      onStopRecording: (recording) => {
-        void this.stopBridgeRecording(recording);
+      onPlayRecording: (recording) => {
+        this.playBridgeRecording(camera, recording);
       },
       onDownloadRecording: (recording) => {
         this.downloadBridgeRecording(recording);
@@ -1715,6 +1787,7 @@ export class DahuaBridgeSurveillancePanelCard
     this._selectedVtoStreamSource = null;
     this._selectedVtoStreamPlaying = false;
     this._selectedPlayback = null;
+    this._selectedBridgeRecordingPlayback = null;
     void this.stopSelectedVtoMicrophone();
     this.requestUpdate("_selection", previousSelection);
   }
@@ -1748,6 +1821,7 @@ export class DahuaBridgeSurveillancePanelCard
     this._selectedVtoStreamSource = null;
     this._selectedVtoStreamPlaying = false;
     this._selectedPlayback = null;
+    this._selectedBridgeRecordingPlayback = null;
     void this.stopSelectedVtoMicrophone();
     this.requestUpdate("_selection", previousSelection);
   }
@@ -1777,6 +1851,7 @@ export class DahuaBridgeSurveillancePanelCard
     this._selectedVtoStreamSource = null;
     this._selectedVtoStreamPlaying = false;
     this._selectedPlayback = null;
+    this._selectedBridgeRecordingPlayback = null;
     void this.stopSelectedVtoMicrophone();
     this.requestUpdate("_selection", previousSelection);
   }
@@ -1807,6 +1882,7 @@ export class DahuaBridgeSurveillancePanelCard
     );
     this._selectedVtoStreamPlaying = false;
     this._selectedPlayback = null;
+    this._selectedBridgeRecordingPlayback = null;
     void this.stopSelectedVtoMicrophone();
     this.requestUpdate("_selection", previousSelection);
   }
@@ -2189,6 +2265,17 @@ export class DahuaBridgeSurveillancePanelCard
     return this._selectedPlayback.sourceDeviceId === camera.deviceId ? this._selectedPlayback : null;
   }
 
+  private selectedBridgeRecordingPlaybackForCamera(
+    camera: CameraViewModel,
+  ): SelectedBridgeRecordingPlaybackState | null {
+    if (!this._selectedBridgeRecordingPlayback) {
+      return null;
+    }
+    return this._selectedBridgeRecordingPlayback.sourceDeviceId === camera.deviceId
+      ? this._selectedBridgeRecordingPlayback
+      : null;
+  }
+
   private resolveArchiveSource(model: PanelModel): CameraViewModel | null {
     if (this._selection.kind === "camera") {
       return model.selectedCamera ?? null;
@@ -2266,6 +2353,7 @@ export class DahuaBridgeSurveillancePanelCard
         recording,
         session,
       };
+      this._selectedBridgeRecordingPlayback = null;
       this.requestUpdate("_selection", previousSelection);
     } catch (error) {
       this._errorMessage =
@@ -2298,6 +2386,23 @@ export class DahuaBridgeSurveillancePanelCard
       reducedBusy.delete(busyKey);
       this._busyActions = reducedBusy;
     }
+  }
+
+  private playBridgeRecording(
+    camera: CameraViewModel,
+    recording: BridgeRecordingClipModel,
+  ): void {
+    if (!recording.playbackUrl) {
+      return;
+    }
+    this._selectedPlayback = null;
+    this._selectedPlaybackStreamProfile = null;
+    this._selectedPlaybackStreamSource = null;
+    this._selectedBridgeRecordingPlayback = {
+      sourceDeviceId: camera.deviceId,
+      recording,
+    };
+    this._selectedCameraAudioMuted = true;
   }
 
   private async stopBridgeRecording(recording: BridgeRecordingClipModel): Promise<void> {
@@ -2336,6 +2441,12 @@ export class DahuaBridgeSurveillancePanelCard
     this.requestUpdate("_selectedPlayback", previousPlayback);
   }
 
+  private stopSelectedBridgeRecordingPlayback(): void {
+    const previousPlayback = this._selectedBridgeRecordingPlayback;
+    this._selectedBridgeRecordingPlayback = null;
+    this.requestUpdate("_selectedBridgeRecordingPlayback", previousPlayback);
+  }
+
   private isPlaybackActive(recording: NvrArchiveRecordingModel): boolean {
     if (!this._selectedPlayback) {
       return false;
@@ -2346,6 +2457,10 @@ export class DahuaBridgeSurveillancePanelCard
       active.startTime === recording.startTime &&
       active.endTime === recording.endTime
     );
+  }
+
+  private isBridgeRecordingPlaybackActive(recording: BridgeRecordingClipModel): boolean {
+    return this._selectedBridgeRecordingPlayback?.recording.id === recording.id;
   }
 
   private async downloadArchiveRecording(recording: NvrArchiveRecordingModel): Promise<void> {
@@ -2577,7 +2692,9 @@ export class DahuaBridgeSurveillancePanelCard
     this.requestUpdate("_selectedCameraAudioMuted", previousMuted);
     this.syncSelectedCameraViewportAudioState(nextMuted);
 
-    const playbackActive = this._selectedPlayback?.sourceDeviceId === camera.deviceId;
+    const playbackActive =
+      this._selectedPlayback?.sourceDeviceId === camera.deviceId ||
+      this._selectedBridgeRecordingPlayback?.sourceDeviceId === camera.deviceId;
     if (playbackActive || !camera.audioMuteSupported) {
       return;
     }
@@ -2614,6 +2731,7 @@ export class DahuaBridgeSurveillancePanelCard
   private canPlaySelectedCameraAudio(
     camera: CameraViewModel,
     selectedPlayback: SelectedPlaybackState | null,
+    selectedBridgeRecordingPlayback: SelectedBridgeRecordingPlaybackState | null,
     selectedProfileKey: string | null,
     selectedSource: CameraViewportSource | null,
   ): boolean {
@@ -2627,6 +2745,10 @@ export class DahuaBridgeSurveillancePanelCard
         this._selectedPlaybackStreamProfile ?? selectedProfileKey,
         selectedSource,
       );
+    }
+
+    if (selectedBridgeRecordingPlayback?.recording.playbackUrl) {
+      return true;
     }
 
     if (selectedSource !== "hls" && selectedSource !== "webrtc") {

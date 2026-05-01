@@ -170,6 +170,26 @@ export function renderPlaybackViewport(
   );
 }
 
+export function renderClipPlaybackViewport(
+  playbackUrl: string,
+  label: string,
+  muted: boolean,
+): TemplateResult {
+  return html`
+    <video
+      class="remote-stream playback-stream local-playback-stream"
+      aria-label=${label}
+      src=${playbackUrl}
+      controls
+      preload="auto"
+      autoplay
+      playsinline
+      .muted=${muted}
+      data-audio-muted=${muted ? "true" : "false"}
+    ></video>
+  `;
+}
+
 function buildRemoteStreamDescriptor(
   cacheKey: string,
   alt: string,

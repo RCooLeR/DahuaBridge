@@ -1108,6 +1108,18 @@ func New(
 		w.Header().Set("Content-Disposition", `attachment; filename="`+filepath.Base(path)+`"`)
 		http.ServeFile(w, r, path)
 	})
+	router.With(rateLimitMiddleware(mediaLimiter)).Get("/api/v1/media/recordings/{clipID}/play", func(w http.ResponseWriter, r *http.Request) {
+		if media == nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "media layer is not configured"})
+			return
+		}
+		path, err := media.ClipFilePath(chi.URLParam(r, "clipID"))
+		if err != nil {
+			writeClassifiedActionError(w, err, http.StatusBadGateway)
+			return
+		}
+		http.ServeFile(w, r, path)
+	})
 	router.With(rateLimitMiddleware(mediaLimiter)).Get("/api/v1/media/preview/{streamID}", func(w http.ResponseWriter, r *http.Request) {
 		if media == nil || !media.Enabled() {
 			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "media layer is disabled"})
@@ -2231,8 +2243,15 @@ func clipAPIResponse(r *http.Request, clip mediaapi.ClipInfo) map[string]any {
 		"duration_ms":      clip.Duration.Milliseconds(),
 		"bytes":            clip.Bytes,
 		"file_name":        clip.FileName,
+		"playback_url":     buildAbsoluteRequestURL(r, "/api/v1/media/recordings/"+url.PathEscape(clip.ID)+"/play"),
 		"download_url":     buildAbsoluteRequestURL(r, "/api/v1/media/recordings/"+url.PathEscape(clip.ID)+"/download"),
 		"self_url":         buildAbsoluteRequestURL(r, "/api/v1/media/recordings/"+url.PathEscape(clip.ID)),
+	}
+	if !clip.SourceStartAt.IsZero() {
+		payload["start_time"] = clip.SourceStartAt.Format(time.RFC3339)
+	}
+	if !clip.SourceEndAt.IsZero() {
+		payload["end_time"] = clip.SourceEndAt.Format(time.RFC3339)
 	}
 	if !clip.EndedAt.IsZero() {
 		payload["ended_at"] = clip.EndedAt.Format(time.RFC3339)

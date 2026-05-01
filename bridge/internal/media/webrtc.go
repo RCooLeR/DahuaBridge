@@ -294,10 +294,10 @@ func (s *webrtcSession) startFFmpeg(videoPort int, audioPort int, conns ...*net.
 
 	for index, attempt := range attempts {
 		if index > 0 {
-			s.logger.Warn().
+			s.logger.Info().
 				Bool("hwaccel", attempt.useHWAccel).
 				Str("input_preset", attempt.inputPreset).
-				Msg("retrying webrtc ffmpeg with fallback")
+				Msg("starting webrtc fallback attempt")
 		}
 
 		args := s.buildFFmpegArgs(videoPort, audioPort, attempt)
@@ -314,6 +314,11 @@ func (s *webrtcSession) startFFmpeg(videoPort int, audioPort int, conns ...*net.
 		if err := cmd.Start(); err != nil {
 			_ = stderr.Close()
 			if index < len(attempts)-1 {
+				s.logger.Warn().
+					Bool("hwaccel", attempt.useHWAccel).
+					Str("input_preset", attempt.inputPreset).
+					Err(err).
+					Msg("webrtc ffmpeg attempt failed")
 				continue
 			}
 			return nil, fmt.Errorf("start ffmpeg: %w", err)
@@ -348,6 +353,18 @@ func (s *webrtcSession) startFFmpeg(videoPort int, audioPort int, conns ...*net.
 					Msg("webrtc ffmpeg stderr")
 			}
 			if index < len(attempts)-1 {
+				attemptErr := err
+				if attemptErr == nil {
+					attemptErr = errors.New("ffmpeg exited during startup probe")
+				}
+				if stderrText != "" {
+					attemptErr = fmt.Errorf("%w: %s", attemptErr, stderrText)
+				}
+				s.logger.Warn().
+					Bool("hwaccel", attempt.useHWAccel).
+					Str("input_preset", attempt.inputPreset).
+					Err(attemptErr).
+					Msg("webrtc ffmpeg attempt failed")
 				continue
 			}
 			if err != nil {

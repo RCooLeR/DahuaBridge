@@ -2536,6 +2536,78 @@ func TestMediaRecordingDownloadEndpoint(t *testing.T) {
 	}
 }
 
+func TestMediaRecordingPlayEndpoint(t *testing.T) {
+	dir := t.TempDir()
+	clipPath := filepath.Join(dir, "clip_test.mp4")
+	if err := os.WriteFile(clipPath, []byte("mp4-bytes"), 0o644); err != nil {
+		t.Fatalf("write clip file: %v", err)
+	}
+
+	server := newTestServerWithConfig(config.HTTPConfig{
+		ListenAddress: ":0",
+		MetricsPath:   "/metrics",
+		HealthPath:    "/healthz",
+	}, stubSnapshotReader{}, stubMediaReader{
+		enabled: true,
+		clipFilePath: func(clipID string) (string, error) {
+			if clipID != "clip_test" {
+				t.Fatalf("unexpected clip id %q", clipID)
+			}
+			return clipPath, nil
+		},
+		getClip: func(clipID string) (mediaapi.ClipInfo, error) {
+			if clipID != "clip_test" {
+				t.Fatalf("unexpected clip id %q", clipID)
+			}
+			return mediaapi.ClipInfo{
+				ID:            clipID,
+				StreamID:      "west20_nvr_channel_01",
+				Status:        mediaapi.ClipStatusCompleted,
+				StartedAt:     time.Date(2026, 5, 1, 10, 0, 0, 0, time.UTC),
+				EndedAt:       time.Date(2026, 5, 1, 10, 0, 4, 0, time.UTC),
+				SourceStartAt: time.Date(2026, 5, 1, 9, 45, 0, 0, time.UTC),
+				SourceEndAt:   time.Date(2026, 5, 1, 9, 45, 4, 0, time.UTC),
+				Duration:      4 * time.Second,
+				FileName:      "clip_test.mp4",
+			}, nil
+		},
+	}, stubActionReader{}, stubEventReader{})
+
+	metaReq := httptest.NewRequest(http.MethodGet, "/api/v1/media/recordings/clip_test", nil)
+	metaReq.Host = "example.com"
+	metaReq.URL.Scheme = "http"
+	metaRec := httptest.NewRecorder()
+	server.httpServer.Handler.ServeHTTP(metaRec, metaReq)
+
+	if metaRec.Code != http.StatusOK {
+		t.Fatalf("expected metadata status 200, got %d: %s", metaRec.Code, metaRec.Body.String())
+	}
+	if !strings.Contains(metaRec.Body.String(), `"playback_url":"http://example.com/api/v1/media/recordings/clip_test/play"`) {
+		t.Fatalf("unexpected metadata response %s", metaRec.Body.String())
+	}
+	if !strings.Contains(metaRec.Body.String(), `"start_time":"2026-05-01T09:45:00Z"`) ||
+		!strings.Contains(metaRec.Body.String(), `"end_time":"2026-05-01T09:45:04Z"`) {
+		t.Fatalf("expected source time range in metadata response %s", metaRec.Body.String())
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/media/recordings/clip_test/play", nil)
+	rec := httptest.NewRecorder()
+	server.httpServer.Handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if rec.Header().Get("Content-Type") != "video/mp4" {
+		t.Fatalf("unexpected content type %q", rec.Header().Get("Content-Type"))
+	}
+	if rec.Header().Get("Content-Disposition") != "" {
+		t.Fatalf("expected no content disposition for inline playback, got %q", rec.Header().Get("Content-Disposition"))
+	}
+	if rec.Body.String() != "mp4-bytes" {
+		t.Fatalf("unexpected play body %q", rec.Body.String())
+	}
+}
+
 func TestNVRRecordingsEndpoint(t *testing.T) {
 	server := newTestServerWithConfig(config.HTTPConfig{
 		ListenAddress: ":0",

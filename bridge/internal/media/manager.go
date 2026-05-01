@@ -651,10 +651,10 @@ func (w *worker) run() {
 	attempts := buildFFmpegStartAttempts(w.parent.cfg)
 	for index, attempt := range attempts {
 		if index > 0 {
-			w.logger.Warn().
+			w.logger.Info().
 				Bool("hwaccel", attempt.useHWAccel).
 				Str("input_preset", attempt.inputPreset).
-				Msg("retrying mjpeg worker with fallback")
+				Msg("starting mjpeg fallback attempt")
 		}
 
 		args := w.buildFFmpegArgs(attempt)
@@ -710,6 +710,11 @@ func (w *worker) run() {
 				readErr = fmt.Errorf("%w: %s", readErr, stderrText)
 			}
 			if index < len(attempts)-1 {
+				w.logger.Warn().
+					Bool("hwaccel", attempt.useHWAccel).
+					Str("input_preset", attempt.inputPreset).
+					Err(readErr).
+					Msg("mjpeg worker attempt failed")
 				continue
 			}
 			w.setError(readErr)
@@ -724,6 +729,11 @@ func (w *worker) run() {
 				waitErr = fmt.Errorf("%w: %s", waitErr, stderrText)
 			}
 			if index < len(attempts)-1 {
+				w.logger.Warn().
+					Bool("hwaccel", attempt.useHWAccel).
+					Str("input_preset", attempt.inputPreset).
+					Err(waitErr).
+					Msg("mjpeg worker attempt failed")
 				continue
 			}
 			w.setError(waitErr)
@@ -972,7 +982,7 @@ func (w *hlsWorker) run() {
 	attempts := buildFFmpegStartAttempts(w.parent.cfg)
 	for index, attempt := range attempts {
 		if index > 0 {
-			w.logger.Warn().Bool("hwaccel", attempt.useHWAccel).Str("input_preset", attempt.inputPreset).Msg("retrying hls worker with fallback")
+			w.logger.Info().Bool("hwaccel", attempt.useHWAccel).Str("input_preset", attempt.inputPreset).Msg("starting hls fallback attempt")
 		}
 
 		args := w.buildFFmpegArgs(attempt)
@@ -1018,6 +1028,11 @@ func (w *hlsWorker) run() {
 				waitErr = fmt.Errorf("%w: %s", waitErr, stderrText)
 			}
 			if index < len(attempts)-1 {
+				w.logger.Warn().
+					Bool("hwaccel", attempt.useHWAccel).
+					Str("input_preset", attempt.inputPreset).
+					Err(waitErr).
+					Msg("hls worker attempt failed")
 				continue
 			}
 			w.setError(waitErr)
