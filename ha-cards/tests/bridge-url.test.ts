@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  buildBridgeEndpointUrl,
   normalizeBrowserBridgeUrl,
   rewriteBridgeUrl,
 } from "../src/ha/bridge-url";
@@ -25,5 +26,14 @@ describe("bridge URL rewriting", () => {
     expect(normalizeBrowserBridgeUrl("https://ha.example.com/bridge/")).toBe(
       "https://ha.example.com/bridge",
     );
+  });
+
+  it("builds bridge endpoint URLs without dropping the browser bridge path prefix", () => {
+    expect(
+      buildBridgeEndpointUrl(
+        "https://ha.example.com/bridge/",
+        "/api/v1/nvr/west20_nvr/events/summary",
+      ),
+    ).toBe("https://ha.example.com/bridge/api/v1/nvr/west20_nvr/events/summary");
   });
 });

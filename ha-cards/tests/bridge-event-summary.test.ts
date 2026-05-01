@@ -75,6 +75,9 @@ describe("bridge event summary", () => {
     expect(buildNvrEventSummaryUrl("https://ha.example.com/bridge", "west20_nvr")).toBe(
       "https://ha.example.com/bridge/api/v1/nvr/west20_nvr/events/summary",
     );
+    expect(buildNvrEventSummaryUrl("https://ha.example.com/bridge/", "west20_nvr")).toBe(
+      "https://ha.example.com/bridge/api/v1/nvr/west20_nvr/events/summary",
+    );
     expect(buildNvrEventSummaryUrl(null, "west20_nvr")).toBeNull();
     expect(buildNvrEventSummaryUrl("https://ha.example.com/bridge", "   ")).toBeNull();
   });

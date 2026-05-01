@@ -15,4 +15,3 @@ config.image.yaml
 *.test
 coverage.out
 *.exe
-dahuabridge
