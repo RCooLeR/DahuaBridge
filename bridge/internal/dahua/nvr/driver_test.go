@@ -490,6 +490,50 @@ func TestDriverFindRecordingsEventFilterUsesEventFlagAndDropsTimingResults(t *te
 	}
 }
 
+func TestRecordingEventConditionSupportsArchiveAliases(t *testing.T) {
+	testCases := map[string]string{
+		"com.Human":                "SmartMotionHuman",
+		"smdTypeHuman":             "SmartMotionHuman",
+		"ivs.MotorVehicle":         "SmartMotionVehicle",
+		"smdTypeVehicle":           "SmartMotionVehicle",
+		"com.Animal":               "AnimalDetection",
+		"smdTypeAnimal":            "AnimalDetection",
+		"CrossLineDetection":       "CrossLineDetection",
+		"com.CrossRegionDetection": "CrossRegionDetection",
+		"ivs.LeftDetection":        "LeftDetection",
+		"com.MoveDetection":        "MoveDetection",
+	}
+
+	for input, want := range testCases {
+		if got := recordingEventCondition(input); got != want {
+			t.Fatalf("recordingEventCondition(%q) = %q, want %q", input, got, want)
+		}
+	}
+}
+
+func TestNVRLogItemMatchesRecordingEventSupportsAliasCodes(t *testing.T) {
+	testCases := []struct {
+		name     string
+		filter   string
+		itemCode string
+	}{
+		{name: "human com", filter: "human", itemCode: "com.Human"},
+		{name: "human smd", filter: "human", itemCode: "smdTypeHuman"},
+		{name: "vehicle ivs", filter: "vehicle", itemCode: "ivs.MotorVehicle"},
+		{name: "vehicle smd", filter: "vehicle", itemCode: "smdTypeVehicle"},
+		{name: "animal com", filter: "com.Animal", itemCode: "AnimalDetection"},
+		{name: "left ivs", filter: "LeftDetection", itemCode: "ivs.LeftDetection"},
+		{name: "move com", filter: "MoveDetection", itemCode: "com.MoveDetection"},
+	}
+
+	for _, testCase := range testCases {
+		item := nvrLogItem{Code: testCase.itemCode}
+		if !nvrLogItemMatchesRecordingEvent(item, testCase.filter) {
+			t.Fatalf("%s: expected %q to match filter %q", testCase.name, testCase.itemCode, testCase.filter)
+		}
+	}
+}
+
 func TestSummarizeDisks(t *testing.T) {
 	summary := summarizeDisks([]diskInventory{
 		{

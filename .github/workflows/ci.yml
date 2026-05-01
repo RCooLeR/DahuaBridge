@@ -30,7 +30,8 @@ jobs:
         run: go test ./...
 
       - name: Build container
-        run: docker build -t dahuabridge:ci .
+        working-directory: .
+        run: docker build -f bridge/Dockerfile -t dahuabridge:ci .
 
   integration:
     name: Home Assistant Integration Tests

@@ -861,6 +861,9 @@ func buildNVRChannelFeatures(publicBaseURL string, deviceID string, channel int,
 	}
 	if controls.Aux != nil && controls.Aux.Supported {
 		for _, descriptor := range auxFeatureDescriptors(controls.Aux) {
+			if !allowDeterrenceFeature(descriptor.Key, state) {
+				continue
+			}
 			kind := "action"
 			if descriptor.Toggle {
 				kind = "toggle"
@@ -892,6 +895,15 @@ func buildNVRChannelFeatures(publicBaseURL string, deviceID string, channel int,
 		})
 	}
 	return features
+}
+
+func allowDeterrenceFeature(key string, state dahua.DeviceState) bool {
+	switch strings.TrimSpace(key) {
+	case "siren", "warning_light":
+		return anyBool(state.Info, "control_imou_configured")
+	default:
+		return true
+	}
 }
 
 func buildVTOFeatures(intercom *IntercomSummary) []FeatureSummary {

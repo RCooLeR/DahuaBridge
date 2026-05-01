@@ -4,12 +4,12 @@
 __pycache__/
 *.py[cod]
 .tmp-*
+tmp-*
 dahua-pdf/
 .pytest_cache/
 .venv/
 .coverage
 todo.txt
-test-ui.txt
 .env
 .env.*
 !.env.example

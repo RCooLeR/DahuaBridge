@@ -59,6 +59,9 @@ Current card surface:
 - `custom:dahuabridge-surveillance-tile`
 - TypeScript build output under `ha-cards/dist/`
 - optional browser-side bridge URL override for deployments where Home Assistant and the browser reach the bridge differently
+- archive-backed camera event and recording lists with local-day filtering and playback launch
+- bridge MP4 clip browsing and stop/download controls from the surveillance panel
+- stream-profile and stream-source labels aligned with the bridge and integration options
 
 See:
 

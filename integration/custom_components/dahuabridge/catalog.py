@@ -360,6 +360,8 @@ def profile_order_for_record(
     preference = str(preferred_profile).strip().lower() or "auto"
     if preference == "stable":
         return ["stable", "substream", recommended, "default", "quality"]
+    if preference == "default":
+        return ["default", "quality", recommended, "stable", "substream"]
     if preference == "quality":
         return ["quality", "default", recommended, "stable", "substream"]
     if preference == "substream":
@@ -369,6 +371,8 @@ def profile_order_for_record(
 
 def source_order_for_preference(preferred_source: str = "auto") -> tuple[str, ...]:
     preference = str(preferred_source).strip().lower() or "auto"
+    if preference == "rtsp":
+        return ("stream_url", "local_hls_url", "local_mjpeg_url")
     if preference == "hls":
         return ("local_hls_url", "stream_url", "local_mjpeg_url")
     if preference == "mjpeg":

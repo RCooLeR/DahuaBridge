@@ -24,17 +24,18 @@ from .const import (
 _LOGGER = logging.getLogger(__name__)
 
 VIDEO_PROFILE_OPTIONS = {
-    "auto": "Auto",
-    "stable": "Stable",
-    "quality": "Quality",
-    "substream": "Substream",
+    "auto": "Auto (Bridge Recommended)",
+    "quality": "Quality (Main Stream)",
+    "default": "Default (Main Stream)",
+    "stable": "Stable (Substream)",
+    "substream": "Substream (Native)",
 }
 VIDEO_PROFILE_VALUES = tuple(VIDEO_PROFILE_OPTIONS.keys())
 
 VIDEO_SOURCE_OPTIONS = {
-    "auto": "Auto",
+    "auto": "Auto (Bridge Recommended)",
     "rtsp": "Direct RTSP",
-    "hls": "Bridge HLS",
+    "hls": "Bridge HLS (H.264/AAC)",
     "mjpeg": "Bridge MJPEG",
 }
 VIDEO_SOURCE_VALUES = tuple(VIDEO_SOURCE_OPTIONS.keys())
@@ -176,10 +177,10 @@ class DahuaBridgeOptionsFlow(config_entries.OptionsFlow):
                 ): vol.All(vol.Coerce(int), vol.Range(min=5, max=300)),
                 vol.Optional(
                     CONF_PREFERRED_VIDEO_PROFILE, default=current_profile
-                ): vol.In(VIDEO_PROFILE_VALUES),
+                ): vol.In(VIDEO_PROFILE_OPTIONS),
                 vol.Optional(
                     CONF_PREFERRED_VIDEO_SOURCE, default=current_source
-                ): vol.In(VIDEO_SOURCE_VALUES),
+                ): vol.In(VIDEO_SOURCE_OPTIONS),
             }
         )
         return self.async_show_form(step_id="init", data_schema=schema)
@@ -195,11 +196,11 @@ def build_user_schema() -> vol.Schema:
             vol.Optional(
                 CONF_PREFERRED_VIDEO_PROFILE,
                 default=DEFAULT_PREFERRED_VIDEO_PROFILE,
-            ): vol.In(VIDEO_PROFILE_VALUES),
+            ): vol.In(VIDEO_PROFILE_OPTIONS),
             vol.Optional(
                 CONF_PREFERRED_VIDEO_SOURCE,
                 default=DEFAULT_PREFERRED_VIDEO_SOURCE,
-            ): vol.In(VIDEO_SOURCE_VALUES),
+            ): vol.In(VIDEO_SOURCE_OPTIONS),
         }
     )
 

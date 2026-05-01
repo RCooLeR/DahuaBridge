@@ -6,16 +6,14 @@ import { createSurveillancePanelStubConfig } from "./surveillance-panel-card-edi
 import { SurveillancePanelActions } from "./surveillance-panel-actions";
 import { SurveillancePanelRuntime } from "./surveillance-panel-runtime";
 import { surveillancePanelStyles } from "./surveillance-panel-styles";
-import {
-  renderSurveillancePanelEvents,
-  type EventWindowOption,
-} from "./surveillance-panel-events";
+import { renderSurveillancePanelEvents } from "./surveillance-panel-events";
 import { renderSurveillancePanelHeader } from "./surveillance-panel-header";
 import { renderSurveillancePanelSidebar } from "./surveillance-panel-sidebar";
 import { renderSurveillancePanelOverview } from "./surveillance-panel-overview";
 import { renderSurveillancePanelInspector } from "./surveillance-panel-inspector";
 import {
   renderArchiveRecordings,
+  renderBridgeRecordings,
   resolveSelectedNvrArchiveCamera,
 } from "./surveillance-panel-archive";
 import {
@@ -43,6 +41,8 @@ import {
 } from "./surveillance-panel-primitives";
 import type { BridgeEvent } from "../ha/bridge-events";
 import type {
+  BridgeRecordingClipListModel,
+  BridgeRecordingClipModel,
   NvrArchiveRecordingModel,
   NvrArchiveSearchResultModel,
   NvrPlaybackSessionModel,
@@ -50,6 +50,7 @@ import type {
 import {
   exportArchiveRecording,
   fetchArchiveRecordings,
+  fetchBridgeRecordings,
   waitForArchiveExportCompletion,
 } from "../ha/bridge-archive";
 import {
@@ -105,7 +106,7 @@ import {
   vtoBadgeClass,
   vtoBadgeTone,
 } from "./surveillance-panel-state";
-const BRIDGE_LOGO_URL = new URL("../assets/bridge-logo-small.png", import.meta.url).href;
+const BRIDGE_LOGO_URL = new URL("../assets/logo-white.png", import.meta.url).href;
 
 const EVENT_WINDOW_OPTIONS = [
   { hours: 1, label: "1H" },
@@ -114,14 +115,19 @@ const EVENT_WINDOW_OPTIONS = [
   { hours: 168, label: "7D" },
 ] as const;
 
+const ARCHIVE_PAGE_SIZE = 20;
+const MP4_PAGE_SIZE = 20;
+
 const ARCHIVE_EVENT_TYPE_OPTIONS = [
   { value: EVENT_FILTER_ALL, label: "All event types" },
   { value: "motion", label: "Motion" },
   { value: "human", label: "Human" },
   { value: "vehicle", label: "Vehicle" },
-  { value: "tripwire", label: "Tripwire" },
-  { value: "intrusion", label: "Intrusion" },
-  { value: "access", label: "Access" },
+  { value: "animal", label: "Animal" },
+  { value: "CrossLineDetection", label: "Cross Line" },
+  { value: "CrossRegionDetection", label: "Cross Region" },
+  { value: "LeftDetection", label: "Left Detection" },
+  { value: "MoveDetection", label: "Motion Detection" },
 ] as const;
 
 const ACTION_STATE_OVERRIDE_TTL_MS = 10_000;
@@ -152,6 +158,8 @@ export class DahuaBridgeSurveillancePanelCard
   private _remoteStreamSyncTimer: number | null = null;
   private _archiveAbort?: AbortController;
   private _archiveRequestVersion = 0;
+  private _mp4Abort?: AbortController;
+  private _mp4RequestVersion = 0;
 
   static async getConfigElement(): Promise<HTMLElement> {
     return document.createElement("dahuabridge-surveillance-panel-editor");
@@ -173,6 +181,8 @@ export class DahuaBridgeSurveillancePanelCard
     _eventWindowHours: { state: true },
     _eventCodeFilter: { state: true },
     _archiveEventCodeFilter: { state: true },
+    _archiveDate: { state: true },
+    _archivePage: { state: true },
     _selection: { state: true },
     _sidebarFilter: { state: true },
     _searchText: { state: true },
@@ -186,6 +196,10 @@ export class DahuaBridgeSurveillancePanelCard
     _archiveRecordings: { state: true },
     _archiveLoading: { state: true },
     _archiveError: { state: true },
+    _bridgeRecordings: { state: true },
+    _bridgeRecordingsLoading: { state: true },
+    _bridgeRecordingsError: { state: true },
+    _mp4Page: { state: true },
     _selectedCameraStreamProfile: { state: true },
     _selectedCameraStreamSource: { state: true },
     _selectedCameraAudioMuted: { state: true },
@@ -212,6 +226,8 @@ export class DahuaBridgeSurveillancePanelCard
   private _eventWindowHours = 12;
   private _eventCodeFilter = defaultTimelineEventFilters().eventCode;
   private _archiveEventCodeFilter = defaultTimelineEventFilters().eventCode;
+  private _archiveDate = todayDateInputValue();
+  private _archivePage = 0;
   private _selection: PanelSelection = { kind: "overview" };
   private _sidebarFilter: SidebarFilter = "all";
   private _searchText = "";
@@ -225,6 +241,10 @@ export class DahuaBridgeSurveillancePanelCard
   private _archiveRecordings: NvrArchiveSearchResultModel | null = null;
   private _archiveLoading = false;
   private _archiveError = "";
+  private _bridgeRecordings: BridgeRecordingClipListModel | null = null;
+  private _bridgeRecordingsLoading = false;
+  private _bridgeRecordingsError = "";
+  private _mp4Page = 0;
   private _selectedCameraStreamProfile: string | null = null;
   private _selectedCameraStreamSource: CameraViewportSource | null = null;
   private _selectedCameraAudioMuted = true;
@@ -282,6 +302,8 @@ export class DahuaBridgeSurveillancePanelCard
   });
 
   setConfig(config: LovelaceCardConfig): void {
+    this.cancelArchiveRefresh();
+    this.cancelMp4Refresh();
     this._config = parseConfig(config);
     this._bridgeEvents = null;
     this._eventsLoading = false;
@@ -291,6 +313,8 @@ export class DahuaBridgeSurveillancePanelCard
     this._eventWindowHours = this._config.event_lookback_hours ?? 12;
     this.resetEventFilters();
     this._archiveEventCodeFilter = defaultTimelineEventFilters().eventCode;
+    this._archiveDate = todayDateInputValue();
+    this._archivePage = 0;
     this._selection = { kind: "overview" };
     this._detailTab = "overview";
     this._ptzAdjusting = false;
@@ -299,6 +323,10 @@ export class DahuaBridgeSurveillancePanelCard
     this._archiveRecordings = null;
     this._archiveLoading = false;
     this._archiveError = "";
+    this._bridgeRecordings = null;
+    this._bridgeRecordingsLoading = false;
+    this._bridgeRecordingsError = "";
+    this._mp4Page = 0;
     this._selectedCameraStreamProfile = null;
     this._selectedCameraStreamSource = null;
     this._selectedCameraAudioMuted = true;
@@ -323,6 +351,7 @@ export class DahuaBridgeSurveillancePanelCard
       this._remoteStreamSyncTimer = null;
     }
     this.cancelArchiveRefresh();
+    this.cancelMp4Refresh();
     teardownRemoteStreamPlayback();
     void this.stopSelectedVtoMicrophone();
     this._runtime.disconnected();
@@ -344,11 +373,20 @@ export class DahuaBridgeSurveillancePanelCard
     if (
       changedProperties.has("_selection") ||
       changedProperties.has("_config") ||
-      changedProperties.has("_eventWindowHours") ||
+      changedProperties.has("_detailTab") ||
+      changedProperties.has("_archiveDate") ||
       changedProperties.has("_archiveEventCodeFilter") ||
       changedProperties.has("_nvrArchiveChannelNumber")
     ) {
       void this.refreshArchiveRecordings();
+    }
+    if (
+      changedProperties.has("_selection") ||
+      changedProperties.has("_config") ||
+      changedProperties.has("_detailTab") ||
+      changedProperties.has("_archiveDate")
+    ) {
+      void this.refreshBridgeRecordings();
     }
     if (this.shouldClampEventHistoryPage(changedProperties)) {
       this.clampEventHistoryPage();
@@ -495,6 +533,7 @@ export class DahuaBridgeSurveillancePanelCard
             );
       const cameraAudioAvailable = this.canPlaySelectedCameraAudio(
         camera,
+        selectedPlayback,
         selectedStreamProfile?.key ?? null,
         selectedStreamSource,
       );
@@ -597,6 +636,7 @@ export class DahuaBridgeSurveillancePanelCard
                       selectedPlayback.session,
                       this._selectedCameraStreamProfile,
                       selectedStreamSource,
+                      this._selectedCameraAudioMuted,
                     )
                   : renderSelectedCameraViewport(
                       this.hass,
@@ -631,6 +671,20 @@ export class DahuaBridgeSurveillancePanelCard
                                 disabled: this.isBusy(
                                   this.archiveDownloadBusyKey(selectedPlayback.recording),
                                 ),
+                              },
+                            )
+                          : nothing}
+                        ${cameraAudioAvailable
+                          ? this.renderControlButton(
+                              this._selectedCameraAudioMuted
+                                ? "Enable Stream Audio"
+                                : "Disable Stream Audio",
+                              this._selectedCameraAudioMuted ? "mdi:volume-high" : "mdi:volume-off",
+                              () => void this.toggleSelectedCameraAudio(camera),
+                              {
+                                tone: this._selectedCameraAudioMuted ? "neutral" : "primary",
+                                compact: true,
+                                active: !this._selectedCameraAudioMuted,
                               },
                             )
                           : nothing}
@@ -1093,33 +1147,16 @@ export class DahuaBridgeSurveillancePanelCard
       inspectorOpen: this._inspectorOpen,
       errorMessage: this._errorMessage,
       detailTab: this._detailTab,
-      eventContent:
-        model.selectedCamera || model.selectedVto ? this.renderEvents(model) : nothing,
-      archiveContent:
-        model.selectedCamera || model.selectedNvr
-          ? renderArchiveRecordings({
-              model,
-              archiveRecordings: this._archiveRecordings,
-              archiveLoading: this._archiveLoading,
-              archiveError: this._archiveError,
-                eventWindowHours: this._eventWindowHours,
-                archiveEventCode: this._archiveEventCodeFilter,
-                archiveEventTypeOptions: ARCHIVE_EVENT_TYPE_OPTIONS,
-                playbackSupported: Boolean(this.resolveArchiveSource(model)?.archive?.playbackUrl),
-                isLaunchingPlayback: (recording) => this.isBusy(this.playbackBusyKey(recording)),
-                isPlaybackActive: (recording) => this.isPlaybackActive(recording),
-                isDownloadingRecording: (recording) =>
-                  this.isBusy(this.archiveDownloadBusyKey(recording)),
-                onSelectArchiveEventType: (eventCode) => this.selectArchiveEventType(eventCode),
-                onLaunchPlayback: (recording) => {
-                  void this.launchPlaybackSession(model, recording);
-                },
-                onDownloadRecording: (recording) => {
-                  void this.downloadArchiveRecording(recording);
-                },
-                renderIcon: (icon) => this.renderIcon(icon),
-              })
+      eventContent: model.selectedCamera
+        ? this.renderCameraArchiveEvents(model)
+        : model.selectedVto
+          ? this.renderEvents(model)
           : nothing,
+      archiveContent:
+        model.selectedCamera || model.selectedNvr ? this.renderArchiveTab(model) : nothing,
+      mp4Content: model.selectedCamera
+        ? this.renderBridgeMp4Tab(model.selectedCamera)
+        : nothing,
       renderIcon: (icon) => this.renderIcon(icon),
       isBusy: (key) => this.isBusy(key),
       onSelectDetailTab: (tab) => {
@@ -1133,6 +1170,115 @@ export class DahuaBridgeSurveillancePanelCard
         this.triggerVtoSwitchAction(key, entityId, enabled, fallbackUrl, payloadKey),
       onVtoButtonAction: (key, entityId, fallbackUrl) =>
         this.triggerVtoButtonAction(key, entityId, fallbackUrl),
+    });
+  }
+
+  private renderCameraArchiveEvents(model: PanelModel): TemplateResult | typeof nothing {
+    if (!model.selectedCamera) {
+      return nothing;
+    }
+
+    const archiveItems = this._archiveRecordings?.items ?? [];
+    const pageCount = pageCountForItems(archiveItems.length, ARCHIVE_PAGE_SIZE);
+    const page = boundedPageIndex(this._archivePage, pageCount);
+
+    return renderArchiveRecordings({
+      title: "Event Video Files",
+      archiveRecordings: this._archiveRecordings,
+      archiveLoading: this._archiveLoading,
+      archiveError: this._archiveError,
+      archiveDate: this._archiveDate,
+      archiveEventCode: this._archiveEventCodeFilter,
+      archiveEventTypeOptions: ARCHIVE_EVENT_TYPE_OPTIONS,
+      playbackSupported: Boolean(model.selectedCamera.archive?.playbackUrl),
+      showEventFilter: true,
+      page,
+      pageCount,
+      visibleItems: slicePage(archiveItems, page, ARCHIVE_PAGE_SIZE),
+      isLaunchingPlayback: (recording) => this.isBusy(this.playbackBusyKey(recording)),
+      isPlaybackActive: (recording) => this.isPlaybackActive(recording),
+      isDownloadingRecording: (recording) =>
+        this.isBusy(this.archiveDownloadBusyKey(recording)),
+      onSelectArchiveDate: (value) => this.selectArchiveDate(value),
+      onSelectArchiveEventType: (eventCode) => this.selectArchiveEventType(eventCode),
+      onSelectArchivePage: (nextPage) => this.selectArchivePage(nextPage),
+      onLaunchPlayback: (recording) => {
+        void this.launchPlaybackSession(model, recording);
+      },
+      onDownloadRecording: (recording) => {
+        void this.downloadArchiveRecording(recording);
+      },
+      renderIcon: (icon) => this.renderIcon(icon),
+    });
+  }
+
+  private renderArchiveTab(model: PanelModel): TemplateResult | typeof nothing {
+    const archiveSource = this.resolveArchiveSource(model);
+    if (!archiveSource && !model.selectedNvr) {
+      return nothing;
+    }
+
+    const archiveItems = this._archiveRecordings?.items ?? [];
+    const pageCount = pageCountForItems(archiveItems.length, ARCHIVE_PAGE_SIZE);
+    const page = boundedPageIndex(this._archivePage, pageCount);
+
+    return renderArchiveRecordings({
+      title: model.selectedNvr ? "Recorder Recordings" : "24/7 Recordings",
+      archiveRecordings: this._archiveRecordings,
+      archiveLoading: this._archiveLoading,
+      archiveError: this._archiveError,
+      archiveDate: this._archiveDate,
+      archiveEventCode: EVENT_FILTER_ALL,
+      archiveEventTypeOptions: ARCHIVE_EVENT_TYPE_OPTIONS,
+      playbackSupported: Boolean(archiveSource?.archive?.playbackUrl),
+      showEventFilter: false,
+      page,
+      pageCount,
+      visibleItems: slicePage(archiveItems, page, ARCHIVE_PAGE_SIZE),
+      isLaunchingPlayback: (recording) => this.isBusy(this.playbackBusyKey(recording)),
+      isPlaybackActive: (recording) => this.isPlaybackActive(recording),
+      isDownloadingRecording: (recording) =>
+        this.isBusy(this.archiveDownloadBusyKey(recording)),
+      onSelectArchiveDate: (value) => this.selectArchiveDate(value),
+      onSelectArchiveEventType: () => undefined,
+      onSelectArchivePage: (nextPage) => this.selectArchivePage(nextPage),
+      onLaunchPlayback: (recording) => {
+        void this.launchPlaybackSession(model, recording);
+      },
+      onDownloadRecording: (recording) => {
+        void this.downloadArchiveRecording(recording);
+      },
+      renderIcon: (icon) => this.renderIcon(icon),
+    });
+  }
+
+  private renderBridgeMp4Tab(camera: CameraViewModel): TemplateResult {
+    const recordings = this._bridgeRecordings?.items ?? [];
+    const pageCount = pageCountForItems(recordings.length, MP4_PAGE_SIZE);
+    const page = boundedPageIndex(this._mp4Page, pageCount);
+
+    return renderBridgeRecordings({
+      title: `${displayCameraLabel(camera)} MP4 Clips`,
+      recordings: this._bridgeRecordings,
+      recordingsLoading: this._bridgeRecordingsLoading,
+      recordingsError: this._bridgeRecordingsError,
+      recordingsDate: this._archiveDate,
+      page,
+      pageCount,
+      visibleItems: slicePage(recordings, page, MP4_PAGE_SIZE),
+      isStoppingRecording: (recording) =>
+        this.isBusy(this.bridgeRecordingStopBusyKey(recording)),
+      isDownloadingRecording: (recording) =>
+        this.isBusy(this.bridgeRecordingDownloadBusyKey(recording)),
+      onSelectDate: (value) => this.selectArchiveDate(value),
+      onSelectPage: (nextPage) => this.selectMp4Page(nextPage),
+      onStopRecording: (recording) => {
+        void this.stopBridgeRecording(recording);
+      },
+      onDownloadRecording: (recording) => {
+        this.downloadBridgeRecording(recording);
+      },
+      renderIcon: (icon) => this.renderIcon(icon),
     });
   }
 
@@ -1466,6 +1612,8 @@ export class DahuaBridgeSurveillancePanelCard
     this._eventHistoryPage = nextState.eventHistoryPage;
     this.resetEventFilters();
     this.resetArchiveEventFilter();
+    this._archivePage = 0;
+    this._mp4Page = 0;
     this._nvrArchiveChannelNumber = null;
     this._selectedCameraStreamProfile = null;
     this._selectedCameraStreamSource = null;
@@ -1487,6 +1635,8 @@ export class DahuaBridgeSurveillancePanelCard
     this._eventHistoryPage = nextState.eventHistoryPage;
     this.resetEventFilters();
     this.resetArchiveEventFilter();
+    this._archivePage = 0;
+    this._mp4Page = 0;
     this._inspectorOpen = true;
     this._nvrArchiveChannelNumber = null;
     this._selectedCameraStreamProfile =
@@ -1516,6 +1666,8 @@ export class DahuaBridgeSurveillancePanelCard
     this._eventHistoryPage = nextState.eventHistoryPage;
     this.resetEventFilters();
     this.resetArchiveEventFilter();
+    this._archivePage = 0;
+    this._mp4Page = 0;
     this._inspectorOpen = true;
     this._nvrArchiveChannelNumber = nvr.rooms
       .flatMap((room) => room.channels)
@@ -1541,6 +1693,8 @@ export class DahuaBridgeSurveillancePanelCard
     this._eventHistoryPage = nextState.eventHistoryPage;
     this.resetEventFilters();
     this.resetArchiveEventFilter();
+    this._archivePage = 0;
+    this._mp4Page = 0;
     this._inspectorOpen = true;
     this._nvrArchiveChannelNumber = null;
     this._selectedCameraStreamProfile = null;
@@ -1581,19 +1735,67 @@ export class DahuaBridgeSurveillancePanelCard
     }
     const previousEventCode = this._archiveEventCodeFilter;
     this._archiveEventCodeFilter = eventCode;
+    this._archivePage = 0;
     this.requestUpdate("_archiveEventCodeFilter", previousEventCode);
   }
 
+  private selectArchiveDate(value: string): void {
+    const nextDate = normalizeArchiveDateInput(value);
+    if (nextDate === this._archiveDate) {
+      return;
+    }
+    const previousDate = this._archiveDate;
+    this._archiveDate = nextDate;
+    this._archivePage = 0;
+    this._mp4Page = 0;
+    this.requestUpdate("_archiveDate", previousDate);
+  }
+
+  private selectArchivePage(page: number): void {
+    const pageCount = pageCountForItems(this._archiveRecordings?.items.length ?? 0, ARCHIVE_PAGE_SIZE);
+    const nextPage = boundedPageIndex(page, pageCount);
+    if (nextPage === this._archivePage) {
+      return;
+    }
+    const previousPage = this._archivePage;
+    this._archivePage = nextPage;
+    this.requestUpdate("_archivePage", previousPage);
+  }
+
+  private selectMp4Page(page: number): void {
+    const pageCount = pageCountForItems(this._bridgeRecordings?.items.length ?? 0, MP4_PAGE_SIZE);
+    const nextPage = boundedPageIndex(page, pageCount);
+    if (nextPage === this._mp4Page) {
+      return;
+    }
+    const previousPage = this._mp4Page;
+    this._mp4Page = nextPage;
+    this.requestUpdate("_mp4Page", previousPage);
+  }
+
   private async refreshArchiveRecordings(): Promise<void> {
-    if (
-      !this.hass ||
-      !this._config ||
-      (this._selection.kind !== "camera" && this._selection.kind !== "nvr")
-    ) {
+    if (!this.hass || !this._config) {
       this.cancelArchiveRefresh();
       this._archiveRecordings = null;
       this._archiveLoading = false;
       this._archiveError = "";
+      return;
+    }
+
+    if (this._selection.kind !== "camera" && this._selection.kind !== "nvr") {
+      this.cancelArchiveRefresh();
+      this._archiveRecordings = null;
+      this._archiveLoading = false;
+      this._archiveError = "";
+      return;
+    }
+
+    if (
+      this._selection.kind === "camera" &&
+      this._detailTab !== "events" &&
+      this._detailTab !== "recordings"
+    ) {
+      this.cancelArchiveRefresh();
       return;
     }
 
@@ -1630,32 +1832,50 @@ export class DahuaBridgeSurveillancePanelCard
     const requestVersion = ++this._archiveRequestVersion;
     this._archiveLoading = true;
     this._archiveError = "";
-    const end = new Date();
-    const start = new Date(end.getTime() - this._eventWindowHours * 60 * 60 * 1000);
+    const { startTime, endTime } = dateRangeForArchiveDay(this._archiveDate);
+    const eventCode =
+      this._selection.kind === "camera" && this._detailTab === "events"
+        ? this._archiveEventCodeFilter
+        : EVENT_FILTER_ALL;
 
     try {
-      const recordings = await fetchArchiveRecordings(archiveSource.archive.searchUrl, {
-        channel: archiveSource.archive.channel,
-        startTime: start.toISOString(),
-        endTime: end.toISOString(),
-        limit: archiveSource.archive.defaultLimit,
-        eventCode: this._archiveEventCodeFilter,
-      }, controller.signal);
-      if (controller.signal.aborted || this._archiveAbort !== controller || requestVersion !== this._archiveRequestVersion) {
+      const recordings = await fetchArchiveRecordings(
+        archiveSource.archive.searchUrl,
+        {
+          channel: archiveSource.archive.channel,
+          startTime,
+          endTime,
+          limit: archiveSource.archive.defaultLimit,
+          eventCode,
+        },
+        controller.signal,
+      );
+      if (
+        controller.signal.aborted ||
+        this._archiveAbort !== controller ||
+        requestVersion !== this._archiveRequestVersion
+      ) {
         return;
       }
 
       this._archiveRecordings = recordings;
       this._archiveError = "";
     } catch (error) {
-      if (controller.signal.aborted || this._archiveAbort !== controller || requestVersion !== this._archiveRequestVersion) {
+      if (
+        controller.signal.aborted ||
+        this._archiveAbort !== controller ||
+        requestVersion !== this._archiveRequestVersion
+      ) {
         return;
       }
       this._archiveRecordings = null;
       this._archiveError =
         error instanceof Error ? error.message : "Archive recording request failed.";
     } finally {
-      if (this._archiveAbort === controller && requestVersion === this._archiveRequestVersion) {
+      if (
+        this._archiveAbort === controller &&
+        requestVersion === this._archiveRequestVersion
+      ) {
         this._archiveAbort = undefined;
         this._archiveLoading = false;
       }
@@ -1665,6 +1885,96 @@ export class DahuaBridgeSurveillancePanelCard
   private cancelArchiveRefresh(): void {
     this._archiveAbort?.abort();
     this._archiveAbort = undefined;
+  }
+
+  private async refreshBridgeRecordings(): Promise<void> {
+    if (!this.hass || !this._config) {
+      this.cancelMp4Refresh();
+      this._bridgeRecordings = null;
+      this._bridgeRecordingsLoading = false;
+      this._bridgeRecordingsError = "";
+      return;
+    }
+
+    if (this._selection.kind !== "camera") {
+      this.cancelMp4Refresh();
+      this._bridgeRecordings = null;
+      this._bridgeRecordingsLoading = false;
+      this._bridgeRecordingsError = "";
+      return;
+    }
+
+    if (this._detailTab !== "mp4") {
+      this.cancelMp4Refresh();
+      return;
+    }
+
+    const model = buildPanelModel(
+      this.hass,
+      this._config,
+      this._selection,
+      this._bridgeEvents,
+      this._eventWindowHours,
+      this._registrySnapshot,
+    );
+    const camera = model.selectedCamera ?? null;
+    if (!camera?.recordingsUrl) {
+      this.cancelMp4Refresh();
+      this._bridgeRecordings = null;
+      this._bridgeRecordingsLoading = false;
+      this._bridgeRecordingsError = "";
+      return;
+    }
+
+    this.cancelMp4Refresh();
+    const controller = new AbortController();
+    this._mp4Abort = controller;
+    const requestVersion = ++this._mp4RequestVersion;
+    this._bridgeRecordingsLoading = true;
+    this._bridgeRecordingsError = "";
+    const { startTime, endTime } = dateRangeForArchiveDay(this._archiveDate);
+
+    try {
+      const recordings = await fetchBridgeRecordings(
+        camera.recordingsUrl,
+        {
+          startTime,
+          endTime,
+          limit: Math.max(camera.archive?.defaultLimit ?? 0, 100),
+        },
+        controller.signal,
+      );
+      if (
+        controller.signal.aborted ||
+        this._mp4Abort !== controller ||
+        requestVersion !== this._mp4RequestVersion
+      ) {
+        return;
+      }
+      this._bridgeRecordings = recordings;
+      this._bridgeRecordingsError = "";
+    } catch (error) {
+      if (
+        controller.signal.aborted ||
+        this._mp4Abort !== controller ||
+        requestVersion !== this._mp4RequestVersion
+      ) {
+        return;
+      }
+      this._bridgeRecordings = null;
+      this._bridgeRecordingsError =
+        error instanceof Error ? error.message : "Bridge MP4 request failed.";
+    } finally {
+      if (this._mp4Abort === controller && requestVersion === this._mp4RequestVersion) {
+        this._mp4Abort = undefined;
+        this._bridgeRecordingsLoading = false;
+      }
+    }
+  }
+
+  private cancelMp4Refresh(): void {
+    this._mp4Abort?.abort();
+    this._mp4Abort = undefined;
   }
 
   private selectedPlaybackForCamera(camera: CameraViewModel): SelectedPlaybackState | null {
@@ -1690,6 +2000,14 @@ export class DahuaBridgeSurveillancePanelCard
 
   private archiveDownloadBusyKey(recording: { channel: number; startTime: string; endTime: string }): string {
     return `archive-download:${recording.channel}:${recording.startTime}:${recording.endTime}`;
+  }
+
+  private bridgeRecordingStopBusyKey(recording: { id: string }): string {
+    return `bridge-recording-stop:${recording.id}`;
+  }
+
+  private bridgeRecordingDownloadBusyKey(recording: { id: string }): string {
+    return `bridge-recording-download:${recording.id}`;
   }
 
   private async launchPlaybackSession(
@@ -1719,7 +2037,10 @@ export class DahuaBridgeSurveillancePanelCard
       const previousSelection = this._selection;
       const nextState = selectCameraState(archiveSource);
       this._selection = nextState.selection;
-      this._detailTab = nextState.detailTab;
+      this._detailTab =
+        this._detailTab === "events" || this._detailTab === "recordings"
+          ? this._detailTab
+          : nextState.detailTab;
       this._ptzAdjusting = nextState.ptzAdjusting;
       this._eventHistoryPage = nextState.eventHistoryPage;
       this._inspectorOpen = true;
@@ -1731,7 +2052,7 @@ export class DahuaBridgeSurveillancePanelCard
       this._selectedCameraStreamProfile = session.recommendedProfile;
       this._selectedCameraStreamSource = resolvePlaybackViewportSource(
         session,
-        "hls",
+        this._selectedCameraStreamSource,
         session.recommendedProfile,
       );
       this._selectedPlayback = {
@@ -1744,6 +2065,57 @@ export class DahuaBridgeSurveillancePanelCard
     } catch (error) {
       this._errorMessage =
         error instanceof Error ? error.message : "Playback session request failed.";
+    } finally {
+      const reducedBusy = new Set(this._busyActions);
+      reducedBusy.delete(busyKey);
+      this._busyActions = reducedBusy;
+    }
+  }
+
+  private downloadBridgeRecording(recording: BridgeRecordingClipModel): void {
+    if (!recording.downloadUrl) {
+      return;
+    }
+
+    const busyKey = this.bridgeRecordingDownloadBusyKey(recording);
+    if (this.isBusy(busyKey)) {
+      return;
+    }
+
+    const nextBusy = new Set(this._busyActions);
+    nextBusy.add(busyKey);
+    this._busyActions = nextBusy;
+
+    try {
+      window.open(recording.downloadUrl, "_blank", "noopener,noreferrer");
+    } finally {
+      const reducedBusy = new Set(this._busyActions);
+      reducedBusy.delete(busyKey);
+      this._busyActions = reducedBusy;
+    }
+  }
+
+  private async stopBridgeRecording(recording: BridgeRecordingClipModel): Promise<void> {
+    if (!recording.stopUrl) {
+      return;
+    }
+
+    const busyKey = this.bridgeRecordingStopBusyKey(recording);
+    if (this.isBusy(busyKey)) {
+      return;
+    }
+
+    const nextBusy = new Set(this._busyActions);
+    nextBusy.add(busyKey);
+    this._busyActions = nextBusy;
+    this._errorMessage = "";
+
+    try {
+      await postBridgeRequest(recording.stopUrl);
+      await this.refreshBridgeRecordings();
+    } catch (error) {
+      this._errorMessage =
+        error instanceof Error ? error.message : "Bridge MP4 stop request failed.";
     } finally {
       const reducedBusy = new Set(this._busyActions);
       reducedBusy.delete(busyKey);
@@ -1944,19 +2316,29 @@ export class DahuaBridgeSurveillancePanelCard
       return;
     }
     this.setRecordingStateOverride(camera.deviceId, action === "start");
+    void this.refreshBridgeRecordings();
   }
 
   private async toggleSelectedCameraAudio(camera: CameraViewModel): Promise<void> {
     const nextMuted = !this._selectedCameraAudioMuted;
-    if (camera.audioMuteSupported) {
-      const succeeded = await this._actions.triggerCameraMuteAction(camera, nextMuted);
-      if (!succeeded) {
-        return;
-      }
-    }
     const previousMuted = this._selectedCameraAudioMuted;
     this._selectedCameraAudioMuted = nextMuted;
     this.requestUpdate("_selectedCameraAudioMuted", previousMuted);
+    this.syncSelectedCameraViewportAudioState(nextMuted);
+
+    const playbackActive = this._selectedPlayback?.sourceDeviceId === camera.deviceId;
+    if (playbackActive || !camera.audioMuteSupported) {
+      return;
+    }
+
+    const succeeded = await this._actions.triggerCameraMuteAction(camera, nextMuted);
+    if (succeeded) {
+      return;
+    }
+
+    this._selectedCameraAudioMuted = previousMuted;
+    this.requestUpdate("_selectedCameraAudioMuted", nextMuted);
+    this.syncSelectedCameraViewportAudioState(previousMuted);
   }
 
   private isBusy(key: string): boolean {
@@ -1971,6 +2353,8 @@ export class DahuaBridgeSurveillancePanelCard
     switch (source) {
       case "hls":
         return "HLS";
+      case "webrtc":
+        return "WebRTC";
       case "mjpeg":
         return "MJPEG";
     }
@@ -1978,27 +2362,68 @@ export class DahuaBridgeSurveillancePanelCard
 
   private canPlaySelectedCameraAudio(
     camera: CameraViewModel,
+    selectedPlayback: SelectedPlaybackState | null,
     selectedProfileKey: string | null,
     selectedSource: CameraViewportSource | null,
   ): boolean {
-    if (selectedSource !== "hls") {
-      return false;
-    }
     if (!camera.audioCodec.trim()) {
       return false;
     }
-    return Boolean(
-      resolveSelectedCameraStreamProfile(camera, selectedProfileKey)?.localHlsUrl,
-    );
+
+    if (selectedPlayback) {
+      return this.canPlaySelectedPlaybackAudio(
+        selectedPlayback.session,
+        this._selectedCameraStreamProfile,
+        selectedSource,
+      );
+    }
+
+    if (selectedSource !== "hls" && selectedSource !== "webrtc") {
+      return false;
+    }
+    const profile = resolveSelectedCameraStreamProfile(camera, selectedProfileKey);
+    if (!profile) {
+      return false;
+    }
+    if (selectedSource === "webrtc") {
+      return Boolean(profile.localWebRtcUrl);
+    }
+    return Boolean(profile.localHlsUrl);
   }
 
   private hasPlayableVtoStream(vto: VtoViewModel): boolean {
     return (
       vto.streamAvailable &&
       vto.stream.profiles.some(
-        (profile) => Boolean(profile.localHlsUrl) || Boolean(profile.localMjpegUrl),
+        (profile) =>
+          Boolean(profile.localHlsUrl) ||
+          Boolean(profile.localWebRtcUrl) ||
+          Boolean(profile.localMjpegUrl),
       )
     );
+  }
+
+  private canPlaySelectedPlaybackAudio(
+    session: NvrPlaybackSessionModel,
+    selectedProfileKey: string | null,
+    selectedSource: CameraViewportSource | null,
+  ): boolean {
+    if (selectedSource !== "hls" && selectedSource !== "webrtc") {
+      return false;
+    }
+    return availablePlaybackViewportSources(session, selectedProfileKey).includes(selectedSource);
+  }
+
+  private syncSelectedCameraViewportAudioState(muted: boolean): void {
+    const video = this.renderRoot.querySelector<HTMLVideoElement>(
+      "video#remote-stream.remote-stream, video#remote-stream, video.remote-stream",
+    );
+    if (!video) {
+      return;
+    }
+    video.dataset.audioMuted = muted ? "true" : "false";
+    video.muted = muted;
+    void video.play().catch(() => undefined);
   }
 
   private hasAvailableVtoIntercom(vto: VtoViewModel): boolean {
@@ -2162,6 +2587,59 @@ export class DahuaBridgeSurveillancePanelCard
       "_recordingStateOverrides",
     );
   }
+}
+
+function todayDateInputValue(): string {
+  return toDateInputValue(new Date());
+}
+
+function normalizeArchiveDateInput(value: string): string {
+  const trimmed = value.trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
+    const parsed = new Date(`${trimmed}T00:00:00`);
+    if (!Number.isNaN(parsed.getTime()) && toDateInputValue(parsed) === trimmed) {
+      return trimmed;
+    }
+  }
+  return todayDateInputValue();
+}
+
+function dateRangeForArchiveDay(value: string): {
+  startTime: string;
+  endTime: string;
+} {
+  const normalized = normalizeArchiveDateInput(value);
+  const [year, month, day] = normalized.split("-").map((part) => Number.parseInt(part, 10));
+  const start = new Date(year, month - 1, day, 0, 0, 0, 0);
+  const end = new Date(year, month - 1, day + 1, 0, 0, 0, 0);
+  return {
+    startTime: start.toISOString(),
+    endTime: end.toISOString(),
+  };
+}
+
+function toDateInputValue(value: Date): string {
+  const year = value.getFullYear();
+  const month = String(value.getMonth() + 1).padStart(2, "0");
+  const day = String(value.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function pageCountForItems(totalItems: number, pageSize: number): number {
+  const safeSize = Math.max(1, Math.trunc(pageSize));
+  return Math.max(1, Math.ceil(Math.max(0, totalItems) / safeSize));
+}
+
+function boundedPageIndex(page: number, pageCount: number): number {
+  const safePage = Number.isFinite(page) ? Math.trunc(page) : 0;
+  return Math.min(Math.max(safePage, 0), Math.max(pageCount - 1, 0));
+}
+
+function slicePage<T>(items: readonly T[], page: number, pageSize: number): T[] {
+  const safeSize = Math.max(1, Math.trunc(pageSize));
+  const safePage = boundedPageIndex(page, pageCountForItems(items.length, safeSize));
+  const start = safePage * safeSize;
+  return items.slice(start, start + safeSize);
 }
 
 if (!customElements.get("dahuabridge-surveillance-panel")) {

@@ -10,6 +10,13 @@ Current repo status:
 - the workspace is built with TypeScript
 - output is written to `ha-cards/dist/`
 - the cards expect the DahuaBridge Home Assistant integration to have already created the underlying entities
+- the surveillance panel camera inspector now uses four right-sidebar tabs:
+  - `Events`
+  - `Recordings`
+  - `MP4`
+  - `Settings`
+- archive-backed camera views support local-day filtering, event-type filtering for event clips, pagination, playback launch, and export/download actions
+- bridge-owned MP4 clips can be browsed by day and stopped or downloaded from the card
 
 ## What The Card Layer Owns
 

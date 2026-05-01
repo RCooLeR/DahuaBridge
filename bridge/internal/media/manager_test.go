@@ -316,11 +316,14 @@ func TestBuildHLSArgs(t *testing.T) {
 	if !strings.Contains(joined, "-vf fps=5,scale=960:720") {
 		t.Fatalf("expected software filter chain, got %q", joined)
 	}
-	if !strings.Contains(joined, "-an") {
-		t.Fatalf("expected audio to be disabled in hls args, got %q", joined)
+	if !strings.Contains(joined, "-map 0:a:0?") {
+		t.Fatalf("expected optional audio mapping args, got %q", joined)
 	}
-	if strings.Contains(joined, "-map 0:a:0?") || strings.Contains(joined, "-c:a aac") {
-		t.Fatalf("did not expect audio transcoding args in hls path, got %q", joined)
+	if !strings.Contains(joined, "-c:a aac") || !strings.Contains(joined, "-ar 48000") {
+		t.Fatalf("expected aac audio transcode args in hls path, got %q", joined)
+	}
+	if strings.Contains(joined, "-an") {
+		t.Fatalf("did not expect audio to be disabled in hls args, got %q", joined)
 	}
 	if !strings.Contains(joined, "index.m3u8") {
 		t.Fatalf("expected playlist output arg, got %q", joined)

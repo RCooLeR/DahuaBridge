@@ -656,7 +656,7 @@ function buildCameraStreamViewModel(
     profiles: Object.entries(camera.media.profiles)
       .map(([key, profile]) => ({
         key,
-        name: profile.name,
+        name: streamProfileDisplayName(key, profile.name),
         streamUrl: rewriteBridgeUrl(profile.streamUrl, browserBridgeUrl),
         localMjpegUrl: rewriteBridgeUrl(profile.localMjpegUrl, browserBridgeUrl),
         localHlsUrl: rewriteBridgeUrl(profile.localHlsUrl, browserBridgeUrl),
@@ -670,8 +670,43 @@ function buildCameraStreamViewModel(
             : null,
         recommended: profile.recommended,
       }))
-      .sort((left, right) => Number(right.recommended) - Number(left.recommended) || left.name.localeCompare(right.name)),
+      .sort(
+        (left, right) =>
+          streamProfileSortRank(left.key) - streamProfileSortRank(right.key) ||
+          Number(right.recommended) - Number(left.recommended) ||
+          left.name.localeCompare(right.name),
+      ),
   };
+}
+
+function streamProfileDisplayName(key: string, fallback: string | null): string {
+  switch (key.trim().toLowerCase()) {
+    case "quality":
+      return "Quality (Main Stream)";
+    case "default":
+      return "Default (Main Stream)";
+    case "stable":
+      return "Stable (Substream)";
+    case "substream":
+      return "Substream (Native)";
+    default:
+      return fallback?.trim() || key.trim();
+  }
+}
+
+function streamProfileSortRank(key: string): number {
+  switch (key.trim().toLowerCase()) {
+    case "quality":
+      return 0;
+    case "default":
+      return 1;
+    case "stable":
+      return 2;
+    case "substream":
+      return 3;
+    default:
+      return 4;
+  }
 }
 
 function buildNvrViewModel(

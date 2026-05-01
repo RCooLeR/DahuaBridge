@@ -781,8 +781,24 @@ export const surveillancePanelBaseStyles = css`
     align-items: end;
   }
 
+  .archive-date-filter {
+    width: min(100%, 200px);
+  }
+
+  .archive-date-input {
+    color-scheme: dark;
+  }
+
   .archive-event-filter {
     width: min(100%, 240px);
+  }
+
+  .archive-pagination {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px;
+    margin-left: auto;
   }
 
   .archive-panel {
@@ -801,6 +817,33 @@ export const surveillancePanelBaseStyles = css`
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 10px;
     align-items: start;
+  }
+
+  .archive-panel .event-detail {
+    display: grid;
+    gap: 4px;
+    min-width: 0;
+  }
+
+  .archive-panel .event-detail-label {
+    font-size: 11px;
+    text-transform: uppercase;
+    color: var(--db-text-soft);
+    letter-spacing: 0;
+  }
+
+  .archive-panel .event-detail-value {
+    font-size: 13px;
+    font-weight: 600;
+    overflow-wrap: anywhere;
+  }
+
+  .archive-detail-wide {
+    grid-column: 1 / -1;
+  }
+
+  .archive-status-error {
+    color: #ffc7d1;
   }
 
   .archive-panel .event-card {
@@ -880,8 +923,8 @@ export const surveillancePanelBaseStyles = css`
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 72px;
-    height: 50px;
+    width: auto;
+    height: 60px;
     padding: 0;
     border: 0;
     background: transparent;
@@ -898,8 +941,6 @@ export const surveillancePanelBaseStyles = css`
     flex: 0 0 auto;
     width: 100%;
     height: 100%;
-    max-width: 72px;
-    max-height: 50px;
     object-fit: contain;
   }
 
