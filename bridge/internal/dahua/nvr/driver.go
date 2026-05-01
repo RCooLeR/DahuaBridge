@@ -1,9 +1,12 @@
 package nvr
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/url"
 	"path"
@@ -412,7 +415,7 @@ func (d *Driver) Probe(ctx context.Context) (*dahua.ProbeResult, error) {
 			Recording: recordingCapabilities,
 		})
 		state.Info["control_audio_authority"] = d.audioControlAuthority(ctx, channel.Index+1)
-		state.Info["control_audio_semantic"] = "stream_audio_enable"
+		state.Info["control_audio_semantic"] = "bridge_output_audio"
 		notes := make([]string, 0, 4)
 		if ptzErr != nil && auxCapabilities.Supported {
 			notes = append(notes, "ptz_capability_query_failed_aux_fallback_used")
@@ -570,10 +573,20 @@ func (d *Driver) FindRecordings(ctx context.Context, query dahua.NVRRecordingQue
 	eventCode := recordingEventCondition(query.EventCode)
 	if d.rpc != nil && eventCode != "*" {
 		result, err := d.findEventRecordingsViaLogRPC(ctx, query)
-		if err == nil {
+		if err == nil && len(result.Items) > 0 {
 			return result, nil
 		}
-		d.logger.Debug().Err(err).Int("channel", query.Channel).Str("event_code", eventCode).Msg("rpc event log recording search failed, falling back to media file search")
+		if err != nil {
+			d.logger.Debug().Err(err).Int("channel", query.Channel).Str("event_code", eventCode).Msg("rpc event log recording search failed, falling back to event/media file search")
+		}
+
+		result, err = d.findEventRecordings(ctx, query)
+		if err == nil && len(result.Items) > 0 {
+			return result, nil
+		}
+		if err != nil {
+			d.logger.Debug().Err(err).Int("channel", query.Channel).Str("event_code", eventCode).Msg("rpc event recording search failed, falling back to media file search")
+		}
 	}
 
 	if d.rpc != nil {
@@ -1533,19 +1546,179 @@ func (d *Driver) DownloadRecording(ctx context.Context, filePath string) (dahua.
 	if err != nil {
 		return dahua.NVRRecordingDownload{}, fmt.Errorf("download recording %q: %w", filePath, err)
 	}
+	return decodeRecordingDownloadResponse(resp.Body, resp.Header.Get("Content-Type"), resp.Header.Get("Content-Length"), path.Base(filePath))
+}
 
-	contentType := strings.TrimSpace(resp.Header.Get("Content-Type"))
+func decodeRecordingDownloadResponse(body io.ReadCloser, contentTypeHeader string, contentLengthHeader string, fileName string) (dahua.NVRRecordingDownload, error) {
+	if body == nil {
+		return dahua.NVRRecordingDownload{}, fmt.Errorf("recording response body is empty")
+	}
+
+	contentType := strings.TrimSpace(contentTypeHeader)
 	if contentType == "" {
 		contentType = "application/octet-stream"
 	}
-	contentLength, _ := strconv.ParseInt(strings.TrimSpace(resp.Header.Get("Content-Length")), 10, 64)
+	contentLength, _ := strconv.ParseInt(strings.TrimSpace(contentLengthHeader), 10, 64)
+
+	if !shouldDecodeInlineLoadFileResponse(contentType, contentLength) {
+		return dahua.NVRRecordingDownload{
+			Body:          body,
+			ContentType:   contentType,
+			FileName:      fileName,
+			ContentLength: contentLength,
+		}, nil
+	}
+
+	rawBody, err := io.ReadAll(body)
+	_ = body.Close()
+	if err != nil {
+		return dahua.NVRRecordingDownload{}, fmt.Errorf("read inline recording body: %w", err)
+	}
+
+	decodedBody, decodedType, err := decodeInlineLoadFileBody(rawBody, contentType)
+	if err != nil {
+		return dahua.NVRRecordingDownload{}, err
+	}
+	if decodedType != "" {
+		contentType = decodedType
+	}
 
 	return dahua.NVRRecordingDownload{
-		Body:          resp.Body,
+		Body:          io.NopCloser(bytes.NewReader(decodedBody)),
 		ContentType:   contentType,
-		FileName:      path.Base(filePath),
-		ContentLength: contentLength,
+		FileName:      fileName,
+		ContentLength: int64(len(decodedBody)),
 	}, nil
+}
+
+func shouldDecodeInlineLoadFileResponse(contentType string, contentLength int64) bool {
+	contentType = strings.ToLower(strings.TrimSpace(contentType))
+	switch {
+	case strings.Contains(contentType, "json"):
+		return true
+	case strings.HasPrefix(contentType, "text/"):
+		return true
+	case contentLength > 0 && contentLength <= 2*1024*1024:
+		return true
+	default:
+		return false
+	}
+}
+
+func decodeInlineLoadFileBody(body []byte, fallbackContentType string) ([]byte, string, error) {
+	trimmed := bytes.TrimSpace(body)
+	if len(trimmed) == 0 {
+		return nil, "", fmt.Errorf("inline recording body is empty")
+	}
+
+	if decoded, ok := tryDecodeBase64Payload(trimmed); ok {
+		return decoded, "", nil
+	}
+
+	var payload any
+	if err := json.Unmarshal(trimmed, &payload); err == nil {
+		if rpcErr := extractInlineLoadFileError(payload); rpcErr != nil {
+			return nil, "", rpcErr
+		}
+		encoded, contentType, ok := extractInlineLoadFilePayload(payload)
+		if !ok {
+			return nil, "", fmt.Errorf("inline recording response did not contain file payload")
+		}
+		decoded, ok := tryDecodeBase64Payload([]byte(encoded))
+		if !ok {
+			return nil, "", fmt.Errorf("inline recording response payload is not valid base64")
+		}
+		return decoded, firstNonEmpty(strings.TrimSpace(contentType), fallbackContentType), nil
+	}
+
+	return body, fallbackContentType, nil
+}
+
+func extractInlineLoadFileError(payload any) error {
+	valueMap, ok := payload.(map[string]any)
+	if !ok {
+		return nil
+	}
+	rawErr, ok := valueMap["error"].(map[string]any)
+	if !ok || len(rawErr) == 0 {
+		return nil
+	}
+	code, _ := numberFromAny(rawErr["code"])
+	message := firstNonEmpty(stringFromAny(rawErr["message"]), stringFromAny(rawErr["Message"]), "inline loadfile request failed")
+	return fmt.Errorf("rpc error code %d: %s", code, message)
+}
+
+func extractInlineLoadFilePayload(payload any) (string, string, bool) {
+	switch typed := payload.(type) {
+	case map[string]any:
+		for _, key := range []string{"body", "Body", "data", "Data", "content", "Content", "file", "File"} {
+			if encoded := stringFromAny(typed[key]); encoded != "" {
+				return encoded, extractInlineLoadFileContentType(typed), true
+			}
+		}
+		for _, key := range []string{"params", "Params", "result", "Result"} {
+			if encoded, contentType, ok := extractInlineLoadFilePayload(typed[key]); ok {
+				return encoded, contentType, true
+			}
+		}
+	case []any:
+		for _, item := range typed {
+			if encoded, contentType, ok := extractInlineLoadFilePayload(item); ok {
+				return encoded, contentType, true
+			}
+		}
+	}
+	return "", "", false
+}
+
+func extractInlineLoadFileContentType(payload map[string]any) string {
+	for _, key := range []string{"contentType", "ContentType", "mime", "Mime", "mimeType", "MimeType"} {
+		if value := stringFromAny(payload[key]); value != "" {
+			return value
+		}
+	}
+	for _, key := range []string{"params", "Params", "result", "Result"} {
+		nested, ok := payload[key].(map[string]any)
+		if !ok {
+			continue
+		}
+		if value := extractInlineLoadFileContentType(nested); value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func tryDecodeBase64Payload(payload []byte) ([]byte, bool) {
+	normalized := make([]byte, 0, len(payload))
+	for _, b := range payload {
+		switch b {
+		case '\r', '\n', '\t', ' ':
+			continue
+		case '+', '/', '=':
+			normalized = append(normalized, b)
+		default:
+			switch {
+			case b >= 'A' && b <= 'Z':
+				normalized = append(normalized, b)
+			case b >= 'a' && b <= 'z':
+				normalized = append(normalized, b)
+			case b >= '0' && b <= '9':
+				normalized = append(normalized, b)
+			default:
+				return nil, false
+			}
+		}
+	}
+	if len(normalized) == 0 || len(normalized)%4 != 0 {
+		return nil, false
+	}
+	decoded := make([]byte, base64.StdEncoding.DecodedLen(len(normalized)))
+	n, err := base64.StdEncoding.Decode(decoded, normalized)
+	if err != nil {
+		return nil, false
+	}
+	return decoded[:n], true
 }
 
 func (d *Driver) UpdateConfig(cfg config.DeviceConfig) error {

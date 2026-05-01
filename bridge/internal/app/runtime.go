@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -17,20 +18,23 @@ import (
 )
 
 type runtimeServices struct {
-	mu            sync.RWMutex
-	cfg           config.Config
-	probes        *store.ProbeStore
-	media         runtimeMediaReader
-	nvrSnapshots  map[string]dahua.SnapshotProvider
-	nvrDownloads  map[string]dahua.NVRRecordingDownloader
-	nvrRecordings map[string]dahua.NVRRecordingSearcher
-	playback      map[string]playbackSession
-	nvrConfigs    map[string]config.DeviceConfig
-	vtoSnapshots  map[string]dahua.SnapshotProvider
-	vtoConfigs    map[string]config.DeviceConfig
-	ipcSnapshots  map[string]dahua.SnapshotProvider
-	ipcConfigs    map[string]config.DeviceConfig
-	snapshotCache map[string]cachedSnapshot
+	mu              sync.RWMutex
+	cfg             config.Config
+	probes          *store.ProbeStore
+	media           runtimeMediaReader
+	nvrSnapshots    map[string]dahua.SnapshotProvider
+	nvrDownloads    map[string]dahua.NVRRecordingDownloader
+	nvrRecordings   map[string]dahua.NVRRecordingSearcher
+	playback        map[string]playbackSession
+	nvrConfigs      map[string]config.DeviceConfig
+	vtoSnapshots    map[string]dahua.SnapshotProvider
+	vtoConfigs      map[string]config.DeviceConfig
+	ipcSnapshots    map[string]dahua.SnapshotProvider
+	ipcConfigs      map[string]config.DeviceConfig
+	snapshotCache   map[string]cachedSnapshot
+	recordingCache  map[string]cachedRecordingSearch
+	snapshotFlight  map[string]*snapshotFlight
+	recordingFlight map[string]*recordingSearchFlight
 }
 
 type runtimeMediaReader interface {
@@ -46,23 +50,45 @@ type cachedSnapshot struct {
 	expiresAt   time.Time
 }
 
+type cachedRecordingSearch struct {
+	result    dahua.NVRRecordingSearchResult
+	expiresAt time.Time
+}
+
+type snapshotFlight struct {
+	body        []byte
+	contentType string
+	err         error
+	done        chan struct{}
+}
+
+type recordingSearchFlight struct {
+	result dahua.NVRRecordingSearchResult
+	err    error
+	done   chan struct{}
+}
+
 const snapshotCacheTTL = 2 * time.Second
+const recordingSearchCacheTTL = 5 * time.Second
 const bridgeRecordingTimeLayout = "2006-01-02 15:04:05"
 
 func newRuntimeServices(cfg config.Config, probes *store.ProbeStore) *runtimeServices {
 	return &runtimeServices{
-		cfg:           cfg,
-		probes:        probes,
-		nvrSnapshots:  make(map[string]dahua.SnapshotProvider),
-		nvrDownloads:  make(map[string]dahua.NVRRecordingDownloader),
-		nvrRecordings: make(map[string]dahua.NVRRecordingSearcher),
-		playback:      make(map[string]playbackSession),
-		nvrConfigs:    make(map[string]config.DeviceConfig),
-		vtoSnapshots:  make(map[string]dahua.SnapshotProvider),
-		vtoConfigs:    make(map[string]config.DeviceConfig),
-		ipcSnapshots:  make(map[string]dahua.SnapshotProvider),
-		ipcConfigs:    make(map[string]config.DeviceConfig),
-		snapshotCache: make(map[string]cachedSnapshot),
+		cfg:             cfg,
+		probes:          probes,
+		nvrSnapshots:    make(map[string]dahua.SnapshotProvider),
+		nvrDownloads:    make(map[string]dahua.NVRRecordingDownloader),
+		nvrRecordings:   make(map[string]dahua.NVRRecordingSearcher),
+		playback:        make(map[string]playbackSession),
+		nvrConfigs:      make(map[string]config.DeviceConfig),
+		vtoSnapshots:    make(map[string]dahua.SnapshotProvider),
+		vtoConfigs:      make(map[string]config.DeviceConfig),
+		ipcSnapshots:    make(map[string]dahua.SnapshotProvider),
+		ipcConfigs:      make(map[string]config.DeviceConfig),
+		snapshotCache:   make(map[string]cachedSnapshot),
+		recordingCache:  make(map[string]cachedRecordingSearch),
+		snapshotFlight:  make(map[string]*snapshotFlight),
+		recordingFlight: make(map[string]*recordingSearchFlight),
 	}
 }
 
@@ -139,39 +165,65 @@ func (r *runtimeServices) NVRSnapshot(ctx context.Context, deviceID string, chan
 	if body, contentType, ok := r.cachedSnapshot(cacheKey); ok {
 		return body, contentType, nil
 	}
+	flight, owner := r.beginSnapshotFlight(cacheKey)
+	if !owner {
+		return waitForSnapshotFlight(ctx, flight)
+	}
 
 	r.mu.RLock()
 	provider, ok := r.nvrSnapshots[deviceID]
 	mediaReader := r.media
 	r.mu.RUnlock()
+	var (
+		body        []byte
+		contentType string
+		err         error
+	)
 	if mediaReader != nil {
-		if body, contentType, err := r.captureSnapshotFromStream(ctx, mediaReader, deviceID, channel, dahua.DeviceKindNVRChannel); err == nil {
+		if body, contentType, err = r.captureSnapshotFromStream(ctx, mediaReader, deviceID, channel, dahua.DeviceKindNVRChannel); err == nil {
 			r.storeSnapshot(cacheKey, body, contentType)
+			r.finishSnapshotFlight(cacheKey, flight, body, contentType, nil)
 			return body, contentType, nil
 		}
 	}
 	if !ok {
-		return nil, "", fmt.Errorf("snapshot provider not found for device %q", deviceID)
+		err = fmt.Errorf("snapshot provider not found for device %q", deviceID)
+		r.finishSnapshotFlight(cacheKey, flight, nil, "", err)
+		return nil, "", err
 	}
 
-	body, contentType, err := provider.Snapshot(ctx, channel)
+	body, contentType, err = provider.Snapshot(ctx, channel)
 	if err != nil {
+		r.finishSnapshotFlight(cacheKey, flight, nil, "", err)
 		return nil, "", err
 	}
 	r.storeSnapshot(cacheKey, body, contentType)
+	r.finishSnapshotFlight(cacheKey, flight, body, contentType, nil)
 	return body, contentType, nil
 }
 
 func (r *runtimeServices) NVRRecordings(ctx context.Context, deviceID string, query dahua.NVRRecordingQuery) (dahua.NVRRecordingSearchResult, error) {
+	cacheKey := recordingSearchCacheKey(deviceID, query)
+	if result, ok := r.cachedRecordingSearch(cacheKey); ok {
+		return result, nil
+	}
+	flight, owner := r.beginRecordingSearchFlight(cacheKey)
+	if !owner {
+		return waitForRecordingSearchFlight(ctx, flight)
+	}
+
 	r.mu.RLock()
 	searcher, ok := r.nvrRecordings[deviceID]
 	r.mu.RUnlock()
 	if !ok {
-		return dahua.NVRRecordingSearchResult{}, fmt.Errorf("%w: %s", dahua.ErrDeviceNotFound, deviceID)
+		err := fmt.Errorf("%w: %s", dahua.ErrDeviceNotFound, deviceID)
+		r.finishRecordingSearchFlight(cacheKey, flight, dahua.NVRRecordingSearchResult{}, err)
+		return dahua.NVRRecordingSearchResult{}, err
 	}
 
 	result, err := searcher.FindRecordings(ctx, query)
 	if err != nil {
+		r.finishRecordingSearchFlight(cacheKey, flight, dahua.NVRRecordingSearchResult{}, err)
 		return dahua.NVRRecordingSearchResult{}, err
 	}
 	if result.DeviceID == "" {
@@ -180,6 +232,8 @@ func (r *runtimeServices) NVRRecordings(ctx context.Context, deviceID string, qu
 	if result.Items == nil {
 		result.Items = []dahua.NVRRecording{}
 	}
+	r.storeRecordingSearch(cacheKey, result)
+	r.finishRecordingSearchFlight(cacheKey, flight, result, nil)
 	return result, nil
 }
 
@@ -207,26 +261,40 @@ func (r *runtimeServices) VTOSnapshot(ctx context.Context, deviceID string) ([]b
 	if body, contentType, ok := r.cachedSnapshot(cacheKey); ok {
 		return body, contentType, nil
 	}
+	flight, owner := r.beginSnapshotFlight(cacheKey)
+	if !owner {
+		return waitForSnapshotFlight(ctx, flight)
+	}
 
 	r.mu.RLock()
 	provider, ok := r.vtoSnapshots[deviceID]
 	mediaReader := r.media
 	r.mu.RUnlock()
+	var (
+		body        []byte
+		contentType string
+		err         error
+	)
 	if mediaReader != nil {
-		if body, contentType, err := r.captureSnapshotFromStream(ctx, mediaReader, deviceID, 1, dahua.DeviceKindVTO); err == nil {
+		if body, contentType, err = r.captureSnapshotFromStream(ctx, mediaReader, deviceID, 1, dahua.DeviceKindVTO); err == nil {
 			r.storeSnapshot(cacheKey, body, contentType)
+			r.finishSnapshotFlight(cacheKey, flight, body, contentType, nil)
 			return body, contentType, nil
 		}
 	}
 	if !ok {
-		return nil, "", fmt.Errorf("snapshot provider not found for vto %q", deviceID)
+		err = fmt.Errorf("snapshot provider not found for vto %q", deviceID)
+		r.finishSnapshotFlight(cacheKey, flight, nil, "", err)
+		return nil, "", err
 	}
 
-	body, contentType, err := provider.Snapshot(ctx, 0)
+	body, contentType, err = provider.Snapshot(ctx, 0)
 	if err != nil {
+		r.finishSnapshotFlight(cacheKey, flight, nil, "", err)
 		return nil, "", err
 	}
 	r.storeSnapshot(cacheKey, body, contentType)
+	r.finishSnapshotFlight(cacheKey, flight, body, contentType, nil)
 	return body, contentType, nil
 }
 
@@ -235,26 +303,40 @@ func (r *runtimeServices) IPCSnapshot(ctx context.Context, deviceID string) ([]b
 	if body, contentType, ok := r.cachedSnapshot(cacheKey); ok {
 		return body, contentType, nil
 	}
+	flight, owner := r.beginSnapshotFlight(cacheKey)
+	if !owner {
+		return waitForSnapshotFlight(ctx, flight)
+	}
 
 	r.mu.RLock()
 	provider, ok := r.ipcSnapshots[deviceID]
 	mediaReader := r.media
 	r.mu.RUnlock()
+	var (
+		body        []byte
+		contentType string
+		err         error
+	)
 	if mediaReader != nil {
-		if body, contentType, err := r.captureSnapshotFromStream(ctx, mediaReader, deviceID, 1, dahua.DeviceKindIPC); err == nil {
+		if body, contentType, err = r.captureSnapshotFromStream(ctx, mediaReader, deviceID, 1, dahua.DeviceKindIPC); err == nil {
 			r.storeSnapshot(cacheKey, body, contentType)
+			r.finishSnapshotFlight(cacheKey, flight, body, contentType, nil)
 			return body, contentType, nil
 		}
 	}
 	if !ok {
-		return nil, "", fmt.Errorf("snapshot provider not found for ipc %q", deviceID)
+		err = fmt.Errorf("snapshot provider not found for ipc %q", deviceID)
+		r.finishSnapshotFlight(cacheKey, flight, nil, "", err)
+		return nil, "", err
 	}
 
-	body, contentType, err := provider.Snapshot(ctx, 1)
+	body, contentType, err = provider.Snapshot(ctx, 1)
 	if err != nil {
+		r.finishSnapshotFlight(cacheKey, flight, nil, "", err)
 		return nil, "", err
 	}
 	r.storeSnapshot(cacheKey, body, contentType)
+	r.finishSnapshotFlight(cacheKey, flight, body, contentType, nil)
 	return body, contentType, nil
 }
 
@@ -642,6 +724,117 @@ func (r *runtimeServices) storeSnapshot(cacheKey string, body []byte, contentTyp
 		body:        append([]byte(nil), body...),
 		contentType: contentType,
 		expiresAt:   time.Now().Add(snapshotCacheTTL),
+	}
+}
+
+func recordingSearchCacheKey(deviceID string, query dahua.NVRRecordingQuery) string {
+	return strings.Join([]string{
+		strings.TrimSpace(deviceID),
+		strconv.Itoa(query.Channel),
+		query.StartTime.UTC().Format(time.RFC3339Nano),
+		query.EndTime.UTC().Format(time.RFC3339Nano),
+		strconv.Itoa(query.Limit),
+		strings.TrimSpace(query.EventCode),
+		strconv.FormatBool(query.EventOnly),
+	}, "|")
+}
+
+func cloneRecordingSearchResult(result dahua.NVRRecordingSearchResult) dahua.NVRRecordingSearchResult {
+	cloned := result
+	if result.Items != nil {
+		cloned.Items = append([]dahua.NVRRecording(nil), result.Items...)
+	}
+	return cloned
+}
+
+func (r *runtimeServices) cachedRecordingSearch(cacheKey string) (dahua.NVRRecordingSearchResult, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	entry, ok := r.recordingCache[cacheKey]
+	if !ok || time.Now().After(entry.expiresAt) {
+		delete(r.recordingCache, cacheKey)
+		return dahua.NVRRecordingSearchResult{}, false
+	}
+	return cloneRecordingSearchResult(entry.result), true
+}
+
+func (r *runtimeServices) storeRecordingSearch(cacheKey string, result dahua.NVRRecordingSearchResult) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	r.recordingCache[cacheKey] = cachedRecordingSearch{
+		result:    cloneRecordingSearchResult(result),
+		expiresAt: time.Now().Add(recordingSearchCacheTTL),
+	}
+}
+
+func (r *runtimeServices) beginSnapshotFlight(cacheKey string) (*snapshotFlight, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if flight, ok := r.snapshotFlight[cacheKey]; ok {
+		return flight, false
+	}
+	flight := &snapshotFlight{done: make(chan struct{})}
+	r.snapshotFlight[cacheKey] = flight
+	return flight, true
+}
+
+func (r *runtimeServices) finishSnapshotFlight(cacheKey string, flight *snapshotFlight, body []byte, contentType string, err error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	flight.body = append([]byte(nil), body...)
+	flight.contentType = contentType
+	flight.err = err
+	delete(r.snapshotFlight, cacheKey)
+	close(flight.done)
+}
+
+func waitForSnapshotFlight(ctx context.Context, flight *snapshotFlight) ([]byte, string, error) {
+	select {
+	case <-ctx.Done():
+		return nil, "", ctx.Err()
+	case <-flight.done:
+		if flight.err != nil {
+			return nil, "", flight.err
+		}
+		return append([]byte(nil), flight.body...), flight.contentType, nil
+	}
+}
+
+func (r *runtimeServices) beginRecordingSearchFlight(cacheKey string) (*recordingSearchFlight, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if flight, ok := r.recordingFlight[cacheKey]; ok {
+		return flight, false
+	}
+	flight := &recordingSearchFlight{done: make(chan struct{})}
+	r.recordingFlight[cacheKey] = flight
+	return flight, true
+}
+
+func (r *runtimeServices) finishRecordingSearchFlight(cacheKey string, flight *recordingSearchFlight, result dahua.NVRRecordingSearchResult, err error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	flight.result = cloneRecordingSearchResult(result)
+	flight.err = err
+	delete(r.recordingFlight, cacheKey)
+	close(flight.done)
+}
+
+func waitForRecordingSearchFlight(ctx context.Context, flight *recordingSearchFlight) (dahua.NVRRecordingSearchResult, error) {
+	select {
+	case <-ctx.Done():
+		return dahua.NVRRecordingSearchResult{}, ctx.Err()
+	case <-flight.done:
+		if flight.err != nil {
+			return dahua.NVRRecordingSearchResult{}, flight.err
+		}
+		return cloneRecordingSearchResult(flight.result), nil
 	}
 }
 

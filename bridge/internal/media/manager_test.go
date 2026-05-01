@@ -78,7 +78,7 @@ func TestExtractFramesPublishesJPEG(t *testing.T) {
 	}
 }
 
-func TestReadMJPEGTreatsEOFAsUnexpected(t *testing.T) {
+func TestReadMJPEGAllowsCleanEOFWithCompleteFrame(t *testing.T) {
 	manager := New(config.MediaConfig{
 		Enabled:        true,
 		StartTimeout:   time.Second,
@@ -109,7 +109,43 @@ func TestReadMJPEGTreatsEOFAsUnexpected(t *testing.T) {
 		startErr:       make(chan error, 1),
 	}
 
-	err := w.readMJPEG(bytes.NewReader([]byte{0xFF, 0xD8, 0x01, 0x02, 0xFF, 0xD9}))
+	if err := w.readMJPEG(bytes.NewReader([]byte{0xFF, 0xD8, 0x01, 0x02, 0xFF, 0xD9})); err != nil {
+		t.Fatalf("expected clean eof after complete frame, got %v", err)
+	}
+}
+
+func TestReadMJPEGTreatsIncompleteFrameEOFAsUnexpected(t *testing.T) {
+	manager := New(config.MediaConfig{
+		Enabled:        true,
+		StartTimeout:   time.Second,
+		IdleTimeout:    time.Second,
+		MaxWorkers:     2,
+		FrameRate:      5,
+		JPEGQuality:    7,
+		Threads:        1,
+		ScaleWidth:     960,
+		ReadBufferSize: 1024,
+		HLSSegmentTime: 2 * time.Second,
+		HLSListSize:    6,
+	}, testResolver{}, zerolog.Nop(), nil)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	w := &worker{
+		key:            "test:stable",
+		streamID:       "test",
+		profileName:    "stable",
+		parent:         manager,
+		ctx:            ctx,
+		cancel:         cancel,
+		subscribers:    map[chan []byte]struct{}{},
+		idleGeneration: 1,
+		ready:          make(chan struct{}),
+		startErr:       make(chan error, 1),
+	}
+
+	err := w.readMJPEG(bytes.NewReader([]byte{0xFF, 0xD8, 0x01, 0x02}))
 	if !errors.Is(err, io.ErrUnexpectedEOF) {
 		t.Fatalf("expected io.ErrUnexpectedEOF, got %v", err)
 	}
@@ -388,7 +424,7 @@ func TestBuildHLSArgs(t *testing.T) {
 		startErr:     make(chan error, 1),
 	}
 
-	args := w.buildFFmpegArgs(ffmpegStartAttempt{useHWAccel: true, inputPreset: manager.cfg.InputPreset})
+	args := w.buildFFmpegArgs(ffmpegStartAttempt{useHWAccel: true, inputPreset: manager.cfg.InputPreset}, true)
 	joined := strings.Join(args, " ")
 	if !strings.Contains(joined, "-f hls") {
 		t.Fatalf("expected hls output args, got %q", joined)
@@ -446,7 +482,7 @@ func TestBuildPlaybackHLSArgsKeepsSegmentsForPlayerFetches(t *testing.T) {
 		profileName: "stable",
 		profile: streams.Profile{
 			Name:      "stable",
-			StreamURL: "rtsp://example.local/playback",
+			StreamURL: "rtsp://example.local/playback?starttime=2026_05_01_02_30_10&endtime=2026_05_01_02_30_20",
 			FrameRate: 5,
 		},
 		parent:       manager,
@@ -456,10 +492,13 @@ func TestBuildPlaybackHLSArgsKeepsSegmentsForPlayerFetches(t *testing.T) {
 		startErr:     make(chan error, 1),
 	}
 
-	args := w.buildFFmpegArgs(ffmpegStartAttempt{useHWAccel: false, inputPreset: manager.cfg.InputPreset})
+	args := w.buildFFmpegArgs(ffmpegStartAttempt{useHWAccel: false, inputPreset: manager.cfg.InputPreset}, true)
 	joined := strings.Join(args, " ")
 	if !strings.Contains(joined, "-hls_list_size 0") {
 		t.Fatalf("expected playback hls to keep a complete playlist, got %q", joined)
+	}
+	if !strings.Contains(joined, "-t 10") {
+		t.Fatalf("expected playback hls to stop at requested duration, got %q", joined)
 	}
 	if strings.Contains(joined, "delete_segments") || strings.Contains(joined, "omit_endlist") {
 		t.Fatalf("expected playback hls to keep segments until worker cleanup, got %q", joined)
@@ -511,7 +550,7 @@ func TestBuildHLSArgsWithoutHWAccel(t *testing.T) {
 		startErr:     make(chan error, 1),
 	}
 
-	args := w.buildFFmpegArgs(ffmpegStartAttempt{useHWAccel: false, inputPreset: manager.cfg.InputPreset})
+	args := w.buildFFmpegArgs(ffmpegStartAttempt{useHWAccel: false, inputPreset: manager.cfg.InputPreset}, true)
 	joined := strings.Join(args, " ")
 	if strings.Contains(joined, "-hwaccel") {
 		t.Fatalf("expected hwaccel args to be omitted, got %q", joined)
@@ -557,7 +596,7 @@ func TestBuildHLSArgsWithQSVEncoder(t *testing.T) {
 		startErr:     make(chan error, 1),
 	}
 
-	args := w.buildFFmpegArgs(ffmpegStartAttempt{useHWAccel: true, inputPreset: manager.cfg.InputPreset})
+	args := w.buildFFmpegArgs(ffmpegStartAttempt{useHWAccel: true, inputPreset: manager.cfg.InputPreset}, true)
 	joined := strings.Join(args, " ")
 	if !strings.Contains(joined, "-c:v h264_qsv") {
 		t.Fatalf("expected qsv encoder args, got %q", joined)
@@ -672,6 +711,16 @@ func TestBuildWebRTCArgsWithoutAudio(t *testing.T) {
 	}
 	if strings.Contains(joined, "-map 0:a:0?") || strings.Contains(joined, "-c:a libopus") {
 		t.Fatalf("did not expect audio mapping or opus encoding args, got %q", joined)
+	}
+}
+
+func TestPlaybackDurationFromStreamURL(t *testing.T) {
+	duration, ok := playbackDurationFromStreamURL("rtsp://example.local/playback?starttime=2026_05_01_02_30_10&endtime=2026_05_01_02_30_20")
+	if !ok {
+		t.Fatal("expected playback duration")
+	}
+	if duration != 10*time.Second {
+		t.Fatalf("unexpected playback duration %v", duration)
 	}
 }
 

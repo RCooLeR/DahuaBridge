@@ -122,17 +122,24 @@ func (s *webrtcSession) start(ctx context.Context, offer WebRTCSessionDescriptio
 		return WebRTCSessionDescription{}, fmt.Errorf("open local rtp socket: %w", err)
 	}
 	videoPort := udpPort(videoConn.LocalAddr())
-	audioConn, err := listenLocalRTP()
-	if err != nil {
-		_ = videoConn.Close()
-		return WebRTCSessionDescription{}, fmt.Errorf("open local audio rtp socket: %w", err)
+	includeAudio := s.parent.shouldIncludeSourceAudio(s.profile, s.logger)
+	var audioConn *net.UDPConn
+	audioPort := 0
+	if includeAudio {
+		audioConn, err = listenLocalRTP()
+		if err != nil {
+			_ = videoConn.Close()
+			return WebRTCSessionDescription{}, fmt.Errorf("open local audio rtp socket: %w", err)
+		}
+		audioPort = udpPort(audioConn.LocalAddr())
 	}
-	audioPort := udpPort(audioConn.LocalAddr())
 
-	peerConnection, tracks, err := newPeerConnection(s.parent.WebRTCICEServers())
+	peerConnection, tracks, err := newPeerConnection(s.parent.WebRTCICEServers(), includeAudio)
 	if err != nil {
 		_ = videoConn.Close()
-		_ = audioConn.Close()
+		if audioConn != nil {
+			_ = audioConn.Close()
+		}
 		return WebRTCSessionDescription{}, err
 	}
 
@@ -166,7 +173,9 @@ func (s *webrtcSession) start(ctx context.Context, offer WebRTCSessionDescriptio
 	if err := peerConnection.SetRemoteDescription(remoteDescription); err != nil {
 		_ = peerConnection.Close()
 		_ = videoConn.Close()
-		_ = audioConn.Close()
+		if audioConn != nil {
+			_ = audioConn.Close()
+		}
 		return WebRTCSessionDescription{}, fmt.Errorf("set remote description: %w", err)
 	}
 
@@ -174,13 +183,17 @@ func (s *webrtcSession) start(ctx context.Context, offer WebRTCSessionDescriptio
 	if err != nil {
 		_ = peerConnection.Close()
 		_ = videoConn.Close()
-		_ = audioConn.Close()
+		if audioConn != nil {
+			_ = audioConn.Close()
+		}
 		return WebRTCSessionDescription{}, fmt.Errorf("create answer: %w", err)
 	}
 	if err := peerConnection.SetLocalDescription(answer); err != nil {
 		_ = peerConnection.Close()
 		_ = videoConn.Close()
-		_ = audioConn.Close()
+		if audioConn != nil {
+			_ = audioConn.Close()
+		}
 		return WebRTCSessionDescription{}, fmt.Errorf("set local description: %w", err)
 	}
 
@@ -188,7 +201,9 @@ func (s *webrtcSession) start(ctx context.Context, offer WebRTCSessionDescriptio
 	case <-ctx.Done():
 		_ = peerConnection.Close()
 		_ = videoConn.Close()
-		_ = audioConn.Close()
+		if audioConn != nil {
+			_ = audioConn.Close()
+		}
 		return WebRTCSessionDescription{}, ctx.Err()
 	case <-gatherComplete:
 	}
@@ -197,12 +212,16 @@ func (s *webrtcSession) start(ctx context.Context, offer WebRTCSessionDescriptio
 		go drainRTCP(s.ctx, sender)
 	}
 	go s.forwardRTP(videoConn, tracks.video)
-	go s.forwardRTP(audioConn, tracks.audio)
-	cmd, err := s.startFFmpeg(videoPort, audioPort, videoConn, audioConn)
+	if audioConn != nil && tracks.audio != nil {
+		go s.forwardRTP(audioConn, tracks.audio)
+	}
+	cmd, err := s.startFFmpeg(videoPort, audioPort, includeAudio, videoConn, audioConn)
 	if err != nil {
 		_ = peerConnection.Close()
 		_ = videoConn.Close()
-		_ = audioConn.Close()
+		if audioConn != nil {
+			_ = audioConn.Close()
+		}
 		return WebRTCSessionDescription{}, err
 	}
 
@@ -229,7 +248,7 @@ type webrtcTracks struct {
 	senders []*webrtc.RTPSender
 }
 
-func newPeerConnection(iceServers []WebRTCICEServer) (*webrtc.PeerConnection, webrtcTracks, error) {
+func newPeerConnection(iceServers []WebRTCICEServer, includeAudio bool) (*webrtc.PeerConnection, webrtcTracks, error) {
 	mediaEngine := &webrtc.MediaEngine{}
 	if err := mediaEngine.RegisterDefaultCodecs(); err != nil {
 		return nil, webrtcTracks{}, fmt.Errorf("register webrtc codecs: %w", err)
@@ -259,30 +278,38 @@ func newPeerConnection(iceServers []WebRTCICEServer) (*webrtc.PeerConnection, we
 		return nil, webrtcTracks{}, fmt.Errorf("add video track: %w", err)
 	}
 
-	audioTrack, err := webrtc.NewTrackLocalStaticRTP(webrtc.RTPCodecCapability{
-		MimeType:  webrtc.MimeTypeOpus,
-		ClockRate: 48000,
-		Channels:  2,
-	}, "audio", "dahuabridge")
-	if err != nil {
-		_ = peerConnection.Close()
-		return nil, webrtcTracks{}, fmt.Errorf("create audio track: %w", err)
-	}
+	var audioTrack *webrtc.TrackLocalStaticRTP
+	if includeAudio {
+		audioTrack, err = webrtc.NewTrackLocalStaticRTP(webrtc.RTPCodecCapability{
+			MimeType:  webrtc.MimeTypeOpus,
+			ClockRate: 48000,
+			Channels:  2,
+		}, "audio", "dahuabridge")
+		if err != nil {
+			_ = peerConnection.Close()
+			return nil, webrtcTracks{}, fmt.Errorf("create audio track: %w", err)
+		}
 
-	audioSender, err := peerConnection.AddTrack(audioTrack)
-	if err != nil {
-		_ = peerConnection.Close()
-		return nil, webrtcTracks{}, fmt.Errorf("add audio track: %w", err)
+		audioSender, err := peerConnection.AddTrack(audioTrack)
+		if err != nil {
+			_ = peerConnection.Close()
+			return nil, webrtcTracks{}, fmt.Errorf("add audio track: %w", err)
+		}
+		return peerConnection, webrtcTracks{
+			video:   videoTrack,
+			audio:   audioTrack,
+			senders: []*webrtc.RTPSender{videoSender, audioSender},
+		}, nil
 	}
 
 	return peerConnection, webrtcTracks{
 		video:   videoTrack,
 		audio:   audioTrack,
-		senders: []*webrtc.RTPSender{videoSender, audioSender},
+		senders: []*webrtc.RTPSender{videoSender},
 	}, nil
 }
 
-func (s *webrtcSession) startFFmpeg(videoPort int, audioPort int, conns ...*net.UDPConn) (*exec.Cmd, error) {
+func (s *webrtcSession) startFFmpeg(videoPort int, audioPort int, includeAudio bool, conns ...*net.UDPConn) (*exec.Cmd, error) {
 	type webrtcFFmpegAttempt struct {
 		ffmpegStartAttempt
 		includeAudio bool
@@ -293,7 +320,7 @@ func (s *webrtcSession) startFFmpeg(videoPort int, audioPort int, conns ...*net.
 	for _, attempt := range baseAttempts {
 		attempts = append(attempts, webrtcFFmpegAttempt{
 			ffmpegStartAttempt: attempt,
-			includeAudio:       true,
+			includeAudio:       includeAudio,
 		})
 	}
 	probeWindow := 1500 * time.Millisecond
@@ -338,13 +365,9 @@ func (s *webrtcSession) startFFmpeg(videoPort int, audioPort int, conns ...*net.
 		}
 
 		waitDone := make(chan error, 1)
-		stderrDone := make(chan string, 1)
+		stderrDone := drainFFmpegStderr(stderr, 64*1024)
 		go func() {
 			waitDone <- cmd.Wait()
-		}()
-		go func() {
-			body, _ := io.ReadAll(io.LimitReader(stderr, 64*1024))
-			stderrDone <- strings.TrimSpace(string(body))
 		}()
 
 		timer := time.NewTimer(probeWindow)
@@ -426,6 +449,9 @@ func (s *webrtcSession) buildFFmpegArgs(videoPort int, audioPort int, attempt ff
 	}
 	args = appendInputHWAccelArgs(args, s.parent.cfg, attempt.useHWAccel)
 	args = append(args, buildRTSPInputArgs(s.profile, attempt.inputPreset)...)
+	if playbackDuration, ok := playbackDurationFromStreamURL(s.profile.StreamURL); ok {
+		args = append(args, "-t", formatFFmpegSeconds(playbackDuration))
+	}
 	if s.parent.cfg.Threads > 0 {
 		args = append(args, "-threads", strconv.Itoa(s.parent.cfg.Threads))
 	}

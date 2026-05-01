@@ -1,7 +1,6 @@
 package streams
 
 import (
-	"fmt"
 	"net"
 	"net/url"
 	"sort"
@@ -912,17 +911,6 @@ func buildNVRChannelFeatures(publicBaseURL string, deviceID string, channel int,
 			})
 		}
 	}
-	if controls.Audio != nil && controls.Audio.Mute {
-		features = append(features, FeatureSummary{
-			Key:       "mute",
-			Label:     "Mute Audio",
-			Group:     "audio",
-			Kind:      "toggle",
-			URL:       buildNVRChannelAudioMuteURL(publicBaseURL, deviceID, channel),
-			Supported: true,
-			Active:    boolPtr(controls.Audio.Muted),
-		})
-	}
 	return features
 }
 
@@ -1257,14 +1245,6 @@ func buildNVRChannelAuxURL(publicBaseURL string, deviceID string, channel int) s
 		return path
 	}
 	return publicBaseURL + path
-}
-
-func buildNVRChannelAudioMuteURL(publicBaseURL string, deviceID string, channel int) string {
-	base := strings.TrimRight(strings.TrimSpace(publicBaseURL), "/")
-	if base == "" || strings.TrimSpace(deviceID) == "" || channel <= 0 {
-		return ""
-	}
-	return fmt.Sprintf("%s/api/v1/nvr/%s/channels/%d/audio/mute", base, url.PathEscape(deviceID), channel)
 }
 
 func buildNVRChannelRecordingURL(publicBaseURL string, deviceID string, channel int) string {

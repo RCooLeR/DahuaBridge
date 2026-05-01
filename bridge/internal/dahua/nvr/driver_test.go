@@ -3,8 +3,10 @@ package nvr
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -236,6 +238,87 @@ func TestParseRPCRecordingSearchResultSupportsInfos(t *testing.T) {
 	}
 	if got.Items[0].FilePath == "" || got.Items[0].StartTime == "" {
 		t.Fatalf("unexpected item %+v", got.Items[0])
+	}
+}
+
+func TestDecodeRecordingDownloadResponsePassesThroughBinary(t *testing.T) {
+	download, err := decodeRecordingDownloadResponse(
+		io.NopCloser(strings.NewReader("binary-dav")),
+		"application/octet-stream",
+		"10",
+		"recording.dav",
+	)
+	if err != nil {
+		t.Fatalf("decodeRecordingDownloadResponse returned error: %v", err)
+	}
+	defer download.Body.Close()
+
+	body, err := io.ReadAll(download.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	if string(body) != "binary-dav" {
+		t.Fatalf("unexpected body %q", string(body))
+	}
+	if download.ContentType != "application/octet-stream" || download.ContentLength != 10 {
+		t.Fatalf("unexpected download metadata %+v", download)
+	}
+}
+
+func TestDecodeRecordingDownloadResponseDecodesInlineJSONBase64(t *testing.T) {
+	download, err := decodeRecordingDownloadResponse(
+		io.NopCloser(strings.NewReader(`{"result":true,"params":{"body":"QUJDRA==","contentType":"video/mp4"}}`)),
+		"application/json",
+		"70",
+		"recording.mp4",
+	)
+	if err != nil {
+		t.Fatalf("decodeRecordingDownloadResponse returned error: %v", err)
+	}
+	defer download.Body.Close()
+
+	body, err := io.ReadAll(download.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	if string(body) != "ABCD" {
+		t.Fatalf("unexpected decoded body %q", string(body))
+	}
+	if download.ContentType != "video/mp4" || download.ContentLength != 4 {
+		t.Fatalf("unexpected decoded metadata %+v", download)
+	}
+}
+
+func TestDecodeRecordingDownloadResponseDecodesInlineBase64Text(t *testing.T) {
+	download, err := decodeRecordingDownloadResponse(
+		io.NopCloser(strings.NewReader("QUJDRA==")),
+		"text/plain",
+		"8",
+		"recording.dav",
+	)
+	if err != nil {
+		t.Fatalf("decodeRecordingDownloadResponse returned error: %v", err)
+	}
+	defer download.Body.Close()
+
+	body, err := io.ReadAll(download.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	if string(body) != "ABCD" {
+		t.Fatalf("unexpected decoded body %q", string(body))
+	}
+}
+
+func TestDecodeRecordingDownloadResponseRejectsInlineRPCError(t *testing.T) {
+	_, err := decodeRecordingDownloadResponse(
+		io.NopCloser(strings.NewReader(`{"error":{"code":404,"message":"not found"}}`)),
+		"application/json",
+		"44",
+		"recording.dav",
+	)
+	if err == nil {
+		t.Fatal("expected inline RPC error")
 	}
 }
 
@@ -518,6 +601,85 @@ func TestDriverFindRecordingsEventOnlyUsesSMDFinder(t *testing.T) {
 		t.Fatalf("expected smd event flags, got %+v", item.Flags)
 	}
 	if len(rpcCalls) != 2 || rpcCalls[0] != "SmdDataFinder.startFind" || rpcCalls[1] != "SmdDataFinder.doFind" {
+		t.Fatalf("unexpected rpc sequence %+v", rpcCalls)
+	}
+}
+
+func TestDriverFindRecordingsEventFilterFallsBackToSMDFinder(t *testing.T) {
+	loginRequests := 0
+	var rpcCalls []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/RPC2_Login":
+			loginRequests++
+			if loginRequests == 1 {
+				_, _ = w.Write([]byte(`{"id":1,"params":{"realm":"Login to Test","random":"12345","encryption":"Default"},"result":false,"session":"sess1","error":{"code":268632079,"message":"challenge"}}`))
+				return
+			}
+			_, _ = w.Write([]byte(`{"id":2,"params":{},"result":true,"session":"sess2"}`))
+		case "/RPC2":
+			var payload struct {
+				Method string         `json:"method"`
+				Params map[string]any `json:"params"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				t.Fatalf("decode rpc request: %v", err)
+			}
+			rpcCalls = append(rpcCalls, payload.Method)
+			switch payload.Method {
+			case "log.startFind":
+				_, _ = w.Write([]byte(`{"id":10,"params":{"token":67108871},"result":true,"session":"sess2"}`))
+			case "log.getCount":
+				_, _ = w.Write([]byte(`{"id":11,"params":{"count":0},"result":true,"session":"sess2"}`))
+			case "SmdDataFinder.startFind":
+				_, _ = w.Write([]byte(`{"id":12,"params":{"Count":1,"Token":10},"result":true,"session":"sess2"}`))
+			case "SmdDataFinder.doFind":
+				_, _ = w.Write([]byte(`{"id":13,"params":{"SmdInfo":[{"Channel":0,"StartTime":"2026-05-01 20:08:43","EndTime":"2026-05-01 20:09:05","Type":"smdTypeHuman"}]},"result":true,"session":"sess2"}`))
+			default:
+				http.Error(w, "unexpected rpc method", http.StatusBadRequest)
+			}
+		default:
+			http.Error(w, "unexpected path", http.StatusBadRequest)
+		}
+	}))
+	defer server.Close()
+
+	cfg := config.DeviceConfig{
+		ID:               "west20_nvr",
+		BaseURL:          server.URL,
+		Username:         "assistant",
+		Password:         "secret",
+		ChannelAllowlist: []int{1},
+		RequestTimeout:   5 * time.Second,
+	}
+	metricsRegistry := metrics.New(buildinfo.Info())
+	driver := New(cfg, config.ImouConfig{}, nil, nil, zerolog.Nop(), metricsRegistry, cgi.New(cfg, metricsRegistry))
+
+	got, err := driver.FindRecordings(context.Background(), dahua.NVRRecordingQuery{
+		Channel:   1,
+		StartTime: time.Date(2026, 5, 1, 0, 0, 0, 0, time.Local),
+		EndTime:   time.Date(2026, 5, 1, 23, 59, 59, 0, time.Local),
+		Limit:     10,
+		EventCode: "human",
+	})
+	if err != nil {
+		t.Fatalf("FindRecordings returned error: %v", err)
+	}
+	if got.ReturnedCount != 1 || len(got.Items) != 1 {
+		t.Fatalf("unexpected search result %+v", got)
+	}
+	item := got.Items[0]
+	if item.Source != "nvr_event" || item.Type != "Event.smdTypeHuman" {
+		t.Fatalf("unexpected event recording %+v", item)
+	}
+	if item.StartTime != "2026-05-01 20:08:43" || item.EndTime != "2026-05-01 20:09:05" {
+		t.Fatalf("unexpected smd event time window %+v", item)
+	}
+	if len(rpcCalls) != 4 ||
+		rpcCalls[0] != "log.startFind" ||
+		rpcCalls[1] != "log.getCount" ||
+		rpcCalls[2] != "SmdDataFinder.startFind" ||
+		rpcCalls[3] != "SmdDataFinder.doFind" {
 		t.Fatalf("unexpected rpc sequence %+v", rpcCalls)
 	}
 }

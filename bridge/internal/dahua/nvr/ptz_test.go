@@ -217,11 +217,14 @@ func TestAudioCapabilitiesHideReadOnlyNVRMuteControl(t *testing.T) {
 	if capabilities.Mute {
 		t.Fatalf("expected mute control to stay hidden, got %+v", capabilities)
 	}
-	if authority := driver.audioControlAuthority(context.Background(), 5); authority != "nvr_read_only" {
-		t.Fatalf("expected nvr_read_only authority, got %q", authority)
+	if !capabilities.Supported || !capabilities.StreamEnabled || capabilities.Muted {
+		t.Fatalf("expected stream audio state to remain visible, got %+v", capabilities)
 	}
-	if !strings.Contains(strings.Join(notes, ","), "channel_nvr_audio_config_write_unavailable") {
-		t.Fatalf("expected unavailable note, got %+v", notes)
+	if authority := driver.audioControlAuthority(context.Background(), 5); authority != "bridge_transcode" {
+		t.Fatalf("expected bridge_transcode authority, got %q", authority)
+	}
+	if !strings.Contains(strings.Join(notes, ","), "channel_audio_transcode_managed_by_bridge") {
+		t.Fatalf("expected bridge-transcode note, got %+v", notes)
 	}
 }
 
@@ -263,14 +266,14 @@ func TestAudioCapabilitiesHideNVRMuteWhenEncodeWriteDenied(t *testing.T) {
 	driver.rpc = nil
 
 	capabilities, notes := driver.audioCapabilities(context.Background(), 5)
-	if capabilities.Mute || capabilities.Supported {
-		t.Fatalf("expected denied encode write to hide mute support, got %+v", capabilities)
+	if capabilities.Mute || !capabilities.Supported || !capabilities.StreamEnabled || capabilities.Muted {
+		t.Fatalf("expected denied encode write to keep bridge-managed audio metadata only, got %+v", capabilities)
 	}
-	if authority := driver.audioControlAuthority(context.Background(), 5); authority != "nvr_read_only" {
-		t.Fatalf("expected nvr_read_only authority, got %q", authority)
+	if authority := driver.audioControlAuthority(context.Background(), 5); authority != "bridge_transcode" {
+		t.Fatalf("expected bridge_transcode authority, got %q", authority)
 	}
-	if !strings.Contains(strings.Join(notes, ","), "channel_nvr_audio_config_write_permission_denied") {
-		t.Fatalf("expected permission denied note, got %+v", notes)
+	if !strings.Contains(strings.Join(notes, ","), "channel_audio_transcode_managed_by_bridge") {
+		t.Fatalf("expected bridge-transcode note, got %+v", notes)
 	}
 }
 
@@ -740,7 +743,7 @@ func TestDriverSetAudioMuteUsesEncodeAudioEnable(t *testing.T) {
 	driver.rpc = nil
 
 	capabilities, notes := driver.audioCapabilities(context.Background(), 5)
-	if !capabilities.Mute || !capabilities.StreamEnabled || capabilities.Muted {
+	if capabilities.Mute || !capabilities.Supported || !capabilities.StreamEnabled || capabilities.Muted {
 		t.Fatalf("unexpected audio capabilities %+v", capabilities)
 	}
 	if len(notes) == 0 {
@@ -750,23 +753,17 @@ func TestDriverSetAudioMuteUsesEncodeAudioEnable(t *testing.T) {
 	if err := driver.SetAudioMute(context.Background(), dahua.NVRAudioRequest{
 		Channel: 5,
 		Muted:   true,
-	}); err != nil {
-		t.Fatalf("SetAudioMute returned error: %v", err)
+	}); !errors.Is(err, dahua.ErrUnsupportedOperation) {
+		t.Fatalf("expected unsupported operation, got %v", err)
 	}
-
-	if len(requests) < 3 {
-		t.Fatalf("expected at least 3 requests, got %d", len(requests))
-	}
-	lastRequest := requests[len(requests)-1]
-	if lastRequest.Get("table.Encode[4].MainFormat[0].AudioEnable") != "false" {
-		t.Fatalf("unexpected setConfig request: %+v", lastRequest)
-	}
-	if lastRequest.Get("table.Encode[4].ExtraFormat[0].AudioEnable") != "false" {
-		t.Fatalf("expected extra stream audio to be muted too: %+v", lastRequest)
+	for _, request := range requests {
+		if request.Get("action") == "setConfig" {
+			t.Fatalf("did not expect setConfig audio writes %+v", request)
+		}
 	}
 }
 
-func TestDriverSetAudioMuteUsesDirectIPCWhenConfigured(t *testing.T) {
+func TestDriverSetAudioMuteDoesNotWriteDirectIPCWhenConfigured(t *testing.T) {
 	var nvrRequests []url.Values
 	var directRequests []url.Values
 
@@ -826,24 +823,19 @@ func TestDriverSetAudioMuteUsesDirectIPCWhenConfigured(t *testing.T) {
 	if err := driver.SetAudioMute(context.Background(), dahua.NVRAudioRequest{
 		Channel: 5,
 		Muted:   true,
-	}); err != nil {
-		t.Fatalf("SetAudioMute returned error: %v", err)
+	}); !errors.Is(err, dahua.ErrUnsupportedOperation) {
+		t.Fatalf("expected unsupported operation, got %v", err)
 	}
 
 	for _, request := range nvrRequests {
 		if request.Get("action") == "setConfig" {
-			t.Fatalf("expected direct ipc routing, got nvr setConfig request %+v", request)
+			t.Fatalf("did not expect nvr setConfig request %+v", request)
 		}
 	}
-	if len(directRequests) < 2 {
-		t.Fatalf("expected direct ipc get/set requests, got %d", len(directRequests))
-	}
-	lastDirectRequest := directRequests[len(directRequests)-1]
-	if lastDirectRequest.Get("table.Encode[0].MainFormat[0].AudioEnable") != "false" {
-		t.Fatalf("unexpected direct ipc setConfig request: %+v", lastDirectRequest)
-	}
-	if lastDirectRequest.Get("table.Encode[0].ExtraFormat[0].AudioEnable") != "false" {
-		t.Fatalf("expected direct ipc extra stream audio to be muted too: %+v", lastDirectRequest)
+	for _, request := range directRequests {
+		if request.Get("action") == "setConfig" {
+			t.Fatalf("did not expect direct ipc setConfig request %+v", request)
+		}
 	}
 }
 

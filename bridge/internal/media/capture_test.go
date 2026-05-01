@@ -1,8 +1,12 @@
 package media
 
 import (
+	"strings"
 	"testing"
 	"time"
+
+	"RCooLeR/DahuaBridge/internal/config"
+	"RCooLeR/DahuaBridge/internal/streams"
 )
 
 func TestClipSourceWindowUsesPlaybackRangeAndDuration(t *testing.T) {
@@ -40,5 +44,34 @@ func TestMatchesClipQueryUsesSourceWindowWhenPresent(t *testing.T) {
 		EndTime:   time.Date(2026, 5, 1, 21, 30, 0, 0, time.UTC),
 	}) {
 		t.Fatal("expected query outside source window to miss")
+	}
+}
+
+func TestBuildClipFFmpegArgsDisablesStdinForFiniteClips(t *testing.T) {
+	args := buildClipFFmpegArgs(
+		config.MediaConfig{InputPreset: "stable"},
+		streams.Profile{StreamURL: "rtsp://example.local/live"},
+		10*time.Second,
+		"clip.mp4",
+		false,
+		true,
+	)
+
+	joined := strings.Join(args, " ")
+	if !strings.Contains(joined, "-nostdin") {
+		t.Fatalf("expected finite clip args to disable stdin, got %q", joined)
+	}
+	if !strings.Contains(joined, "-t 10") {
+		t.Fatalf("expected finite clip args to include duration, got %q", joined)
+	}
+}
+
+func TestPlaybackDurationFromStreamURLParsesClipFallbackDuration(t *testing.T) {
+	duration, ok := playbackDurationFromStreamURL("rtsp://example.local/playback?starttime=2026_05_01_02_30_10&endtime=2026_05_01_02_30_20")
+	if !ok {
+		t.Fatal("expected playback duration to be parsed")
+	}
+	if duration != 10*time.Second {
+		t.Fatalf("unexpected playback duration %s", duration)
 	}
 }

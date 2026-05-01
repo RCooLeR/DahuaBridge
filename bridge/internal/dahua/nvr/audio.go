@@ -51,39 +51,15 @@ type remoteFileInfo struct {
 func (d *Driver) audioCapabilities(ctx context.Context, channel int) (dahua.NVRChannelAudioCapabilities, []string) {
 	capabilities := dahua.NVRChannelAudioCapabilities{}
 	notes := make([]string, 0, 4)
-	nvrAudioWritable := false
-	nvrAudioReason := ""
-	directIPCWritable := d.directIPCAudioWritable(ctx, channel)
-	_, imouConfigured := d.imouOverride(channel)
-	if !directIPCWritable && !imouConfigured {
-		nvrAudioWritable, nvrAudioReason = d.nvrAudioWriteStatus(ctx, channel)
-	}
 
 	if enabled, known, codec := d.channelAudioStreamState(ctx, channel); known {
+		capabilities.Supported = true
 		capabilities.Muted = !enabled
 		capabilities.StreamEnabled = enabled
 		if strings.TrimSpace(codec) != "" {
 			notes = append(notes, "channel_main_stream_audio_codec_detected")
 		}
-	}
-	if directIPCWritable {
-		capabilities.Mute = true
-		capabilities.Supported = true
-		notes = append(notes, "channel_direct_ipc_audio_encode_control_configured")
-	} else if imouConfigured {
-		capabilities.Mute = true
-		capabilities.Supported = true
-		notes = append(notes, "channel_imou_audio_encode_control_configured")
-	} else if _, known, codec := d.channelAudioStreamState(ctx, channel); known && nvrAudioWritable {
-		capabilities.Mute = true
-		capabilities.Supported = strings.TrimSpace(codec) != ""
-		notes = append(notes, "channel_stream_audio_toggle_available")
-	} else if known {
-		if nvrAudioReason == "permission_denied" {
-			notes = append(notes, "channel_nvr_audio_config_write_permission_denied")
-		} else {
-			notes = append(notes, "channel_nvr_audio_config_write_unavailable")
-		}
+		notes = append(notes, "channel_audio_transcode_managed_by_bridge")
 	}
 
 	playback, playbackNotes := d.remoteSpeakCapabilities(ctx, channel)
@@ -101,8 +77,8 @@ func (d *Driver) audioCapabilities(ctx context.Context, channel int) (dahua.NVRC
 		}
 	}
 
-	if !capabilities.Mute && !capabilities.Volume {
-		notes = append(notes, "channel_audio_mute_volume_not_exposed")
+	if capabilities.Supported && !capabilities.Mute && !capabilities.Volume {
+		notes = append(notes, "channel_audio_device_mute_not_exposed")
 	}
 
 	return capabilities, uniqueSortedStrings(notes)
@@ -198,30 +174,13 @@ func (d *Driver) SetAudioMute(ctx context.Context, request dahua.NVRAudioRequest
 	if !cfg.AllowsChannel(request.Channel) {
 		return fmt.Errorf("%w: channel %d is not allowed", dahua.ErrUnsupportedOperation, request.Channel)
 	}
-	if d.directIPCAudioWritable(ctx, request.Channel) {
-		return d.setDirectIPCAudioEnabled(ctx, request.Channel, !request.Muted)
-	}
-	override, ok := d.imouOverride(request.Channel)
-	if ok {
-		return d.setImouAudioMuted(ctx, override, request.Muted)
-	}
-	if err := d.requireNVRConfigWrite(ctx, request.Channel, "stream-audio control"); err != nil {
-		return err
-	}
-	return d.setChannelMainAudioEnabled(ctx, request.Channel, !request.Muted)
+	return fmt.Errorf("%w: channel %d stream-audio changes are disabled; bridge output audio is handled at transcode time", dahua.ErrUnsupportedOperation, request.Channel)
 }
 
 func (d *Driver) audioControlAuthority(ctx context.Context, channel int) string {
-	if d.directIPCAudioWritable(ctx, channel) {
-		return "direct_ipc"
-	}
-	if _, ok := d.imouOverride(channel); ok {
-		return "imou_override"
-	}
-	if allowed, _ := d.nvrAudioWriteStatus(ctx, channel); !allowed {
-		return "nvr_read_only"
-	}
-	return "nvr"
+	_ = ctx
+	_ = channel
+	return "bridge_transcode"
 }
 
 func extractAudioFormats(values []remoteSpeakFormat) []string {
