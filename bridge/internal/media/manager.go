@@ -20,6 +20,7 @@ import (
 	"RCooLeR/DahuaBridge/internal/config"
 	"RCooLeR/DahuaBridge/internal/metrics"
 	"RCooLeR/DahuaBridge/internal/streams"
+
 	"github.com/rs/zerolog"
 )
 
@@ -1033,7 +1034,6 @@ func (w *hlsWorker) run() {
 	}
 }
 
-
 func (w *hlsWorker) buildFFmpegArgs(attempt ffmpegStartAttempt) []string {
 	frameRate := w.parent.cfg.FrameRate
 	if w.profile.FrameRate > 0 {
@@ -1201,7 +1201,31 @@ func (w *hlsWorker) status() WorkerStatus {
 	return status
 }
 
-func safeHLSDirectoryPrefix(value string) string { trimmed := strings.TrimSpace(value) if trimmed == "" { return "stream" } replacer := strings.NewReplacer(":", "_", "/", "_", "\\", "_", " ", "_") safe := replacer.Replace(trimmed) if len(safe) > 96 { safe = safe[:96] } return safe } func removeDirectoryAfter(logger zerolog.Logger, dir string, delay time.Duration) { if strings.TrimSpace(dir) == "" { return } timer := time.NewTimer(delay) defer timer.Stop() <-timer.C if err := os.RemoveAll(dir); err != nil { logger.Warn().Err(err).Str("dir", dir).Msg("failed to remove expired hls cache directory") } } func safeHLSDirectoryPrefix(value string) string { trimmed := strings.TrimSpace(value) if trimmed == "" { return "stream" } replacer := strings.NewReplacer(":", "_", "/", "_", "\\", "_", " ", "_") safe := replacer.Replace(trimmed) if len(safe) > 96 { safe = safe[:96] } return safe } func removeDirectoryAfter(logger zerolog.Logger, dir string, delay time.Duration) { if strings.TrimSpace(dir) == "" { return } timer := time.NewTimer(delay) defer timer.Stop() <-timer.C if err := os.RemoveAll(dir); err != nil { logger.Warn().Err(err).Str("dir", dir).Msg("failed to remove expired hls cache directory") } } func redactURLUserinfo(raw string) string {
+func safeHLSDirectoryPrefix(value string) string {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return "stream"
+	}
+	replacer := strings.NewReplacer(":", "_", "/", "_", "\\", "_", " ", "_")
+	safe := replacer.Replace(trimmed)
+	if len(safe) > 96 {
+		safe = safe[:96]
+	}
+	return safe
+}
+func removeDirectoryAfter(logger zerolog.Logger, dir string, delay time.Duration) {
+	if strings.TrimSpace(dir) == "" {
+		return
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	<-timer.C
+	if err := os.RemoveAll(dir); err != nil {
+		logger.Warn().Err(err).Str("dir", dir).Msg("failed to remove expired hls cache directory")
+	}
+}
+
+func redactURLUserinfo(raw string) string {
 	parsed, err := url.Parse(raw)
 	if err != nil {
 		return raw
