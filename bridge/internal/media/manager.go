@@ -775,7 +775,7 @@ func (w *worker) readMJPEG(r io.Reader) error {
 		}
 		if err != nil {
 			if errors.Is(err, io.EOF) {
-				return nil
+				return fmt.Errorf("read mjpeg stdout: %w", io.ErrUnexpectedEOF)
 			}
 			return fmt.Errorf("read mjpeg stdout: %w", err)
 		}
@@ -944,7 +944,7 @@ func (w *hlsWorker) run() {
 		}
 	}()
 
-	outputRoot := strings.TrimSpace(w.parent.cfg.HLSTempPath)
+	outputRoot := strings.TrimSpace(w.parent.cfg.HLSTmpDir)
 	if outputRoot == "" {
 		outputRoot = "/data/tmp/dahuabridge/hls"
 	}
@@ -954,7 +954,7 @@ func (w *hlsWorker) run() {
 	}
 
 	var err error
-	outputDir, err = os.MkdirTemp(outputRoot, "dahuabridge-hls-*")
+	outputDir, err = os.MkdirTemp(outputRoot, safeHLSDirectoryPrefix(w.key)+"-*")
 	if err != nil {
 		w.setError(fmt.Errorf("create hls temp dir: %w", err))
 		return
@@ -1045,7 +1045,7 @@ func (w *hlsWorker) buildFFmpegArgs(attempt ffmpegStartAttempt) []string {
 	hlsFlags := "delete_segments+independent_segments+omit_endlist+temp_file"
 	if w.isPlaybackStream() {
 		hlsListSize = "0"
-		hlsFlags = "independent_segments+omit_endlist+temp_file"
+		hlsFlags = "independent_segments+temp_file"
 	}
 
 	args := []string{

@@ -65,6 +65,8 @@ Important fields:
 - `read_buffer_size`
 - `hls_segment_time`
 - `hls_list_size`
+- `hls_tmp_dir`
+- `hls_keep_after_exit`
 - `hwaccel_args`
 - `webrtc_ice_servers`
 - `webrtc_uplink_targets`

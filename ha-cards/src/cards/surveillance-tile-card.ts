@@ -12,6 +12,7 @@ import {
   resolveStreamViewportSource,
 } from "./surveillance-panel-media";
 import { renderIconButton } from "./surveillance-panel-primitives";
+import type { RemoteStreamAudioHost } from "./surveillance-remote-stream";
 import {
   buildPanelModel,
   displayCameraLabel,
@@ -734,6 +735,14 @@ export class DahuaBridgeSurveillanceTileCard
   }
 
   private syncCameraViewportAudioState(muted: boolean): void {
+    const remoteStream = this.renderRoot.querySelector<RemoteStreamAudioHost>(
+      ".tile-media dahuabridge-remote-stream",
+    );
+    if (remoteStream) {
+      remoteStream.syncAudioState(muted);
+      return;
+    }
+
     const video = this.renderRoot.querySelector<HTMLVideoElement>(
       "video#remote-stream.remote-stream, video#remote-stream, video.remote-stream",
     );

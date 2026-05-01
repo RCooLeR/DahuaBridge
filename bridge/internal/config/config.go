@@ -93,6 +93,7 @@ type MediaConfig struct {
 	HWAccelArgs         []string                `yaml:"hwaccel_args"`
 	WebRTCICEServers    []WebRTCICEServerConfig `yaml:"webrtc_ice_servers"`
 	WebRTCUplinkTargets []string                `yaml:"webrtc_uplink_targets"`
+	HLSTmpDir           string                  `yaml:"hls_tmp_dir"`
 	HLSTempPath         string                  `yaml:"hls_temp_path"`
 	HLSKeepAfterExit    time.Duration           `yaml:"hls_keep_after_exit"`
 }
@@ -267,6 +268,9 @@ func defaultConfig() Config {
 			ReadBufferSize:     1024 * 1024,
 			HLSSegmentTime:     2 * time.Second,
 			HLSListSize:        6,
+			HLSTmpDir:          "/data/tmp/dahuabridge/hls",
+			HLSTempPath:        "/data/tmp/dahuabridge/hls",
+			HLSKeepAfterExit:   6 * time.Hour,
 		},
 		HomeAssistant: HomeAssistantConfig{
 			Enabled:              true,
@@ -366,10 +370,15 @@ func (c *Config) normalize() error {
 		c.Media.ClipPath = "/data/clips"
 	}
 
+	c.Media.HLSTmpDir = strings.TrimSpace(c.Media.HLSTmpDir)
 	c.Media.HLSTempPath = strings.TrimSpace(c.Media.HLSTempPath)
-	if c.Media.HLSTempPath == "" {
-		c.Media.HLSTempPath = "/data/tmp/dahuabridge/hls"
+	if c.Media.HLSTmpDir == "" {
+		c.Media.HLSTmpDir = c.Media.HLSTempPath
 	}
+	if c.Media.HLSTmpDir == "" {
+		c.Media.HLSTmpDir = "/data/tmp/dahuabridge/hls"
+	}
+	c.Media.HLSTempPath = c.Media.HLSTmpDir
 	if c.Media.HLSKeepAfterExit < 0 {
 		c.Media.HLSKeepAfterExit = 0
 	}
