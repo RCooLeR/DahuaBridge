@@ -102,9 +102,12 @@ const bridgeRecordingSchema = z.object({
   status: z.string().min(1),
   started_at: z.string().min(1),
   ended_at: z.string().optional().nullable(),
+  start_time: z.string().optional().nullable(),
+  end_time: z.string().optional().nullable(),
   duration_ms: z.number().int().optional().nullable(),
   bytes: z.number().int().optional().nullable(),
   file_name: z.string().optional().nullable(),
+  playback_url: z.string().optional().nullable(),
   download_url: z.string().optional().nullable(),
   self_url: z.string().optional().nullable(),
   stop_url: z.string().optional().nullable(),
@@ -223,9 +226,10 @@ export async function fetchBridgeRecordings(
   }
 
   const payload = bridgeRecordingListSchema.parse(await response.json());
+  const browserBridgeUrl = normalizeBrowserBridgeUrl(url.toString());
   return {
     returnedCount: firstNumber(payload.returned_count, payload.items.length),
-    items: payload.items.map(mapBridgeRecording),
+    items: payload.items.map((item) => mapBridgeRecording(item, browserBridgeUrl)),
   };
 }
 
@@ -332,6 +336,7 @@ function mapArchiveExportClip(
 
 function mapBridgeRecording(
   item: z.infer<typeof bridgeRecordingSchema>,
+  browserBridgeUrl?: string | null,
 ): BridgeRecordingClipModel {
   return {
     id: item.id,
@@ -345,14 +350,26 @@ function mapBridgeRecording(
     status: item.status,
     startedAt: item.started_at,
     endedAt: item.ended_at ?? null,
+    sourceStartTime: item.start_time ?? null,
+    sourceEndTime: item.end_time ?? null,
     durationMs: item.duration_ms ?? null,
     bytes: item.bytes ?? null,
     fileName: item.file_name ?? null,
-    downloadUrl: item.download_url ?? null,
-    selfUrl: item.self_url ?? null,
-    stopUrl: item.stop_url ?? null,
+    playbackUrl: rewriteBridgeUrl(item.playback_url ?? null, browserBridgeUrl),
+    downloadUrl: rewriteBridgeUrl(item.download_url ?? null, browserBridgeUrl),
+    selfUrl: rewriteBridgeUrl(item.self_url ?? null, browserBridgeUrl),
+    stopUrl: rewriteBridgeUrl(item.stop_url ?? null, browserBridgeUrl),
     error: item.error ?? null,
   };
+}
+
+function normalizeBrowserBridgeUrl(value: string): string | null {
+  try {
+    const url = new URL(value, window.location.origin);
+    return `${url.protocol}//${url.host}`;
+  } catch {
+    return null;
+  }
 }
 
 function delay(ms: number, signal?: AbortSignal): Promise<void> {

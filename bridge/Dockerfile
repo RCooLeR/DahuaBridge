@@ -37,6 +37,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 FROM ubuntu:26.04
 
 ENV DEBIAN_FRONTEND=noninteractive
+ENV LIBVA_DRIVER_NAME=iHD
 
 RUN set -eux; \
     apt-get update; \
@@ -48,7 +49,12 @@ RUN set -eux; \
       gosu \
       passwd \
       vainfo \
+      libva2 \
+      libva-drm2 \
       libvpl2 \
+      libvpl-tools \
+      libmfx-gen1.2 \
+      va-driver-all \
       intel-media-va-driver-non-free; \
     rm -rf /var/lib/apt/lists/*
 
@@ -58,8 +64,10 @@ COPY --from=build /app/dahuabridge /app/dahuabridge
 COPY --from=build /app/docker-entrypoint.sh /app/docker-entrypoint.sh
 
 RUN set -eux; \
+    useradd --system --create-home --home-dir /var/lib/dahuabridge --shell /usr/sbin/nologin dahuabridge; \
     chmod 0755 /app/dahuabridge /app/docker-entrypoint.sh; \
-    mkdir -p /config /data /data/tmp
+    mkdir -p /config /data /data/tmp; \
+    chown -R dahuabridge:dahuabridge /data /data/tmp /var/lib/dahuabridge
 
 EXPOSE 9205
 

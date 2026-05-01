@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { fetchArchiveRecordings } from "../src/ha/bridge-archive";
+import { fetchArchiveRecordings, fetchBridgeRecordings } from "../src/ha/bridge-archive";
 
 describe("bridge archive", () => {
   afterEach(() => {
@@ -136,5 +136,60 @@ describe("bridge archive", () => {
 
     expect(result.returnedCount).toBe(0);
     expect(result.items).toEqual([]);
+  });
+
+  it("parses bridge mp4 playback urls", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        returned_count: 1,
+        items: [
+          {
+            id: "clip_test",
+            stream_id: "nvrpb_clip_test",
+            source_device_id: "west20_nvr_channel_01",
+            root_device_id: "west20_nvr",
+            channel: 1,
+            status: "completed",
+            started_at: "2026-05-01T10:00:00Z",
+            ended_at: "2026-05-01T10:00:04Z",
+            start_time: "2026-05-01T20:12:05Z",
+            end_time: "2026-05-01T20:12:25Z",
+            playback_url: "http://bridge.local:9205/api/v1/media/recordings/clip_test/play",
+            download_url: "http://bridge.local:9205/api/v1/media/recordings/clip_test/download",
+          },
+        ],
+      }),
+    } as Response);
+
+    Object.defineProperty(globalThis, "window", {
+      configurable: true,
+      value: {
+        location: {
+          origin: "https://ha.example.com",
+        },
+      },
+    });
+
+    const result = await fetchBridgeRecordings(
+      "http://bridge.local:9205/api/v1/media/recordings?channel=1&root_device_id=west20_nvr",
+      {
+        startTime: "2026-05-01T00:00:00Z",
+        endTime: "2026-05-02T00:00:00Z",
+        limit: 100,
+      },
+    );
+
+    expect(String(fetchMock.mock.calls[0]?.[0])).toContain("root_device_id=west20_nvr");
+    expect(result.returnedCount).toBe(1);
+    expect(result.items[0]).toMatchObject({
+      id: "clip_test",
+      streamId: "nvrpb_clip_test",
+      sourceStartTime: "2026-05-01T20:12:05Z",
+      sourceEndTime: "2026-05-01T20:12:25Z",
+      playbackUrl: "http://bridge.local:9205/api/v1/media/recordings/clip_test/play",
+      downloadUrl: "http://bridge.local:9205/api/v1/media/recordings/clip_test/download",
+    });
   });
 });

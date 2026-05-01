@@ -8,7 +8,6 @@ import type {
   NvrArchiveSearchResultModel,
 } from "../domain/archive";
 import type { CameraViewModel, PanelModel } from "../domain/model";
-import { formatBytes, formatDuration } from "../utils/format";
 import { renderControlButton } from "./surveillance-panel-primitives";
 import { EVENT_FILTER_ALL, type EventFilterOption } from "./surveillance-panel-state";
 
@@ -45,11 +44,12 @@ interface RenderBridgeRecordingsArgs {
   page: number;
   pageCount: number;
   visibleItems: readonly BridgeRecordingClipModel[];
-  isStoppingRecording: (recording: BridgeRecordingClipModel) => boolean;
+  playbackSupported: boolean;
+  isPlaybackActive: (recording: BridgeRecordingClipModel) => boolean;
   isDownloadingRecording: (recording: BridgeRecordingClipModel) => boolean;
   onSelectDate: (value: string) => void;
   onSelectPage: (page: number) => void;
-  onStopRecording: (recording: BridgeRecordingClipModel) => void;
+  onPlayRecording: (recording: BridgeRecordingClipModel) => void;
   onDownloadRecording: (recording: BridgeRecordingClipModel) => void;
   renderIcon: (icon: string) => TemplateResult;
 }
@@ -164,17 +164,29 @@ export function renderArchiveRecordings({
               (item) =>
                 `${item.channel}:${item.startTime}:${item.endTime}:${item.filePath ?? item.type ?? ""}`,
               (item) => {
-                const titleLabel = archiveRecordingTitle(item);
-                const codeLabel = archiveRecordingCodeLabel(item);
+                const metadata = showEventFilter
+                  ? [{ label: "Start", value: formatArchiveDateTime(item.startTime) }]
+                  : [
+                      { label: "Start", value: formatArchiveDateTime(item.startTime) },
+                      { label: "End", value: formatArchiveDateTime(item.endTime) },
+                    ];
                 return html`
-                  <div class="event-card info">
+                  <div class="event-card info archive-entry-card">
                     <div class="event-card-body">
-                      <div class="panel-title">
-                        <span>${titleLabel}</span>
-                        <span class="split-row">
-                          ${codeLabel && codeLabel !== titleLabel
-                            ? html`<span class="badge info">${codeLabel}</span>`
-                            : null}
+                      <div class="archive-entry-row">
+                        <span class="archive-entry-main">
+                          <span class="archive-entry-icon" aria-hidden="true">
+                            ${renderIcon(archiveRecordingEventIcon(item, showEventFilter))}
+                          </span>
+                          <span class="archive-entry-meta">
+                            ${repeat(
+                              metadata,
+                              (entry) => `${entry.label}:${entry.value}`,
+                              (entry) => renderArchiveInlineDetail(entry.label, entry.value),
+                            )}
+                          </span>
+                        </span>
+                        <span class="archive-entry-actions">
                           ${playbackSupported
                             ? renderControlButton(
                                 isPlaybackActive(item) ? "Playing" : "Play",
@@ -204,19 +216,6 @@ export function renderArchiveRecordings({
                               )
                             : null}
                         </span>
-                      </div>
-                      <div class="event-detail-list">
-                        ${renderArchiveDetail("Start", formatArchiveDateTime(item.startTime))}
-                        ${renderArchiveDetail("End", formatArchiveDateTime(item.endTime))}
-                        ${item.lengthBytes !== null
-                          ? renderArchiveDetail("Size", formatBytes(item.lengthBytes))
-                          : null}
-                        ${item.videoStream
-                          ? renderArchiveDetail("Source", item.videoStream)
-                          : null}
-                        ${item.filePath
-                          ? renderArchiveDetail("File", item.filePath, true)
-                          : null}
                       </div>
                     </div>
                   </div>
@@ -250,11 +249,12 @@ export function renderBridgeRecordings({
   page,
   pageCount,
   visibleItems,
-  isStoppingRecording,
+  playbackSupported,
+  isPlaybackActive,
   isDownloadingRecording,
   onSelectDate,
   onSelectPage,
-  onStopRecording,
+  onPlayRecording,
   onDownloadRecording,
   renderIcon,
 }: RenderBridgeRecordingsArgs): TemplateResult {
@@ -308,14 +308,40 @@ export function renderBridgeRecordings({
               visibleItems,
               (item) => item.id,
               (item) => html`
-                <div class="event-card info">
+                <div class="event-card info archive-entry-card">
                   <div class="event-card-body">
-                    <div class="panel-title">
-                      <span>${bridgeRecordingTitle(item)}</span>
-                      <span class="split-row">
-                        <span class="badge ${bridgeRecordingStatusTone(item.status)}">
-                          ${bridgeRecordingStatusLabel(item.status)}
+                    <div class="archive-entry-row">
+                      <span class="archive-entry-main">
+                        <span class="archive-entry-icon" aria-hidden="true">
+                          ${renderIcon("mdi:file-video-outline")}
                         </span>
+                        <span class="archive-entry-meta">
+                          ${renderArchiveInlineDetail(
+                            "Start",
+                            formatArchiveDateTime(bridgeRecordingStartTime(item)),
+                          )}
+                          ${renderArchiveInlineDetail(
+                            "End",
+                            formatArchiveDateTime(bridgeRecordingEndTime(item)),
+                          )}
+                        </span>
+                      </span>
+                      <span class="archive-entry-actions">
+                        ${playbackSupported && item.playbackUrl
+                          ? renderControlButton(
+                              isPlaybackActive(item) ? "Playing" : "Play",
+                              isPlaybackActive(item)
+                                ? "mdi:play-circle"
+                                : "mdi:play-circle-outline",
+                              () => onPlayRecording(item),
+                              renderIcon,
+                              {
+                                compact: true,
+                                tone: "primary",
+                                active: isPlaybackActive(item),
+                              },
+                            )
+                          : null}
                         ${item.downloadUrl
                           ? renderControlButton(
                               "Download",
@@ -328,40 +354,9 @@ export function renderBridgeRecordings({
                               },
                             )
                           : null}
-                        ${item.status === "recording" && item.stopUrl
-                          ? renderControlButton(
-                              "Stop",
-                              "mdi:stop-circle-outline",
-                              () => onStopRecording(item),
-                              renderIcon,
-                              {
-                                compact: true,
-                                tone: "warning",
-                                disabled: isStoppingRecording(item),
-                              },
-                            )
-                          : null}
                       </span>
                     </div>
-                    <div class="event-detail-list">
-                      ${renderArchiveDetail("Started", formatArchiveDateTime(item.startedAt))}
-                      ${renderArchiveDetail("Ended", formatArchiveDateTime(item.endedAt))}
-                      ${item.profile
-                        ? renderArchiveDetail("Profile", bridgeRecordingProfileLabel(item.profile))
-                        : null}
-                      ${item.bytes !== null
-                        ? renderArchiveDetail("Size", formatBytes(item.bytes))
-                        : null}
-                      ${item.durationMs !== null
-                        ? renderArchiveDetail("Duration", formatDurationMs(item.durationMs))
-                        : null}
-                      ${item.fileName && item.fileName !== bridgeRecordingTitle(item)
-                        ? renderArchiveDetail("File", item.fileName, true)
-                        : null}
-                      ${item.error
-                        ? renderArchiveDetail("Error", item.error, true, true)
-                        : null}
-                    </div>
+                    ${renderBridgeRecordingStatus(item)}
                   </div>
                 </div>
               `,
@@ -470,6 +465,21 @@ function renderArchiveDetail(
   `;
 }
 
+function renderArchiveInlineDetail(
+  label: string,
+  value: string | null,
+): TemplateResult | null {
+  if (!value?.trim()) {
+    return null;
+  }
+  return html`
+    <span class="archive-entry-detail">
+      <span class="archive-entry-detail-label">${label}</span>
+      <span class="archive-entry-detail-value">${value}</span>
+    </span>
+  `;
+}
+
 function formatArchiveDateTime(value: string | null | undefined): string {
   const text = value?.trim();
   if (!text) {
@@ -496,22 +506,6 @@ function formatArchiveDateBadge(value: string): string {
     month: "short",
     day: "2-digit",
   });
-}
-
-function formatDurationMs(durationMs: number): string {
-  return formatDuration(String(Math.max(0, Math.round(durationMs / 1000))));
-}
-
-function archiveRecordingTitle(recording: NvrArchiveRecordingModel): string {
-  return archiveRecordingCodeLabel(recording) ?? "Recording";
-}
-
-function archiveRecordingCodeLabel(recording: NvrArchiveRecordingModel): string | null {
-  const code = firstArchiveRecordingCode(recording);
-  if (!code) {
-    return recording.type?.trim() || null;
-  }
-  return archiveRecordingEventLabel(code);
 }
 
 function firstArchiveRecordingCode(recording: NvrArchiveRecordingModel): string | null {
@@ -576,53 +570,61 @@ function archiveRecordingEventLabel(value: string): string {
   }
 }
 
-function bridgeRecordingTitle(recording: BridgeRecordingClipModel): string {
-  return (
-    recording.name?.trim() ||
-    recording.fileName?.trim() ||
-    `MP4 Clip ${recording.id}`
-  );
-}
-
-function bridgeRecordingProfileLabel(value: string): string {
-  switch (value.trim().toLowerCase()) {
-    case "quality":
-      return "Quality (Main Stream)";
-    case "default":
-      return "Default (Main Stream)";
-    case "stable":
-      return "Stable (Substream)";
-    case "substream":
-      return "Substream (Native)";
+function archiveRecordingEventIcon(
+  recording: NvrArchiveRecordingModel,
+  eventMode: boolean,
+): string {
+  if (!eventMode) {
+    return "mdi:filmstrip-box-multiple";
+  }
+  switch (normalizeArchiveRecordingCode(firstArchiveRecordingCode(recording) ?? "").toLowerCase()) {
+    case "human":
+    case "humandetection":
+    case "smartmotionhuman":
+    case "intelliframehuman":
+    case "smdtypehuman":
+      return "mdi:account";
+    case "vehicle":
+    case "vehicledetection":
+    case "smartmotionvehicle":
+    case "motorvehicle":
+    case "smdtypevehicle":
+      return "mdi:car";
+    case "animal":
+    case "animaldetection":
+    case "smdtypeanimal":
+      return "mdi:paw";
+    case "crosslinedetection":
+    case "tripwire":
+      return "mdi:vector-line";
+    case "crossregiondetection":
+    case "intrusion":
+      return "mdi:vector-square";
+    case "leftdetection":
+      return "mdi:exit-run";
+    case "motion":
+    case "videomotion":
+    case "movedetection":
+    case "alarmpir":
+      return "mdi:motion-sensor";
     default:
-      return humanizeCode(value);
+      return "mdi:bell-alert-outline";
   }
 }
 
-function bridgeRecordingStatusLabel(value: string): string {
-  switch (value.trim().toLowerCase()) {
-    case "recording":
-      return "Recording";
-    case "completed":
-      return "Completed";
-    case "failed":
-      return "Failed";
-    default:
-      return humanizeCode(value);
+function renderBridgeRecordingStatus(recording: BridgeRecordingClipModel): TemplateResult | null {
+  if (recording.error?.trim()) {
+    return html`<div class="archive-entry-foot archive-status-error">${recording.error}</div>`;
   }
+  return null;
 }
 
-function bridgeRecordingStatusTone(value: string): string {
-  switch (value.trim().toLowerCase()) {
-    case "recording":
-      return "warning";
-    case "completed":
-      return "success";
-    case "failed":
-      return "critical";
-    default:
-      return "info";
-  }
+function bridgeRecordingStartTime(recording: BridgeRecordingClipModel): string {
+  return recording.sourceStartTime ?? recording.startedAt;
+}
+
+function bridgeRecordingEndTime(recording: BridgeRecordingClipModel): string | null {
+  return recording.sourceEndTime ?? recording.endedAt;
 }
 
 function humanizeCode(value: string): string {

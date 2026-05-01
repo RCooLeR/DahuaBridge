@@ -115,7 +115,7 @@ export const surveillancePanelBaseStyles = css`
 
   .inspector {
     grid-area: inspector;
-    overflow: auto;
+    overflow: hidden;
     display: flex;
     flex-direction: column;
     gap: 12px;
@@ -802,14 +802,90 @@ export const surveillancePanelBaseStyles = css`
   }
 
   .archive-panel {
+    display: flex;
+    flex-direction: column;
     flex: 1 1 auto;
     min-height: 220px;
   }
 
   .archive-panel .events-list {
     flex: 1 1 auto;
-    max-height: none;
     min-height: 0;
+  }
+
+  .archive-entry-card {
+    min-height: auto;
+  }
+
+  .archive-entry-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    flex-wrap: wrap;
+    min-width: 0;
+  }
+
+  .archive-entry-main {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-width: 0;
+    flex: 1 1 auto;
+  }
+
+  .archive-entry-icon {
+    width: 36px;
+    height: 36px;
+    border-radius: 8px;
+    border: 1px solid rgba(106, 199, 255, 0.16);
+    background: rgba(10, 25, 40, 0.88);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--db-cyan);
+    flex: 0 0 auto;
+  }
+
+  .archive-entry-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 14px;
+    min-width: 0;
+  }
+
+  .archive-entry-detail {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 6px;
+    min-width: 0;
+  }
+
+  .archive-entry-detail-label {
+    font-size: 11px;
+    text-transform: uppercase;
+    color: var(--db-text-soft);
+    letter-spacing: 0;
+  }
+
+  .archive-entry-detail-value {
+    font-size: 13px;
+    font-weight: 600;
+    overflow-wrap: anywhere;
+  }
+
+  .archive-entry-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
+
+  .archive-entry-foot {
+    font-size: 12px;
+    line-height: 1.35;
+    overflow-wrap: anywhere;
   }
 
   .archive-panel .event-detail-list {
@@ -844,10 +920,6 @@ export const surveillancePanelBaseStyles = css`
 
   .archive-status-error {
     color: #ffc7d1;
-  }
-
-  .archive-panel .event-card {
-    min-height: auto;
   }
 
   .nvr-channel-row {
@@ -1293,9 +1365,10 @@ export const surveillancePanelDetailStyles = css`
     min-height: 0;
     display: flex;
     flex-direction: column;
+    flex: 1 1 auto;
     gap: 12px;
     padding: 0;
-    overflow: visible;
+    overflow: hidden;
   }
 
   .video-panel {
