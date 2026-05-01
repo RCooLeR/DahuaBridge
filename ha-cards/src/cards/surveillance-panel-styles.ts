@@ -450,6 +450,7 @@ export const surveillancePanelBaseStyles = css`
     display: flex;
     flex-direction: column;
     gap: 14px;
+    max-height: min(65vh, 900px);
   }
 
   .sidebar-group {
@@ -1539,6 +1540,7 @@ export const surveillancePanelDetailStyles = css`
 
   .events-list {
     min-height: 0;
+    max-height: min(630px, 65vh);
     overflow: auto;
     display: grid;
     gap: 10px;

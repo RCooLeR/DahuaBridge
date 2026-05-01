@@ -258,7 +258,7 @@ func defaultConfig() Config {
 			ClipPath:           "/data/clips",
 			IdleTimeout:        30 * time.Second,
 			StartTimeout:       15 * time.Second,
-			MaxWorkers:         14,
+			MaxWorkers:         32,
 			FrameRate:          5,
 			StableFrameRate:    5,
 			SubstreamFrameRate: 5,
@@ -390,7 +390,7 @@ func (c *Config) normalize() error {
 		c.Media.StartTimeout = 15 * time.Second
 	}
 	if c.Media.MaxWorkers <= 0 {
-		c.Media.MaxWorkers = 14
+		c.Media.MaxWorkers = 32
 	}
 	if c.Media.FrameRate <= 0 {
 		c.Media.FrameRate = 5

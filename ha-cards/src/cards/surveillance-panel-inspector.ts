@@ -178,72 +178,9 @@ function renderNvrInspector(
               </div>
             </div>
             ${renderNvrDriveBreakdown(nvr, renderIcon)}
-            ${renderNvrRecordingState(nvr, renderIcon)}
           `
         : nothing}
       ${detailTab === "recordings" ? archiveContent : nothing}
-    </div>
-  `;
-}
-
-function renderNvrRecordingState(
-  nvr: NvrViewModel,
-  renderIcon: (icon: string) => TemplateResult,
-): TemplateResult {
-  const channels = nvr.rooms.flatMap((room) => room.channels);
-  const onlineCount = channels.filter((channel) => channel.online).length;
-  const recordingChannels = channels.filter((channel) => channel.recordingActive);
-  const offlineChannels = channels.filter((channel) => !channel.online);
-  const streamDownChannels = channels.filter((channel) => !channel.streamAvailable);
-  const idleChannels = channels.filter((channel) => channel.online && !channel.recordingActive);
-
-  return html`
-    <div class="panel">
-      <div class="panel-title">Channel State</div>
-      <div class="nvr-summary-chip-grid">
-        ${renderNvrSummaryChip(
-          "mdi:lan-connect",
-          "Online",
-          `${onlineCount}/${channels.length} online`,
-          "info",
-          renderIcon,
-        )}
-        ${renderNvrSummaryChip(
-          "mdi:record-rec",
-          "Recording",
-          `${recordingChannels.length} recording`,
-          recordingChannels.length > 0 ? "critical" : "info",
-          renderIcon,
-        )}
-        ${renderNvrSummaryChip(
-          "mdi:pause-circle-outline",
-          "Idle",
-          `${idleChannels.length} idle`,
-          "info",
-          renderIcon,
-        )}
-        ${offlineChannels.length > 0
-          ? renderNvrSummaryChip(
-              "mdi:lan-disconnect",
-              "Offline",
-              `${offlineChannels.length} offline`,
-              "critical",
-              renderIcon,
-            )
-          : nothing}
-        ${streamDownChannels.length > 0
-          ? renderNvrSummaryChip(
-              "mdi:wifi-strength-alert-outline",
-              "Stream health",
-              `${streamDownChannels.length} stream down`,
-              "warning",
-              renderIcon,
-            )
-          : nothing}
-      </div>
-      <div class="muted">
-        Channel grouping and room assignment stay in the left sidebar so the recorder panel can stay focused on current state.
-      </div>
     </div>
   `;
 }
@@ -284,7 +221,6 @@ function renderCameraInspector(
 
       ${detailTab === "settings"
         ? html`
-            ${renderCameraControlAuthority(camera)}
             ${renderCameraStreamStatus(camera)}
             ${renderCameraStreamProfiles(camera)}
             ${renderCameraBridgeAdapter(camera)}
@@ -443,86 +379,6 @@ function renderCameraBridgeAdapter(camera: CameraViewModel): TemplateResult | ty
       <div class="muted">
         Bridge diagnostics are only shown here when a required route is missing.
       </div>
-    </div>
-  `;
-}
-
-function renderCameraControlAuthority(
-  camera: CameraViewModel,
-): TemplateResult | typeof nothing {
-  const showAudioAuthority = Boolean(camera.audioControlAuthority);
-  const showAudioSemantic = Boolean(camera.audioControlSemantic);
-  const showNvrWriteState = camera.nvrConfigWritable !== null;
-  const showDirectIPC =
-    camera.directIPCConfigured ||
-    Boolean(camera.directIPCConfiguredIP) ||
-    Boolean(camera.directIPCIP) ||
-    Boolean(camera.directIPCModel);
-  const showValidationNotes = camera.deviceKind === "nvr_channel" && camera.validationNotes.length > 0;
-
-  if (
-    !showAudioAuthority &&
-    !showAudioSemantic &&
-    !showNvrWriteState &&
-    !showDirectIPC &&
-    !showValidationNotes
-  ) {
-    return nothing;
-  }
-
-  return html`
-    <div class="panel">
-      <div class="panel-title">Control Authority</div>
-      <div class="chip-row">
-        ${showAudioAuthority
-          ? html`
-              <span class="badge ${audioAuthorityTone(camera.audioControlAuthority)}">
-                Audio via ${audioAuthorityLabel(camera.audioControlAuthority)}
-              </span>
-            `
-          : nothing}
-        ${showAudioSemantic
-          ? html`<span class="badge info">${audioSemanticLabel(camera.audioControlSemantic)}</span>`
-          : nothing}
-        ${showNvrWriteState
-          ? html`
-              <span class="badge ${camera.nvrConfigWritable ? "success" : "warning"}">
-                NVR config writes ${camera.nvrConfigWritable ? "ready" : "blocked"}
-              </span>
-            `
-          : nothing}
-        ${showDirectIPC
-          ? html`
-              <span class="badge ${camera.directIPCConfigured ? "success" : "info"}">
-                ${camera.directIPCConfigured ? "Direct IPC mapped" : "Direct IPC seen in inventory"}
-              </span>
-            `
-          : nothing}
-      </div>
-      <div class="detail-inline-meta">
-        ${camera.directIPCIP || camera.directIPCConfiguredIP
-          ? html`
-              <span class="muted">
-                Direct IPC: ${camera.directIPCConfiguredIP ?? camera.directIPCIP}
-                ${camera.directIPCModel ? ` (${camera.directIPCModel})` : ""}
-              </span>
-            `
-          : nothing}
-        ${camera.nvrConfigReason
-          ? html`<span class="muted">NVR write probe: ${camera.nvrConfigReason}</span>`
-          : nothing}
-      </div>
-      ${showValidationNotes
-        ? html`
-            <div class="chip-row">
-              ${repeat(
-                camera.validationNotes,
-                (note) => note,
-                (note) => html`<span class="badge warning">${note}</span>`,
-              )}
-            </div>
-          `
-        : nothing}
     </div>
   `;
 }

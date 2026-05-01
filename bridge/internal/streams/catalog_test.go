@@ -220,6 +220,62 @@ func TestBuildCatalogIncludesCredentialsWhenRequested(t *testing.T) {
 	}
 }
 
+func TestBuildCatalogFallsBackToMainStreamWhenSubstreamMetadataMissing(t *testing.T) {
+	catalog := BuildCatalog(CatalogInput{
+		Config: config.Config{
+			Media: config.MediaConfig{
+				StableFrameRate:    5,
+				SubstreamFrameRate: 5,
+			},
+		},
+		ProbeResults: []*dahua.ProbeResult{
+			{
+				Root: dahua.Device{
+					ID:   "west20_nvr",
+					Kind: dahua.DeviceKindNVR,
+				},
+				Children: []dahua.Device{
+					{
+						ID:   "west20_nvr_channel_08",
+						Kind: dahua.DeviceKindNVRChannel,
+						Name: "Lot 8",
+						Attributes: map[string]string{
+							"channel_index":   "8",
+							"main_codec":      "H.265",
+							"main_resolution": "2560x1440",
+						},
+					},
+				},
+			},
+		},
+		NVRConfigs: map[string]config.DeviceConfig{
+			"west20_nvr": {
+				BaseURL:  "http://nvr.example.local",
+				Username: "admin",
+				Password: "secret",
+			},
+		},
+	})
+
+	if len(catalog) != 1 {
+		t.Fatalf("expected 1 stream entry, got %d", len(catalog))
+	}
+
+	entry := catalog[0]
+	if entry.RecommendedProfile != "stable" {
+		t.Fatalf("expected stable recommendation, got %q", entry.RecommendedProfile)
+	}
+	if entry.Profiles["stable"].Subtype != 0 {
+		t.Fatalf("expected stable profile to fall back to main subtype, got %+v", entry.Profiles["stable"])
+	}
+	if !strings.Contains(entry.Profiles["stable"].StreamURL, "subtype=0") {
+		t.Fatalf("expected stable profile to point at main stream, got %q", entry.Profiles["stable"].StreamURL)
+	}
+	if entry.Profiles["substream"].Subtype != 0 {
+		t.Fatalf("expected substream profile fallback to main subtype, got %+v", entry.Profiles["substream"])
+	}
+}
+
 func TestRecommendProfilePrefersQualityForH264MainStream(t *testing.T) {
 	recommended := recommendProfile("H.264", "1920x1080", "H.264", "704x576")
 	if recommended != "quality" {

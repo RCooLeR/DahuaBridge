@@ -111,16 +111,17 @@ type worker struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 
-	mu          sync.Mutex
-	subscribers map[chan []byte]struct{}
-	lastFrame   []byte
-	lastFrameAt time.Time
-	lastError   error
-	startedAt   time.Time
-	cmd         *exec.Cmd
-	ready       chan struct{}
-	startErr    chan error
-	readyOnce   sync.Once
+	mu             sync.Mutex
+	subscribers    map[chan []byte]struct{}
+	idleGeneration uint64
+	lastFrame      []byte
+	lastFrameAt    time.Time
+	lastError      error
+	startedAt      time.Time
+	cmd            *exec.Cmd
+	ready          chan struct{}
+	startErr       chan error
+	readyOnce      sync.Once
 }
 
 type hlsWorker struct {
@@ -583,6 +584,7 @@ func (w *worker) addSubscriber(ch chan []byte) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	w.subscribers[ch] = struct{}{}
+	w.idleGeneration++
 	if w.parent.metrics != nil {
 		w.parent.metrics.SetMediaViewers(w.streamID, w.profileName, len(w.subscribers))
 	}
@@ -602,6 +604,11 @@ func (w *worker) removeSubscriber(ch chan []byte) {
 		delete(w.subscribers, ch)
 	}
 	empty := len(w.subscribers) == 0
+	idleGeneration := w.idleGeneration
+	if empty {
+		w.idleGeneration++
+		idleGeneration = w.idleGeneration
+	}
 	viewers := len(w.subscribers)
 	w.mu.Unlock()
 
@@ -612,11 +619,11 @@ func (w *worker) removeSubscriber(ch chan []byte) {
 		w.parent.metrics.SetMediaViewers(w.streamID, w.profileName, viewers)
 	}
 	if empty {
-		go w.stopWhenIdle()
+		go w.stopWhenIdle(idleGeneration)
 	}
 }
 
-func (w *worker) stopWhenIdle() {
+func (w *worker) stopWhenIdle(idleGeneration uint64) {
 	timer := time.NewTimer(w.parent.cfg.IdleTimeout)
 	defer timer.Stop()
 
@@ -628,8 +635,9 @@ func (w *worker) stopWhenIdle() {
 
 	w.mu.Lock()
 	empty := len(w.subscribers) == 0
+	sameIdleWindow := w.idleGeneration == idleGeneration
 	w.mu.Unlock()
-	if empty {
+	if empty && sameIdleWindow {
 		w.logger.Info().Msg("stopping idle media worker")
 		w.cancel()
 	}
@@ -1054,10 +1062,11 @@ func (w *hlsWorker) buildFFmpegArgs(attempt ffmpegStartAttempt) []string {
 	if w.profile.FrameRate > 0 {
 		frameRate = w.profile.FrameRate
 	}
+	segmentDuration := formatFFmpegSeconds(w.parent.cfg.HLSSegmentTime)
 	segmentSeconds := int(maxInt(int(w.parent.cfg.HLSSegmentTime/time.Second), 1))
 	gopSize := maxInt(frameRate*segmentSeconds, frameRate)
 	hlsListSize := strconv.Itoa(w.parent.cfg.HLSListSize)
-	hlsFlags := "delete_segments+independent_segments+omit_endlist+temp_file"
+	hlsFlags := "append_list+delete_segments+independent_segments+omit_endlist+temp_file"
 	if w.isPlaybackStream() {
 		hlsListSize = "0"
 		hlsFlags = "independent_segments+temp_file"
@@ -1079,12 +1088,17 @@ func (w *hlsWorker) buildFFmpegArgs(attempt ffmpegStartAttempt) []string {
 	)
 	args = appendVideoEncoderArgs(args, w.parent.cfg, attempt.useHWAccel, gopSize, "veryfast")
 	args = append(args,
+		"-fps_mode", "cfr",
+		"-force_key_frames", fmt.Sprintf("expr:gte(t,n_forced*%s)", segmentDuration),
 		"-c:a", "aac",
 		"-b:a", "96k",
 		"-ac", "2",
 		"-ar", "48000",
+		"-hls_allow_cache", "0",
+		"-muxpreload", "0",
+		"-muxdelay", "0",
 		"-f", "hls",
-		"-hls_time", formatFFmpegSeconds(w.parent.cfg.HLSSegmentTime),
+		"-hls_time", segmentDuration,
 		"-hls_list_size", hlsListSize,
 		"-hls_flags", hlsFlags,
 		"-hls_segment_filename", "segment_%03d.ts",
@@ -1300,16 +1314,16 @@ func buildRTSPInputArgs(profile streams.Profile, inputPreset string) []string {
 	args := []string{
 		"-rtsp_transport", firstNonEmpty(profile.RTSPTransport, "tcp"),
 	}
+	fflags := []string{"discardcorrupt", "genpts"}
 	switch strings.ToLower(strings.TrimSpace(inputPreset)) {
 	case "stable":
-		args = append(args,
-			"-fflags", "+discardcorrupt",
-		)
 	default:
-		args = append(args,
-			"-fflags", "+discardcorrupt+nobuffer",
-			"-flags", "low_delay",
-		)
+		fflags = append(fflags, "nobuffer")
+		args = append(args, "-flags", "low_delay")
+	}
+	args = append(args, "-fflags", "+"+strings.Join(fflags, "+"))
+	if profile.UseWallclockAsTimestamps {
+		args = append(args, "-use_wallclock_as_timestamps", "1")
 	}
 	args = append(args, "-i", profile.StreamURL)
 	return args
@@ -1484,6 +1498,7 @@ func appendVideoEncoderArgs(args []string, cfg config.MediaConfig, useHWAccel bo
 		"-g", strconv.Itoa(gopSize),
 		"-keyint_min", strconv.Itoa(gopSize),
 		"-sc_threshold", "0",
+		"-bf", "0",
 	)
 }
 
@@ -1524,6 +1539,15 @@ func isHardwareAccelFailure(stderrText string) bool {
 		strings.Contains(text, "no device available for decoder") ||
 		strings.Contains(text, "hevc_qsv") ||
 		strings.Contains(text, "h264_qsv")
+}
+
+func isOptionalAudioOutputFailure(stderrText string) bool {
+	text := strings.ToLower(strings.TrimSpace(stderrText))
+	if text == "" {
+		return false
+	}
+	return strings.Contains(text, "stream map '?' matches no streams; ignoring") &&
+		strings.Contains(text, "output file does not contain any stream")
 }
 
 func redactFFmpegArgs(args []string) []string {

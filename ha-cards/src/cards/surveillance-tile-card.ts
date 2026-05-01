@@ -353,16 +353,6 @@ export class DahuaBridgeSurveillanceTileCard
                 <div class="tile-title-banner">
                   <div class="tile-name">${title}</div>
                 </div>
-                <div class="tile-indicators">
-                  ${showRecording
-                    ? html`<span class="recording-dot" title="Recording" aria-label="Recording"></span>`
-                    : nothing}
-                  <span
-                    class="status-dot ${camera.online ? "" : "critical"}"
-                    title=${camera.online ? "Online" : "Offline"}
-                    aria-label=${camera.online ? "Online" : "Offline"}
-                  ></span>
-                </div>
               </div>
               <div class="media-overlay">
                 <div class="media-bottom">
@@ -493,16 +483,6 @@ export class DahuaBridgeSurveillanceTileCard
               <div class="tile-topbar">
                 <div class="tile-title-banner">
                   <div class="tile-name">${title}</div>
-                </div>
-                <div class="tile-indicators">
-                  ${vto.bridgeRecordingActive
-                    ? html`<span class="recording-dot" title="Recording" aria-label="Recording"></span>`
-                    : nothing}
-                  <span
-                    class="status-dot ${vto.online ? "" : "critical"}"
-                    title=${vto.online ? "Online" : "Offline"}
-                    aria-label=${vto.online ? "Online" : "Offline"}
-                  ></span>
                 </div>
               </div>
               <div class="media-overlay">

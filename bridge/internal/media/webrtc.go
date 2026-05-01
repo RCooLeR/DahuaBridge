@@ -283,7 +283,19 @@ func newPeerConnection(iceServers []WebRTCICEServer) (*webrtc.PeerConnection, we
 }
 
 func (s *webrtcSession) startFFmpeg(videoPort int, audioPort int, conns ...*net.UDPConn) (*exec.Cmd, error) {
-	attempts := buildFFmpegStartAttempts(s.parent.cfg)
+	type webrtcFFmpegAttempt struct {
+		ffmpegStartAttempt
+		includeAudio bool
+	}
+
+	baseAttempts := buildFFmpegStartAttempts(s.parent.cfg)
+	attempts := make([]webrtcFFmpegAttempt, 0, len(baseAttempts)+1)
+	for _, attempt := range baseAttempts {
+		attempts = append(attempts, webrtcFFmpegAttempt{
+			ffmpegStartAttempt: attempt,
+			includeAudio:       true,
+		})
+	}
 	probeWindow := 1500 * time.Millisecond
 	if s.parent.cfg.StartTimeout > 0 && s.parent.cfg.StartTimeout < probeWindow {
 		probeWindow = s.parent.cfg.StartTimeout
@@ -300,9 +312,10 @@ func (s *webrtcSession) startFFmpeg(videoPort int, audioPort int, conns ...*net.
 				Msg("starting webrtc fallback attempt")
 		}
 
-		args := s.buildFFmpegArgs(videoPort, audioPort, attempt)
+		args := s.buildFFmpegArgs(videoPort, audioPort, attempt.ffmpegStartAttempt, attempt.includeAudio)
 		s.logger.Debug().
 			Bool("hwaccel", attempt.useHWAccel).
+			Bool("include_audio", attempt.includeAudio).
 			Str("input_preset", attempt.inputPreset).
 			Strs("ffmpeg_args", redactFFmpegArgs(args)).
 			Msg("starting webrtc ffmpeg")
@@ -348,9 +361,22 @@ func (s *webrtcSession) startFFmpeg(videoPort int, audioPort int, conns ...*net.
 			if stderrText != "" {
 				s.logger.Debug().
 					Bool("hwaccel", attempt.useHWAccel).
+					Bool("include_audio", attempt.includeAudio).
 					Str("input_preset", attempt.inputPreset).
 					Str("ffmpeg_stderr", stderrText).
 					Msg("webrtc ffmpeg stderr")
+			}
+			if attempt.includeAudio && isOptionalAudioOutputFailure(stderrText) {
+				retryAttempt := webrtcFFmpegAttempt{
+					ffmpegStartAttempt: attempt.ffmpegStartAttempt,
+					includeAudio:       false,
+				}
+				attempts = append(attempts[:index+1], append([]webrtcFFmpegAttempt{retryAttempt}, attempts[index+1:]...)...)
+				s.logger.Info().
+					Bool("hwaccel", attempt.useHWAccel).
+					Str("input_preset", attempt.inputPreset).
+					Msg("retrying webrtc ffmpeg without audio output")
+				continue
 			}
 			if index < len(attempts)-1 {
 				attemptErr := err
@@ -362,6 +388,7 @@ func (s *webrtcSession) startFFmpeg(videoPort int, audioPort int, conns ...*net.
 				}
 				s.logger.Warn().
 					Bool("hwaccel", attempt.useHWAccel).
+					Bool("include_audio", attempt.includeAudio).
 					Str("input_preset", attempt.inputPreset).
 					Err(attemptErr).
 					Msg("webrtc ffmpeg attempt failed")
@@ -378,7 +405,7 @@ func (s *webrtcSession) startFFmpeg(videoPort int, audioPort int, conns ...*net.
 			}
 			return nil, errors.New("webrtc ffmpeg exited before producing media")
 		case <-timer.C:
-			go s.waitForFFmpeg(cmd, waitDone, stderrDone, attempt, conns...)
+			go s.waitForFFmpeg(cmd, waitDone, stderrDone, attempt.ffmpegStartAttempt, conns...)
 			return cmd, nil
 		}
 	}
@@ -386,7 +413,7 @@ func (s *webrtcSession) startFFmpeg(videoPort int, audioPort int, conns ...*net.
 	return nil, errors.New("failed to start webrtc ffmpeg")
 }
 
-func (s *webrtcSession) buildFFmpegArgs(videoPort int, audioPort int, attempt ffmpegStartAttempt) []string {
+func (s *webrtcSession) buildFFmpegArgs(videoPort int, audioPort int, attempt ffmpegStartAttempt, includeAudio bool) []string {
 	frameRate := s.parent.cfg.FrameRate
 	if s.profile.FrameRate > 0 {
 		frameRate = s.profile.FrameRate
@@ -411,17 +438,19 @@ func (s *webrtcSession) buildFFmpegArgs(videoPort int, audioPort int, attempt ff
 		"-f", "rtp",
 		fmt.Sprintf("rtp://127.0.0.1:%d?pkt_size=1200", videoPort),
 	)
-	args = append(args,
-		"-map", "0:a:0?",
-		"-vn",
-		"-c:a", "libopus",
-		"-ac", "2",
-		"-ar", "48000",
-		"-application", "lowdelay",
-		"-frame_duration", "20",
-		"-f", "rtp",
-		fmt.Sprintf("rtp://127.0.0.1:%d?pkt_size=1200", audioPort),
-	)
+	if includeAudio {
+		args = append(args,
+			"-map", "0:a:0?",
+			"-vn",
+			"-c:a", "libopus",
+			"-ac", "2",
+			"-ar", "48000",
+			"-application", "lowdelay",
+			"-frame_duration", "20",
+			"-f", "rtp",
+			fmt.Sprintf("rtp://127.0.0.1:%d?pkt_size=1200", audioPort),
+		)
+	}
 	return args
 }
 

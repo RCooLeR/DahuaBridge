@@ -50,8 +50,9 @@ media:
   idle_timeout: 30s
   # Maximum time to wait for the first frame or initial playlist/segment generation.
   start_timeout: 15s
-  # Maximum number of active bridge media workers/sessions. Raise carefully because each worker consumes CPU/RAM.
-  max_workers: 14
+  # Maximum number of active bridge media workers/sessions. The default leaves room for roughly 24 live channels
+  # plus a small amount of playback/WebRTC overhead on the same bridge, but CPU capacity still matters.
+  max_workers: 32
   # Default output frame rate for bridge-hosted main-stream media transcodes such as quality/default.
   frame_rate: 5
   # Output frame rate for the bridge "stable" profile.
