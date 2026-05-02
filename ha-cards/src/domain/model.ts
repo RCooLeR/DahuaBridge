@@ -24,6 +24,7 @@ import type {
 } from "./archive";
 import {
   buildTodayEventHeaderMetrics,
+  findPanelCameraEventSummary,
   type PanelTodayEventSummaryModel,
 } from "./event-summary";
 import type {
@@ -109,6 +110,9 @@ export interface CameraViewModel {
   directIPCConfiguredIP: string | null;
   directIPCIP: string | null;
   directIPCModel: string | null;
+  eventCount24h: number;
+  humanCount24h: number;
+  vehicleCount24h: number;
 }
 
 export interface CameraAuxTargetViewModel {
@@ -384,11 +388,12 @@ export function buildPanelModel(
 ): PanelModel {
   const browserBridgeUrl = normalizeBrowserBridgeUrl(config.browser_bridge_url);
   const topology = discoverBridgeTopology(hass, registrySnapshot);
+  const activeEventSummary = todayEventSummary ?? null;
   const cameras = topology.cameras
-    .map((camera) => buildCameraViewModel(camera, browserBridgeUrl))
+    .map((camera) => buildCameraViewModel(camera, browserBridgeUrl, activeEventSummary))
     .sort(compareCameraViewModels);
   const nvrs = topology.nvrs
-    .map((nvr) => buildNvrViewModel(nvr, browserBridgeUrl))
+    .map((nvr) => buildNvrViewModel(nvr, browserBridgeUrl, activeEventSummary))
     .sort((left, right) => left.label.localeCompare(right.label));
   const vtos = buildVtoViewModels(hass, topology.vtos, config.vto, browserBridgeUrl);
   const vto = vtos[0];
@@ -415,7 +420,7 @@ export function buildPanelModel(
       tone: onlineCount > 0 ? "success" : "critical",
     },
   ];
-  const eventHeaderMetrics = buildTodayEventHeaderMetrics(todayEventSummary ?? null);
+  const eventHeaderMetrics = buildTodayEventHeaderMetrics(activeEventSummary);
   if (eventHeaderMetrics) {
     headerMetrics.push(...eventHeaderMetrics);
   } else {
@@ -510,11 +515,17 @@ export function buildPanelModel(
 function buildCameraViewModel(
   camera: CameraDeviceModel,
   browserBridgeUrl: string | null,
+  todayEventSummary: PanelTodayEventSummaryModel | null,
 ): CameraViewModel {
   const aux = buildCameraAuxViewModel(camera.capabilities.aux ?? null, browserBridgeUrl);
   const recording = buildCameraRecordingViewModel(
     camera.capabilities.recording ?? null,
     browserBridgeUrl,
+  );
+  const eventSummary = findPanelCameraEventSummary(
+    todayEventSummary,
+    camera.rootDeviceId,
+    camera.kind === "nvr_channel" ? camera.channelNumber : null,
   );
   return {
     type: "camera",
@@ -586,6 +597,9 @@ function buildCameraViewModel(
     directIPCConfiguredIP: camera.diagnostics.directIPCConfiguredIP,
     directIPCIP: camera.diagnostics.directIPCIP,
     directIPCModel: camera.diagnostics.directIPCModel,
+    eventCount24h: eventSummary?.totalCount ?? 0,
+    humanCount24h: eventSummary?.humanCount ?? 0,
+    vehicleCount24h: eventSummary?.vehicleCount ?? 0,
   };
 }
 
@@ -754,12 +768,13 @@ function streamProfileSortRank(key: string): number {
 function buildNvrViewModel(
   nvr: DeviceNvrModel,
   browserBridgeUrl: string | null,
+  todayEventSummary: PanelTodayEventSummaryModel | null,
 ): NvrViewModel {
   const usedBytesTotal = sumNullable(nvr.drives.map((drive) => drive.usedBytes));
   const rooms = nvr.roomGroups.map((roomGroup) => ({
     label: roomGroup.label,
     channels: roomGroup.channels
-      .map((channel) => buildCameraViewModel(channel, browserBridgeUrl))
+      .map((channel) => buildCameraViewModel(channel, browserBridgeUrl, todayEventSummary))
       .sort(compareCameraViewModels),
   }));
 

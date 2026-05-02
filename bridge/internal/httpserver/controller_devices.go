@@ -19,6 +19,10 @@ import (
 	"github.com/go-chi/chi/v5"
 )
 
+type archiveClipTracker interface {
+	TrackNVRArchiveClip(context.Context, string, dahua.NVRPlaybackSessionRequest, mediaapi.ClipInfo) error
+}
+
 func (c *controller) registerDeviceRoutes(router chi.Router) {
 	router.Get("/api/v1/devices", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, c.probes.List())
@@ -220,6 +224,12 @@ func (c *controller) registerNVRRoutes(router chi.Router) {
 		if err != nil {
 			writeClassifiedActionError(w, err, http.StatusBadGateway)
 			return
+		}
+		if tracker, ok := c.snapshots.(archiveClipTracker); ok {
+			if err := tracker.TrackNVRArchiveClip(r.Context(), deviceID, playbackRequest, clip); err != nil {
+				writeClassifiedActionError(w, err, http.StatusBadGateway)
+				return
+			}
 		}
 
 		writeJSON(w, http.StatusOK, map[string]any{
@@ -516,7 +526,13 @@ func (c *controller) startDirectNVRRecordingExport(
 	}
 	defer download.Body.Close()
 
-	tempFile, err := os.CreateTemp("", "dahuabridge-recording-*.dav")
+	tempDir := strings.TrimSpace(c.archiveTempDir)
+	if tempDir != "" {
+		if err := os.MkdirAll(tempDir, 0o755); err != nil {
+			return mediaapi.ClipInfo{}, fmt.Errorf("create archive temporary directory: %w", err)
+		}
+	}
+	tempFile, err := os.CreateTemp(tempDir, "dahuabridge-recording-*.dav")
 	if err != nil {
 		return mediaapi.ClipInfo{}, fmt.Errorf("create temporary recording file: %w", err)
 	}
@@ -556,6 +572,11 @@ func (c *controller) startDirectNVRRecordingExport(
 	})
 	if err != nil {
 		return mediaapi.ClipInfo{}, err
+	}
+	if tracker, ok := c.snapshots.(archiveClipTracker); ok {
+		if err := tracker.TrackNVRArchiveClip(ctx, deviceID, request, clip); err != nil {
+			return mediaapi.ClipInfo{}, err
+		}
 	}
 	cleanupTemp = false
 	return clip, nil

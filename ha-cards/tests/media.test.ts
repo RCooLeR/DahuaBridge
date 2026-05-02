@@ -122,6 +122,9 @@ function buildCamera(overrides: Partial<CameraViewModel> = {}): CameraViewModel 
     directIPCConfiguredIP: null,
     directIPCIP: null,
     directIPCModel: null,
+    eventCount24h: 0,
+    humanCount24h: 0,
+    vehicleCount24h: 0,
     ...overrides,
   };
 }

@@ -142,6 +142,7 @@ Operational notes:
 - finite archive playback now enforces the requested playback duration across HLS, MJPEG, WebRTC, and clip export
 - identical recorder archive searches are cached briefly and coalesced in-flight to reduce repeated recorder RPC/CGI searches
 - archive export is the supported bridge path for recorder footage download
+- when `file_path` is known, archive export can transcode directly from the recorder `.dav` file instead of going through archive RTSP playback
 - SMD and IVS event-backed archive items are supported through the same playback-session and bridge MP4 export path as regular recorder footage
 - live validation on May 2, 2026 confirmed channel 1 human/vehicle SMD archive lookups, 11 concurrent live HLS channel starts, near-end 24/7 playback EOF handling, and successful SMD MP4 export
 

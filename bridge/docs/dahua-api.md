@@ -501,7 +501,13 @@ Live result:
 
 ### 4.7 NVR Archive Playback And MP4 Export
 
-Native NVR archive items are `.dav` files. On the verified NVR, direct generic HTTP file download was not reliable, so the bridge downloads archive footage by playing the archive stream and capturing it to MP4 with FFmpeg.
+Native NVR archive items are `.dav` files. On the verified NVR, the reliable recorder-file transport is the `FilePath` returned by archive search together with:
+
+```text
+GET /cgi-bin/RPC_Loadfile<escaped-file-path>
+```
+
+That path returns the real recorder file. The bridge still keeps RTSP playback sessions for timeline playback, seek, HLS, MJPEG, and WebRTC, but file-backed export/download should prefer `RPC_Loadfile` when a `FilePath` is known.
 
 Working playback RTSP shape:
 
@@ -512,9 +518,11 @@ rtsp://<nvr>:554/cam/realmonitor?channel=<1-based-channel>&subtype=<0-or-1>&star
 Bridge flow:
 
 1. `GET /api/v1/nvr/{deviceID}/recordings` finds native archive items.
-2. Native items expose `export_url`, not `download_url`.
-3. `POST /api/v1/nvr/{deviceID}/recordings/export` creates an archive playback session.
-4. The media layer records the playback stream to a bridge-owned MP4 clip.
+2. Native non-event items can expose:
+   - `download_url` for direct raw `.dav` transfer through the bridge
+   - `export_url` for bridge-owned MP4 export
+3. When `file_path` is present, `POST /api/v1/nvr/{deviceID}/recordings/export` downloads the recorder file first, then transcodes it to a bridge-owned MP4 clip.
+4. When `file_path` is absent, the bridge falls back to the archive playback-session flow.
 5. Clients poll the returned clip `self_url` until `status=completed`, then open `download_url`.
 
 Live validation notes on the verified bridge/NVR pair:
@@ -523,9 +531,15 @@ Live validation notes on the verified bridge/NVR pair:
 - archive clip export now completes cleanly instead of hanging on FFmpeg stdin or stderr backpressure
 - channel 1 human and vehicle SMD archive lookups now resolve through the bridge again
 - SMD event footage on channel 1 exported successfully through the bridge MP4 flow
+- direct recorder-file retrieval through `RPC_Loadfile + FilePath` returned the expected full `.dav` payload during live testing
 - concurrent live HLS startup across all 11 tested NVR channels returned `200` for every playlist request
 
-For completeness, observed recorder `RPC_Loadfile` responses can be multipart: a small JSON status part followed by an `application/http` part carrying the file payload. The bridge does not depend on that transport for SMD or IVS playback/export workflows.
+Important distinction:
+
+- `RPC3_Loadfile` with `StorageAssistant.getIFrameData` produced a valid Dahua payload during testing, but only a single video frame.
+- `RPC_Loadfile + FilePath` returned the full recorder file.
+
+For completeness, observed recorder `RPC_Loadfile` responses can be multipart: a small JSON status part followed by an `application/http` part carrying the file payload.
 
 The export endpoint accepts query parameters or JSON body fields:
 

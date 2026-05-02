@@ -100,9 +100,9 @@ That final result can include:
 - native NVR archive items
 - bridge MP4 clip items
 
-Native NVR archive items are playable through archive playback sessions. Bridge-owned MP4 clips can include direct download URLs. Native NVR archive items do not expose direct download URLs because the generic Dahua HTTP download path was not reliable on tested firmware.
+Native NVR archive items are playable through archive playback sessions. Bridge-owned MP4 clips can include direct download URLs. Native NVR archive items are file-backed when the recorder returns `file_path`. For those items, the bridge can retrieve the real `.dav` file through `RPC_Loadfile`, and non-event items can expose direct raw `download_url` values through the bridge.
 
-Native NVR archive items now expose `export_url`. Calling that URL with `POST` makes the bridge create an archive playback session, capture the playback stream with FFmpeg, and save the result as a bridge-owned MP4 clip. Clients should poll the returned clip `self_url` until the clip is `completed`, then open its `download_url`.
+Native NVR archive items expose `export_url`. Calling that URL with `POST` makes the bridge export recorder footage as a bridge-owned MP4 clip. When `file_path` is present, the bridge downloads the recorder file first and transcodes from that file. When `file_path` is absent, the bridge falls back to the archive playback-session flow. Clients should poll the returned clip `self_url` until the clip is `completed`, then open its `download_url`.
 
 The bridge also caches identical archive-search queries briefly and coalesces concurrent misses so repeated UI polling does not issue duplicate recorder searches.
 
@@ -112,7 +112,7 @@ For event-backed archive items such as SMD and IVS hits, the supported bridge wo
 2. use the returned `export_url` or playback session flow
 3. record the playback stream into a bridge-owned MP4 clip when a file export is needed
 
-Direct recorder file transfer is not required for this workflow.
+Direct recorder file transfer is used when the event result resolves to a recorder `file_path`. Raw direct-download URLs are intentionally not exposed for event items.
 
 ## Playback Sessions
 

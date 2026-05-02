@@ -3,6 +3,7 @@ package app
 import (
 	"testing"
 
+	"RCooLeR/DahuaBridge/internal/config"
 	"RCooLeR/DahuaBridge/internal/dahua"
 	"RCooLeR/DahuaBridge/internal/streams"
 )
@@ -32,5 +33,17 @@ func TestBuildMediaRecordingsURLUsesStreamIDForStandaloneStreams(t *testing.T) {
 	want := "/api/v1/media/recordings?stream_id=front_vto"
 	if got != want {
 		t.Fatalf("unexpected recordings url %q", got)
+	}
+}
+
+func TestBuildPlaybackRecordingDownloadURLUsesCGIBinPathAndEscapesAtSign(t *testing.T) {
+	got := buildPlaybackRecordingDownloadURL(config.DeviceConfig{
+		BaseURL:  "http://192.168.150.10",
+		Username: "assistant",
+		Password: "veTsiaDa",
+	}, "/mnt/dvr/2026-05-02/0/dav/01/1/0/627506/01.30.00-02.00.00[R][0@0][0].dav", true)
+	want := "http://assistant:veTsiaDa@192.168.150.10/cgi-bin/RPC_Loadfile/mnt/dvr/2026-05-02/0/dav/01/1/0/627506/01.30.00-02.00.00%5BR%5D%5B0%400%5D%5B0%5D.dav"
+	if got != want {
+		t.Fatalf("unexpected playback download url %q", got)
 	}
 }

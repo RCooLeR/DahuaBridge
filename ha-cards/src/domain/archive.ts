@@ -74,12 +74,21 @@ export interface CameraArchiveCapabilities {
 }
 
 export interface NvrArchiveRecordingModel {
+  id?: string | null;
+  recordKind?: string | null;
   source: string | null;
   channel: number;
   startTime: string;
   endTime: string;
   downloadUrl: string | null;
   exportUrl: string | null;
+  assetStatus?: string | null;
+  assetClipId?: string | null;
+  assetPlaybackUrl?: string | null;
+  assetDownloadUrl?: string | null;
+  assetSelfUrl?: string | null;
+  assetStopUrl?: string | null;
+  assetError?: string | null;
   filePath: string | null;
   type: string | null;
   videoStream: string | null;

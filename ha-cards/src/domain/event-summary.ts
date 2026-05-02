@@ -21,8 +21,9 @@ export interface NvrEventSummaryModel {
   channels: NvrEventChannelSummaryModel[];
 }
 
-export interface PanelTodayEventSummaryModel {
-  date: string;
+export interface PanelCameraEventSummaryModel {
+  rootDeviceId: string;
+  channel: number;
   totalCount: number;
   humanCount: number;
   vehicleCount: number;
@@ -30,8 +31,20 @@ export interface PanelTodayEventSummaryModel {
   ivsCount: number;
 }
 
+export interface PanelTodayEventSummaryModel {
+  windowStart: string;
+  windowEnd: string;
+  totalCount: number;
+  humanCount: number;
+  vehicleCount: number;
+  animalCount: number;
+  ivsCount: number;
+  cameras: PanelCameraEventSummaryModel[];
+}
+
 export function summarizePanelTodayEvents(
-  date: string,
+  windowStart: string,
+  windowEnd: string,
   summaries: readonly NvrEventSummaryModel[],
 ): PanelTodayEventSummaryModel {
   let totalCount = 0;
@@ -39,42 +52,53 @@ export function summarizePanelTodayEvents(
   let vehicleCount = 0;
   let animalCount = 0;
   let ivsCount = 0;
+  const cameras = new Map<string, PanelCameraEventSummaryModel>();
 
   for (const summary of summaries) {
     totalCount += summary.totalCount;
     for (const item of summary.items) {
-      switch (normalizeSummaryCode(item.code)) {
-        case "smdtypehuman":
-        case "human":
-        case "smartmotionhuman":
-          humanCount += item.count;
-          break;
-        case "smdtypevehicle":
-        case "vehicle":
-        case "smartmotionvehicle":
-          vehicleCount += item.count;
-          break;
-        case "smdtypeanimal":
-        case "animal":
-          animalCount += item.count;
-          break;
-        case "crosslinedetection":
-        case "crossregiondetection":
-        case "leftdetection":
-        case "movedetection":
-          ivsCount += item.count;
-          break;
+      const counts = summaryCategoryCounts(item.code, item.count);
+      humanCount += counts.humanCount;
+      vehicleCount += counts.vehicleCount;
+      animalCount += counts.animalCount;
+      ivsCount += counts.ivsCount;
+    }
+
+    for (const channel of summary.channels) {
+      const key = `${summary.deviceId}:${channel.channel}`;
+      const camera = cameras.get(key) ?? {
+        rootDeviceId: summary.deviceId,
+        channel: channel.channel,
+        totalCount: 0,
+        humanCount: 0,
+        vehicleCount: 0,
+        animalCount: 0,
+        ivsCount: 0,
+      };
+      camera.totalCount += channel.totalCount;
+      for (const item of channel.items) {
+        const counts = summaryCategoryCounts(item.code, item.count);
+        camera.humanCount += counts.humanCount;
+        camera.vehicleCount += counts.vehicleCount;
+        camera.animalCount += counts.animalCount;
+        camera.ivsCount += counts.ivsCount;
       }
+      cameras.set(key, camera);
     }
   }
 
   return {
-    date,
+    windowStart,
+    windowEnd,
     totalCount,
     humanCount,
     vehicleCount,
     animalCount,
     ivsCount,
+    cameras: [...cameras.values()].sort((left, right) => (
+      left.rootDeviceId.localeCompare(right.rootDeviceId) ||
+      left.channel - right.channel
+    )),
   };
 }
 
@@ -87,7 +111,7 @@ export function buildTodayEventHeaderMetrics(
 
   return [
     {
-      label: "Events Today",
+      label: "Events 24H",
       value: String(summary.totalCount),
       tone: summary.totalCount > 0 ? "warning" : "neutral",
     },
@@ -109,6 +133,46 @@ export function buildTodayEventHeaderMetrics(
   ];
 }
 
+export function findPanelCameraEventSummary(
+  summary: PanelTodayEventSummaryModel | null | undefined,
+  rootDeviceId: string,
+  channel: number | null,
+): PanelCameraEventSummaryModel | null {
+  if (!summary || !rootDeviceId.trim() || !channel || channel <= 0) {
+    return null;
+  }
+
+  return summary.cameras.find(
+    (item) => item.rootDeviceId === rootDeviceId && item.channel === channel,
+  ) ?? null;
+}
+
 function normalizeSummaryCode(value: string): string {
   return value.trim().toLowerCase();
+}
+
+function summaryCategoryCounts(
+  code: string,
+  count: number,
+): Pick<PanelCameraEventSummaryModel, "humanCount" | "vehicleCount" | "animalCount" | "ivsCount"> {
+  switch (normalizeSummaryCode(code)) {
+    case "smdtypehuman":
+    case "human":
+    case "smartmotionhuman":
+      return { humanCount: count, vehicleCount: 0, animalCount: 0, ivsCount: 0 };
+    case "smdtypevehicle":
+    case "vehicle":
+    case "smartmotionvehicle":
+      return { humanCount: 0, vehicleCount: count, animalCount: 0, ivsCount: 0 };
+    case "smdtypeanimal":
+    case "animal":
+      return { humanCount: 0, vehicleCount: 0, animalCount: count, ivsCount: 0 };
+    case "crosslinedetection":
+    case "crossregiondetection":
+    case "leftdetection":
+    case "movedetection":
+      return { humanCount: 0, vehicleCount: 0, animalCount: 0, ivsCount: count };
+    default:
+      return { humanCount: 0, vehicleCount: 0, animalCount: 0, ivsCount: 0 };
+  }
 }

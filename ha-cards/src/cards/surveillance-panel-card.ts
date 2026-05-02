@@ -185,7 +185,7 @@ export class DahuaBridgeSurveillancePanelCard
   private _todayEventSummaryAbort?: AbortController;
   private _todayEventSummaryRequestVersion = 0;
   private _todayEventSummaryRefreshedAt = 0;
-  private _todayEventSummaryDate = "";
+  private _todayEventSummaryRefreshTimer: number | null = null;
 
   static async getConfigElement(): Promise<HTMLElement> {
     return document.createElement("dahuabridge-surveillance-panel-editor");
@@ -366,7 +366,6 @@ export class DahuaBridgeSurveillancePanelCard
     this._mp4Page = 0;
     this._todayEventSummary = null;
     this._todayEventSummaryRefreshedAt = 0;
-    this._todayEventSummaryDate = "";
     this._selectedCameraStreamProfile = null;
     this._selectedCameraStreamSource = null;
     this._selectedPlaybackStreamProfile = null;
@@ -1391,8 +1390,8 @@ export class DahuaBridgeSurveillancePanelCard
       onLaunchPlayback: (recording) => {
         void this.launchPlaybackSession(model, recording);
       },
-      onDownloadRecording: (recording) => {
-        void this.downloadArchiveRecording(recording);
+      onDownloadRecording: (recording, format) => {
+        void this.downloadArchiveRecording(recording, format);
       },
       renderIcon: (icon) => this.renderIcon(icon),
     });
@@ -1431,8 +1430,8 @@ export class DahuaBridgeSurveillancePanelCard
       onLaunchPlayback: (recording) => {
         void this.launchPlaybackSession(model, recording);
       },
-      onDownloadRecording: (recording) => {
-        void this.downloadArchiveRecording(recording);
+      onDownloadRecording: (recording, format) => {
+        void this.downloadArchiveRecording(recording, format);
       },
       renderIcon: (icon) => this.renderIcon(icon),
     });
@@ -2214,11 +2213,13 @@ export class DahuaBridgeSurveillancePanelCard
       return false;
     }
 
-    const today = todayDateInputValue();
-    if (this._todayEventSummaryDate !== today) {
+    if (changedProperties.has("_config")) {
       return true;
     }
-    if ((changedProperties.has("_config") || changedProperties.has("hass")) && !this._todayEventSummary) {
+    if (changedProperties.has("hass") && !this._todayEventSummary) {
+      return true;
+    }
+    if (!this._todayEventSummary) {
       return true;
     }
     if (!changedProperties.has("_bridgeEvents")) {
@@ -2234,7 +2235,6 @@ export class DahuaBridgeSurveillancePanelCard
       return;
     }
 
-    const today = todayDateInputValue();
     const baseModel = buildPanelModel(
       this.hass,
       this._config,
@@ -2247,7 +2247,6 @@ export class DahuaBridgeSurveillancePanelCard
     if (baseModel.nvrs.length === 0) {
       this.cancelTodayEventSummaryRefresh();
       this._todayEventSummary = null;
-      this._todayEventSummaryDate = today;
       this._todayEventSummaryRefreshedAt = Date.now();
       return;
     }
@@ -2256,7 +2255,8 @@ export class DahuaBridgeSurveillancePanelCard
     const controller = new AbortController();
     this._todayEventSummaryAbort = controller;
     const requestVersion = ++this._todayEventSummaryRequestVersion;
-    const { startTime, endTime } = dateRangeForArchiveDay(today);
+    const endTime = new Date();
+    const startTime = new Date(endTime.getTime() - (24 * 60 * 60 * 1000));
 
     try {
       const summaries = await Promise.all(
@@ -2269,8 +2269,8 @@ export class DahuaBridgeSurveillancePanelCard
             fetchNvrEventSummary(
               summaryUrl,
               {
-                startTime,
-                endTime,
+                startTime: startTime.toISOString(),
+                endTime: endTime.toISOString(),
                 eventCode: "all",
               },
               controller.signal,
@@ -2285,8 +2285,11 @@ export class DahuaBridgeSurveillancePanelCard
       ) {
         return;
       }
-      this._todayEventSummary = summarizePanelTodayEvents(today, summaries);
-      this._todayEventSummaryDate = today;
+      this._todayEventSummary = summarizePanelTodayEvents(
+        startTime.toISOString(),
+        endTime.toISOString(),
+        summaries,
+      );
     } catch {
       if (
         controller.signal.aborted ||
@@ -2302,6 +2305,10 @@ export class DahuaBridgeSurveillancePanelCard
       ) {
         this._todayEventSummaryAbort = undefined;
         this._todayEventSummaryRefreshedAt = Date.now();
+        this._todayEventSummaryRefreshTimer = window.setTimeout(() => {
+          this._todayEventSummaryRefreshTimer = null;
+          void this.refreshTodayEventSummary();
+        }, 60_000);
       }
     }
   }
@@ -2309,6 +2316,10 @@ export class DahuaBridgeSurveillancePanelCard
   private cancelTodayEventSummaryRefresh(): void {
     this._todayEventSummaryAbort?.abort();
     this._todayEventSummaryAbort = undefined;
+    if (this._todayEventSummaryRefreshTimer !== null) {
+      window.clearTimeout(this._todayEventSummaryRefreshTimer);
+      this._todayEventSummaryRefreshTimer = null;
+    }
   }
 
   private selectedPlaybackForCamera(camera: CameraViewModel): SelectedPlaybackState | null {
@@ -2339,11 +2350,17 @@ export class DahuaBridgeSurveillancePanelCard
     return resolveSelectedNvrArchiveCamera(model, this._nvrArchiveChannelNumber).camera;
   }
 
-  private playbackBusyKey(recording: { channel: number; startTime: string; endTime: string }): string {
+  private playbackBusyKey(recording: { id?: string | null; channel: number; startTime: string; endTime: string }): string {
+    if (recording.id) {
+      return `playback:${recording.id}`;
+    }
     return `playback:${recording.channel}:${recording.startTime}:${recording.endTime}`;
   }
 
-  private archiveDownloadBusyKey(recording: { channel: number; startTime: string; endTime: string }): string {
+  private archiveDownloadBusyKey(recording: { id?: string | null; channel: number; startTime: string; endTime: string }): string {
+    if (recording.id) {
+      return `archive-download:${recording.id}`;
+    }
     return `archive-download:${recording.channel}:${recording.startTime}:${recording.endTime}`;
   }
 
@@ -2359,6 +2376,11 @@ export class DahuaBridgeSurveillancePanelCard
     model: PanelModel,
     recording: NvrArchiveRecordingModel,
   ): Promise<void> {
+    if (recording.assetPlaybackUrl) {
+      const archiveSource = this.resolveArchiveSource(model);
+      this.playIndexedArchiveRecording(model, recording, archiveSource?.deviceId ?? null, archiveSource?.rootDeviceId ?? null);
+      return;
+    }
     if (recording.filePath && recording.exportUrl) {
       await this.launchArchiveClipPlayback(model, recording);
       return;
@@ -2464,6 +2486,11 @@ export class DahuaBridgeSurveillancePanelCard
     model: PanelModel,
     recording: NvrArchiveRecordingModel,
   ): Promise<void> {
+    if (recording.assetPlaybackUrl) {
+      const archiveSource = this.resolveArchiveSource(model);
+      this.playIndexedArchiveRecording(model, recording, archiveSource?.deviceId ?? null, archiveSource?.rootDeviceId ?? null);
+      return;
+    }
     const archiveSource = this.resolveArchiveSource(model);
     const browserBridgeUrl = archiveSource?.bridgeBaseUrl ?? null;
     if (!archiveSource || !recording.exportUrl) {
@@ -2654,10 +2681,16 @@ export class DahuaBridgeSurveillancePanelCard
   }
 
   private isPlaybackActive(recording: NvrArchiveRecordingModel): boolean {
+    if (recording.assetClipId && this._selectedBridgeRecordingPlayback?.recording.id === recording.assetClipId) {
+      return true;
+    }
     if (!this._selectedPlayback) {
       return false;
     }
     const active = this._selectedPlayback.recording;
+    if (recording.id && active.id && recording.id === active.id) {
+      return true;
+    }
     return (
       active.channel === recording.channel &&
       active.startTime === recording.startTime &&
@@ -2669,8 +2702,30 @@ export class DahuaBridgeSurveillancePanelCard
     return this._selectedBridgeRecordingPlayback?.recording.id === recording.id;
   }
 
-  private async downloadArchiveRecording(recording: NvrArchiveRecordingModel): Promise<void> {
-    if (recording.downloadUrl) {
+  private async downloadArchiveRecording(
+    recording: NvrArchiveRecordingModel,
+    format: "asset" | "raw" = "asset",
+  ): Promise<void> {
+    if (format === "raw" && recording.downloadUrl) {
+      this.logMedia("card panel archive download open", {
+        ...this.archiveRecordingLogContext(recording),
+        url: redactUrlForLog(recording.downloadUrl),
+      });
+      openExternalUrl(recording.downloadUrl);
+      return;
+    }
+
+    if (recording.assetDownloadUrl) {
+      this.logMedia("card panel archive asset download open", {
+        ...this.archiveRecordingLogContext(recording),
+        clip_id: recording.assetClipId,
+        url: redactUrlForLog(recording.assetDownloadUrl),
+      });
+      openExternalUrl(recording.assetDownloadUrl);
+      return;
+    }
+
+    if (recording.downloadUrl && !recording.exportUrl) {
       this.logMedia("card panel archive download open", {
         ...this.archiveRecordingLogContext(recording),
         url: redactUrlForLog(recording.downloadUrl),
@@ -2743,7 +2798,11 @@ export class DahuaBridgeSurveillancePanelCard
       item.endTime === recording.endTime
         ? {
             ...item,
-            downloadUrl: clip.downloadUrl,
+            assetClipId: clip.id,
+            assetStatus: clip.status,
+            assetPlaybackUrl: clip.playbackUrl,
+            assetDownloadUrl: clip.downloadUrl,
+            assetSelfUrl: clip.selfUrl,
           }
         : item,
     );
@@ -2762,10 +2821,64 @@ export class DahuaBridgeSurveillancePanelCard
         ...this._selectedPlayback,
         recording: {
           ...this._selectedPlayback.recording,
-          downloadUrl: clip.downloadUrl,
+          assetClipId: clip.id,
+          assetStatus: clip.status,
+          assetPlaybackUrl: clip.playbackUrl,
+          assetDownloadUrl: clip.downloadUrl,
+          assetSelfUrl: clip.selfUrl,
         },
       };
     }
+  }
+
+  private playIndexedArchiveRecording(
+    model: PanelModel,
+    recording: NvrArchiveRecordingModel,
+    sourceDeviceId: string | null,
+    rootDeviceId: string | null,
+  ): void {
+    if (!recording.assetPlaybackUrl || !recording.assetClipId) {
+      return;
+    }
+    const archiveSource = this.resolveArchiveSource(model);
+    const recordingName = archiveSource
+      ? displayCameraLabel(archiveSource)
+      : `Archive Channel ${recording.channel}`;
+    this._selectedPlayback = null;
+    this._selectedPlaybackStreamProfile = null;
+    this._selectedPlaybackStreamSource = null;
+    this._selectedBridgeRecordingPlayback = {
+      sourceDeviceId: sourceDeviceId ?? "",
+      recording: {
+        id: recording.assetClipId,
+        streamId: recording.assetClipId,
+        rootDeviceId,
+        sourceDeviceId,
+        deviceKind: "nvr_channel",
+        name: recordingName,
+        channel: recording.channel,
+        profile: "stable",
+        status: recording.assetStatus ?? "completed",
+        startedAt: recording.startTime,
+        endedAt: null,
+        sourceStartTime: recording.startTime,
+        sourceEndTime: recording.endTime,
+        durationMs: null,
+        bytes: null,
+        fileName: null,
+        playbackUrl: recording.assetPlaybackUrl ?? null,
+        downloadUrl: recording.assetDownloadUrl ?? null,
+        selfUrl: recording.assetSelfUrl ?? null,
+        stopUrl: recording.assetStopUrl ?? null,
+        error: recording.assetError ?? null,
+      },
+    };
+    this._selectedCameraAudioMuted = true;
+    this.logMedia("card panel indexed archive playback selected", {
+      ...this.archiveRecordingLogContext(recording),
+      clip_id: recording.assetClipId,
+      playback_url: redactUrlForLog(recording.assetPlaybackUrl),
+    });
   }
 
   private renderPlaybackSeekPanel(playback: SelectedPlaybackState): TemplateResult {
@@ -2861,10 +2974,13 @@ export class DahuaBridgeSurveillancePanelCard
 
   private archiveRecordingLogContext(recording: NvrArchiveRecordingModel): Record<string, unknown> {
     return {
+      recording_id: recording.id,
       channel: recording.channel,
       start_time: recording.startTime,
       end_time: recording.endTime,
       recording_type: recording.type ?? null,
+      asset_status: recording.assetStatus ?? null,
+      asset_clip_id: recording.assetClipId ?? null,
     };
   }
 

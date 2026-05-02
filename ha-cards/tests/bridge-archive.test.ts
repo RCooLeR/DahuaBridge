@@ -1,6 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { fetchArchiveRecordings, fetchBridgeRecordings } from "../src/ha/bridge-archive";
+import {
+  exportArchiveRecording,
+  fetchArchiveRecordings,
+  fetchBridgeRecordings,
+  waitForArchiveExportCompletion,
+} from "../src/ha/bridge-archive";
 
 describe("bridge archive", () => {
   afterEach(() => {
@@ -175,6 +180,61 @@ describe("bridge archive", () => {
     expect(result.items).toEqual([]);
   });
 
+  it("parses archive asset state fields", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        returned_count: 1,
+        items: [
+          {
+            id: "file_ready",
+            record_kind: "file",
+            source: "nvr",
+            channel: 1,
+            start_time: "2026-05-01 10:00:00",
+            end_time: "2026-05-01 10:00:20",
+            file_path: "/mnt/dvr/2026-05-01/1/10.00.00-10.00.20.dav",
+            asset_status: "ready",
+            asset_clip_id: "clip_ready",
+            asset_playback_url: "http://bridge.local:9205/api/v1/media/recordings/clip_ready/play",
+            asset_download_url: "http://bridge.local:9205/api/v1/media/recordings/clip_ready/download",
+            asset_self_url: "http://bridge.local:9205/api/v1/media/recordings/clip_ready",
+          },
+        ],
+      }),
+    } as Response);
+
+    Object.defineProperty(globalThis, "window", {
+      configurable: true,
+      value: {
+        location: {
+          origin: "https://ha.example.com",
+        },
+      },
+    });
+
+    const result = await fetchArchiveRecordings(
+      "/api/v1/nvr/west20_nvr/recordings",
+      {
+        channel: 1,
+        startTime: "2026-05-01T00:00:00Z",
+        endTime: "2026-05-02T00:00:00Z",
+        limit: 100,
+      },
+    );
+
+    expect(result.items[0]).toMatchObject({
+      id: "file_ready",
+      recordKind: "file",
+      assetStatus: "ready",
+      assetClipId: "clip_ready",
+      assetPlaybackUrl: "http://bridge.local:9205/api/v1/media/recordings/clip_ready/play",
+      assetDownloadUrl: "http://bridge.local:9205/api/v1/media/recordings/clip_ready/download",
+      assetSelfUrl: "http://bridge.local:9205/api/v1/media/recordings/clip_ready",
+    });
+  });
+
   it("parses bridge mp4 playback urls", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue({
       ok: true,
@@ -228,5 +288,56 @@ describe("bridge archive", () => {
       playbackUrl: "http://bridge.local:9205/api/v1/media/recordings/clip_test/play",
       downloadUrl: "http://bridge.local:9205/api/v1/media/recordings/clip_test/download",
     });
+  });
+
+  it("surfaces bridge export error payloads", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue({
+      ok: false,
+      status: 502,
+      headers: new Headers({
+        "content-type": "application/json",
+      }),
+      json: async () => ({
+        error: "start ffmpeg: executable file not found in $PATH",
+      }),
+    } as Response);
+
+    await expect(exportArchiveRecording("https://bridge.local/api/v1/nvr/west20_nvr/recordings/export"))
+      .rejects.toThrow("start ffmpeg: executable file not found in $PATH");
+  });
+
+  it("surfaces bridge export status error payloads", async () => {
+    vi.useFakeTimers();
+    Object.defineProperty(globalThis, "window", {
+      configurable: true,
+      value: {
+        setTimeout: globalThis.setTimeout.bind(globalThis),
+        clearTimeout: globalThis.clearTimeout.bind(globalThis),
+      },
+    });
+    vi.spyOn(globalThis, "fetch").mockResolvedValue({
+      ok: false,
+      status: 502,
+      headers: new Headers({
+        "content-type": "application/json",
+      }),
+      json: async () => ({
+        error: "clip storage path is not configured",
+      }),
+    } as Response);
+
+    const pending = waitForArchiveExportCompletion({
+      id: "clip_test",
+      status: "recording",
+      playbackUrl: null,
+      downloadUrl: null,
+      selfUrl: "https://bridge.local/api/v1/media/recordings/clip_test",
+      durationMs: 2000,
+      error: null,
+    });
+    const assertion = expect(pending).rejects.toThrow("clip storage path is not configured");
+    await vi.advanceTimersByTimeAsync(1500);
+    await assertion;
+    vi.useRealTimers();
   });
 });

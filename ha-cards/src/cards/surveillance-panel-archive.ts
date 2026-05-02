@@ -31,7 +31,7 @@ interface RenderArchiveRecordingsArgs {
   onSelectArchiveEventType: (eventCode: string) => void;
   onSelectArchivePage: (page: number) => void;
   onLaunchPlayback: (recording: NvrArchiveRecordingModel) => void;
-  onDownloadRecording: (recording: NvrArchiveRecordingModel) => void;
+  onDownloadRecording: (recording: NvrArchiveRecordingModel, format?: "asset" | "raw") => void;
   renderIcon: (icon: string) => TemplateResult;
 }
 
@@ -187,7 +187,7 @@ export function renderArchiveRecordings({
                           </span>
                         </span>
                         <span class="archive-entry-actions">
-                          ${playbackSupported
+                          ${playbackSupported || item.assetPlaybackUrl
                             ? renderControlButton(
                                 isPlaybackActive(item) ? "Playing" : "Play",
                                 isPlaybackActive(item)
@@ -203,11 +203,35 @@ export function renderArchiveRecordings({
                                 },
                               )
                             : null}
-                          ${item.downloadUrl || item.exportUrl
+                          ${item.assetDownloadUrl
                             ? renderControlButton(
-                                item.downloadUrl ? "Download" : "Export MP4",
+                                "MP4",
                                 "mdi:download",
-                                () => onDownloadRecording(item),
+                                () => onDownloadRecording(item, "asset"),
+                                renderIcon,
+                                {
+                                  compact: true,
+                                  disabled: isDownloadingRecording(item),
+                                },
+                              )
+                            : null}
+                          ${item.downloadUrl
+                            ? renderControlButton(
+                                "DAV",
+                                "mdi:file-download-outline",
+                                () => onDownloadRecording(item, "raw"),
+                                renderIcon,
+                                {
+                                  compact: true,
+                                  disabled: isDownloadingRecording(item),
+                                },
+                              )
+                            : null}
+                          ${!item.assetDownloadUrl && !item.downloadUrl && item.exportUrl
+                            ? renderControlButton(
+                                "Export MP4",
+                                "mdi:download",
+                                () => onDownloadRecording(item, "asset"),
                                 renderIcon,
                                 {
                                   compact: true,

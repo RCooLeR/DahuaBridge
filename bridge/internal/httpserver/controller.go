@@ -9,6 +9,7 @@ import (
 
 type controller struct {
 	cfg             config.HTTPConfig
+	archiveTempDir  string
 	metricsRegistry *metrics.Registry
 	probes          ProbeReader
 	snapshots       SnapshotReader
@@ -22,6 +23,7 @@ type controller struct {
 
 func newController(
 	cfg config.HTTPConfig,
+	archiveTempDir string,
 	metricsRegistry *metrics.Registry,
 	probes ProbeReader,
 	snapshots SnapshotReader,
@@ -34,6 +36,7 @@ func newController(
 ) *controller {
 	return &controller{
 		cfg:             cfg,
+		archiveTempDir:  archiveTempDir,
 		metricsRegistry: metricsRegistry,
 		probes:          probes,
 		snapshots:       snapshots,

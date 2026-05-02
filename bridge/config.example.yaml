@@ -65,12 +65,16 @@ media:
   threads: 1
   # Output width for bridge-hosted transcodes. 0 disables scaling. When non-zero, the bridge computes an even output height from the source resolution and preserves aspect ratio.
   scale_width: 960
+  # Directory for finished bridge MP4 clips. HDD or larger-capacity storage is usually fine here; prefer SSD only if clip
+  # export/playback latency matters more than capacity.
+  clip_path: /data/clips
   # Reader buffer size for MJPEG frame parsing. Increase only if you have unusually large bursts or jumbo ffmpeg output chunks.
   read_buffer_size: 1048576
   # HLS segment duration. Lower values reduce latency but create more segments and more ffmpeg churn.
   hls_segment_time: 2s
   # Number of HLS segments kept in the playlist.
   hls_list_size: 6
+  # HLS working directory. Prefer SSD, local NVMe, or tmpfs because this path sees frequent short-lived segment writes.
   hls_tmp_dir: /data/tmp/dahuabridge/hls
   hls_keep_after_exit: 6h
   # Optional ffmpeg hardware acceleration arguments. Empty list disables hwaccel.
@@ -99,6 +103,30 @@ media:
   #   - udp://127.0.0.1:5004
   #   # Example shorthand host:port form.
   #   - 127.0.0.1:5006
+
+# Optional archive indexing and caching service for recorder-side file paths and event-backed recordings.
+archive:
+  # Enable or disable the background archive indexer.
+  enabled: false
+  # SQLite database path for normalized archive file and event metadata. Prefer SSD because SQLite does small random reads/writes.
+  db_path: /data/archive/archive.db
+  # Directory for archive cache and pre-transcoded assets. SSD gives better export/transcode response; HDD is acceptable if
+  # capacity matters more than speed.
+  cache_dir: /data/archive/cache
+  # Temporary staging directory for direct recorder exports before ffmpeg remux/transcode. Prefer SSD or other fast local disk.
+  temp_dir: /data/archive/tmp
+  # Number of recent days to keep indexed and rescan.
+  prefetch_days: 7
+  # Number of days to retain indexed rows before pruning.
+  retain_days: 7
+  # Reserved worker parallelism limit for archive background work.
+  max_parallel_jobs: 2
+  # Enable SMD event indexing.
+  prefetch_smd: true
+  # Enable IVS event indexing.
+  prefetch_ivs: true
+  # Cron-like schedule for archive sync runs. Example: "5,35 * * * *"
+  cron: "5,35 * * * *"
 
 # Top-level Home Assistant integration settings for the native custom integration and bridge-generated URLs.
 home_assistant:

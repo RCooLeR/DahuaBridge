@@ -1103,7 +1103,7 @@ func (d *Driver) DownloadRecording(ctx context.Context, filePath string) (dahua.
 		return dahua.NVRRecordingDownload{}, fmt.Errorf("file path is required")
 	}
 
-	resp, err := d.client.OpenStream(ctx, "/RPC_Loadfile"+escapeRecordingFilePath(filePath), nil)
+	resp, err := d.client.OpenStream(ctx, "/cgi-bin/RPC_Loadfile"+escapeRecordingFilePath(filePath), nil)
 	if err != nil {
 		return dahua.NVRRecordingDownload{}, fmt.Errorf("download recording %q: %w", filePath, err)
 	}
@@ -1919,7 +1919,9 @@ func escapeRecordingFilePath(filePath string) string {
 		if index == 0 && segment == "" {
 			continue
 		}
-		segments[index] = url.PathEscape(segment)
+		escapedSegment := url.PathEscape(segment)
+		escapedSegment = strings.ReplaceAll(escapedSegment, "@", "%40")
+		segments[index] = escapedSegment
 	}
 	escaped := strings.Join(segments, "/")
 	if strings.HasPrefix(filePath, "/") && !strings.HasPrefix(escaped, "/") {

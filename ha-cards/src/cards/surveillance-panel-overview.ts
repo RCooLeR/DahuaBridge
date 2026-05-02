@@ -11,6 +11,7 @@ import {
 import type { HassEntity } from "../types/home-assistant";
 import type { SurveillanceOverviewLayout } from "./surveillance-panel-state";
 import { renderIconButton } from "./surveillance-panel-primitives";
+import { renderCameraEventCountBadges } from "./surveillance-panel-event-badges";
 
 type OverviewTile = CameraViewModel | VtoViewModel;
 
@@ -212,6 +213,7 @@ function renderCameraTile({
       </div>
       <div class="tile-media">
         ${renderCameraViewport(camera)}
+        ${renderCameraEventCountBadges(camera, "overlay")}
         <div class="media-overlay">
           <div class="media-bottom">
             <div class="tile-overlay-badges">
