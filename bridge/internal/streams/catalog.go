@@ -211,10 +211,13 @@ type Profile struct {
 	StreamURL                string `json:"stream_url"`
 	LocalMJPEGURL            string `json:"local_mjpeg_url,omitempty"`
 	LocalHLSURL              string `json:"local_hls_url,omitempty"`
+	LocalDASHURL             string `json:"local_dash_url,omitempty"`
 	LocalWebRTCURL           string `json:"local_webrtc_url,omitempty"`
 	Subtype                  int    `json:"subtype"`
 	RTSPTransport            string `json:"rtsp_transport,omitempty"`
 	FrameRate                int    `json:"frame_rate,omitempty"`
+	VideoCodec               string `json:"video_codec,omitempty"`
+	AudioCodec               string `json:"audio_codec,omitempty"`
 	SourceWidth              int    `json:"source_width,omitempty"`
 	SourceHeight             int    `json:"source_height,omitempty"`
 	UseWallclockAsTimestamps bool   `json:"use_wallclock_as_timestamps,omitempty"`
@@ -268,7 +271,7 @@ func BuildCatalog(input CatalogInput) []Entry {
 					SubResolution:      subResolution,
 					Controls:           buildNVRChannelControlSummary(input.Config.HomeAssistant.PublicBaseURL, result.Root.ID, channel, result.States[child.ID]),
 					RecommendedProfile: recommended,
-					Profiles:           buildProfiles(deviceCfg, channel, input.IncludeCredentials, recommended, input.Config.HomeAssistant.PublicBaseURL, child.ID, input.Config.Media, mainResolution, subCodec, subResolution),
+					Profiles:           buildProfiles(deviceCfg, channel, input.IncludeCredentials, recommended, input.Config.HomeAssistant.PublicBaseURL, child.ID, input.Config.Media, mainCodec, mainResolution, subCodec, subResolution, valueOrState(child.Attributes["audio_codec"], result.States[child.ID], "audio_codec")),
 				}
 				entry.Features = buildNVRChannelFeatures(
 					input.Config.HomeAssistant.PublicBaseURL,
@@ -313,7 +316,7 @@ func BuildCatalog(input CatalogInput) []Entry {
 				SubResolution:      subResolution,
 				AudioCodec:         audioCodec,
 				RecommendedProfile: recommended,
-				Profiles:           buildProfiles(deviceCfg, 1, input.IncludeCredentials, recommended, input.Config.HomeAssistant.PublicBaseURL, result.Root.ID, input.Config.Media, mainResolution, subCodec, subResolution),
+				Profiles:           buildProfiles(deviceCfg, 1, input.IncludeCredentials, recommended, input.Config.HomeAssistant.PublicBaseURL, result.Root.ID, input.Config.Media, mainCodec, mainResolution, subCodec, subResolution, audioCodec),
 			}
 			entry.Features = buildVTOFeatures(entry.Intercom)
 			entries = append(entries, entry)
@@ -347,7 +350,7 @@ func BuildCatalog(input CatalogInput) []Entry {
 				SubResolution:      subResolution,
 				AudioCodec:         audioCodec,
 				RecommendedProfile: recommended,
-				Profiles:           buildProfiles(deviceCfg, 1, input.IncludeCredentials, recommended, input.Config.HomeAssistant.PublicBaseURL, result.Root.ID, input.Config.Media, mainResolution, subCodec, subResolution),
+				Profiles:           buildProfiles(deviceCfg, 1, input.IncludeCredentials, recommended, input.Config.HomeAssistant.PublicBaseURL, result.Root.ID, input.Config.Media, mainCodec, mainResolution, subCodec, subResolution, audioCodec),
 			})
 			applyHASelection(&entries[len(entries)-1], state)
 		}
@@ -359,7 +362,7 @@ func BuildCatalog(input CatalogInput) []Entry {
 	return entries
 }
 
-func buildProfiles(deviceCfg config.DeviceConfig, channel int, includeCredentials bool, recommended string, publicBaseURL string, streamID string, mediaCfg config.MediaConfig, mainResolution string, subCodec string, subResolution string) map[string]Profile {
+func buildProfiles(deviceCfg config.DeviceConfig, channel int, includeCredentials bool, recommended string, publicBaseURL string, streamID string, mediaCfg config.MediaConfig, mainCodec string, mainResolution string, subCodec string, subResolution string, audioCodec string) map[string]Profile {
 	mainWidth, mainHeight, mainOK := parseResolution(mainResolution)
 	subWidth, subHeight, subOK := parseResolution(subResolution)
 	stableFrameRate := mediaCfg.StableFrameRate
@@ -399,8 +402,11 @@ func buildProfiles(deviceCfg config.DeviceConfig, channel int, includeCredential
 			StreamURL:      buildRTSPURL(deviceCfg, channel, mainSource.subtype, includeCredentials),
 			LocalMJPEGURL:  buildLocalMJPEGURL(publicBaseURL, streamID, "default"),
 			LocalHLSURL:    buildLocalHLSURL(publicBaseURL, streamID, "default"),
+			LocalDASHURL:   buildLocalDASHURL(publicBaseURL, streamID, "default"),
 			LocalWebRTCURL: buildLocalWebRTCURL(publicBaseURL, streamID, "default"),
 			Subtype:        mainSource.subtype,
+			VideoCodec:     mainCodec,
+			AudioCodec:     audioCodec,
 			SourceWidth:    mainSource.width,
 			SourceHeight:   mainSource.height,
 			Recommended:    recommended == "default",
@@ -410,9 +416,12 @@ func buildProfiles(deviceCfg config.DeviceConfig, channel int, includeCredential
 			StreamURL:                buildRTSPURL(deviceCfg, channel, mainSource.subtype, includeCredentials),
 			LocalMJPEGURL:            buildLocalMJPEGURL(publicBaseURL, streamID, "quality"),
 			LocalHLSURL:              buildLocalHLSURL(publicBaseURL, streamID, "quality"),
+			LocalDASHURL:             buildLocalDASHURL(publicBaseURL, streamID, "quality"),
 			LocalWebRTCURL:           buildLocalWebRTCURL(publicBaseURL, streamID, "quality"),
 			Subtype:                  mainSource.subtype,
 			RTSPTransport:            "tcp",
+			VideoCodec:               mainCodec,
+			AudioCodec:               audioCodec,
 			SourceWidth:              mainSource.width,
 			SourceHeight:             mainSource.height,
 			UseWallclockAsTimestamps: true,
@@ -423,10 +432,13 @@ func buildProfiles(deviceCfg config.DeviceConfig, channel int, includeCredential
 			StreamURL:                buildRTSPURL(deviceCfg, channel, stableSource.subtype, includeCredentials),
 			LocalMJPEGURL:            buildLocalMJPEGURL(publicBaseURL, streamID, "stable"),
 			LocalHLSURL:              buildLocalHLSURL(publicBaseURL, streamID, "stable"),
+			LocalDASHURL:             buildLocalDASHURL(publicBaseURL, streamID, "stable"),
 			LocalWebRTCURL:           buildLocalWebRTCURL(publicBaseURL, streamID, "stable"),
 			Subtype:                  stableSource.subtype,
 			RTSPTransport:            "tcp",
 			FrameRate:                stableFrameRate,
+			VideoCodec:               firstNonEmptyProfileValue(subCodec, mainCodec),
+			AudioCodec:               audioCodec,
 			SourceWidth:              stableSource.width,
 			SourceHeight:             stableSource.height,
 			UseWallclockAsTimestamps: true,
@@ -437,16 +449,28 @@ func buildProfiles(deviceCfg config.DeviceConfig, channel int, includeCredential
 			StreamURL:      buildRTSPURL(deviceCfg, channel, substreamSource.subtype, includeCredentials),
 			LocalMJPEGURL:  buildLocalMJPEGURL(publicBaseURL, streamID, "substream"),
 			LocalHLSURL:    buildLocalHLSURL(publicBaseURL, streamID, "substream"),
+			LocalDASHURL:   buildLocalDASHURL(publicBaseURL, streamID, "substream"),
 			LocalWebRTCURL: buildLocalWebRTCURL(publicBaseURL, streamID, "substream"),
 			Subtype:        substreamSource.subtype,
 			RTSPTransport:  "tcp",
 			FrameRate:      substreamFrameRate,
+			VideoCodec:     firstNonEmptyProfileValue(subCodec, mainCodec),
+			AudioCodec:     audioCodec,
 			SourceWidth:    substreamSource.width,
 			SourceHeight:   substreamSource.height,
 			Recommended:    recommended == "substream",
 		},
 	}
 	return profiles
+}
+
+func firstNonEmptyProfileValue(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 type profileSourceVariant struct {
@@ -764,6 +788,15 @@ func buildLocalMJPEGURL(publicBaseURL string, streamID string, profile string) s
 func buildLocalHLSURL(publicBaseURL string, streamID string, profile string) string {
 	publicBaseURL = strings.TrimRight(strings.TrimSpace(publicBaseURL), "/")
 	path := "/api/v1/media/hls/" + streamID + "/" + url.PathEscape(profile) + "/index.m3u8"
+	if publicBaseURL == "" {
+		return path
+	}
+	return publicBaseURL + path
+}
+
+func buildLocalDASHURL(publicBaseURL string, streamID string, profile string) string {
+	publicBaseURL = strings.TrimRight(strings.TrimSpace(publicBaseURL), "/")
+	path := "/api/v1/media/dash/" + streamID + "/" + url.PathEscape(profile) + "/manifest.mpd"
 	if publicBaseURL == "" {
 		return path
 	}

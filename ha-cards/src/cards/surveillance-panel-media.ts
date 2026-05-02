@@ -12,6 +12,9 @@ import {
   availableStreamViewportSources,
   defaultOverviewStreamProfileKey,
   defaultSelectedStreamProfileKey,
+  preserveCameraViewportSourceSelection,
+  preserveCameraViewportSourceSelectionOnProfileChange,
+  preservePlaybackViewportSourceSelection,
   resolveInitialPlaybackViewportSource,
   resolveOverviewCameraViewportSource,
   resolvePlaybackProfile,
@@ -24,7 +27,7 @@ import {
 } from "./surveillance-panel-viewport-sources";
 import {
   renderRemoteStream,
-  type RemoteStreamDescriptor,
+  type RemoteStreamDescriptor, RemoteStreamAudioHost,
 } from "./surveillance-remote-stream";
 
 export type { CameraViewportSource } from "./surveillance-panel-viewport-sources";
@@ -34,6 +37,9 @@ export {
   availableStreamViewportSources,
   defaultOverviewStreamProfileKey,
   defaultSelectedStreamProfileKey,
+  preserveCameraViewportSourceSelection,
+  preserveCameraViewportSourceSelectionOnProfileChange,
+  preservePlaybackViewportSourceSelection,
   resolveInitialPlaybackViewportSource,
   resolveOverviewCameraViewportSource,
   resolvePlaybackViewportSource,
@@ -81,11 +87,16 @@ export function renderSelectedCameraViewport(
     camera.stream,
     selectedSource,
     resolvedProfile?.key ?? null,
+    Boolean(camera.cameraEntity),
   );
   const fallbackPreviewUrl = cameraImageSrc(
     camera.cameraEntity,
     camera.snapshotUrl,
   );
+
+  if (resolvedSource === "native" && camera.cameraEntity) {
+    return renderLiveViewport(hass, camera.cameraEntity);
+  }
 
   if (!camera.streamAvailable && fallbackPreviewUrl) {
     return renderRemoteStream(
@@ -106,11 +117,14 @@ export function renderSelectedCameraViewport(
     fallbackPreviewUrl,
     options?.className,
     {
+      dash: resolvedProfile?.localDashUrl ?? null,
       hls: resolvedProfile?.localHlsUrl ?? null,
       mjpeg: resolvedProfile?.localMjpegUrl ?? null,
     },
     resolvedSource,
-    options?.fallbackOrder ?? ["hls", "mjpeg"],
+    selectedSource
+      ? [selectedSource]
+      : (options?.fallbackOrder ?? ["hls", "dash", "mjpeg"]),
   );
   if (descriptor.sources.length > 0 || descriptor.fallbackImageUrl) {
     return renderRemoteStream(descriptor, { muted, controls, preload });
@@ -134,9 +148,27 @@ export function renderSelectedVtoViewport(
     vto.stream,
     selectedSource,
     resolvedProfile?.key ?? null,
+    Boolean(vto.cameraEntity),
   );
 
-  if (!playing || !vto.streamAvailable) {
+  if (!playing) {
+    return renderRemoteStream(
+      {
+        cacheKey: `${vto.deviceId}:fallback:${fallbackPreviewUrl}`,
+        alt: vto.label,
+        fallbackImageUrl: fallbackPreviewUrl || null,
+        className: "vto-live-stream",
+        sources: [],
+      },
+      { muted: true, controls: false, preload: "none" },
+    );
+  }
+
+  if (resolvedSource === "native" && vto.cameraEntity) {
+    return renderLiveViewport(undefined, vto.cameraEntity);
+  }
+
+  if (!vto.streamAvailable) {
     return renderRemoteStream(
       {
         cacheKey: `${vto.deviceId}:fallback:${fallbackPreviewUrl}`,
@@ -156,11 +188,12 @@ export function renderSelectedVtoViewport(
       fallbackPreviewUrl || null,
       "vto-live-stream",
       {
+        dash: resolvedProfile?.localDashUrl ?? null,
         hls: resolvedProfile?.localHlsUrl ?? null,
         mjpeg: resolvedProfile?.localMjpegUrl ?? null,
       },
       resolvedSource,
-      ["hls", "mjpeg"],
+      selectedSource ? [selectedSource] : ["hls", "dash", "mjpeg"],
     ),
     { muted: true, controls: false, preload: "none" },
   );
@@ -186,11 +219,12 @@ export function renderPlaybackViewport(
       session.snapshotUrl ?? null,
       "playback-stream",
       {
+        dash: resolvedProfile?.dashUrl ?? null,
         hls: resolvedProfile?.hlsUrl ?? null,
         mjpeg: resolvedProfile?.mjpegUrl ?? null,
       },
       resolvedSource,
-      ["hls", "mjpeg"],
+      selectedSource ? [selectedSource] : ["hls", "dash", "mjpeg"],
     ),
     { muted, controls: true, preload: "auto" },
   );
@@ -222,6 +256,32 @@ export function syncRemoteStreamStyles(renderRoot: ParentNode): void {
     applyHostStreamStyles(streamHost);
     applyStreamStylesInTree(streamHost);
   }
+}
+
+export function syncViewportAudioState(
+  container: ParentNode | null | undefined,
+  muted: boolean,
+): boolean {
+  if (!container) {
+    return false;
+  }
+
+  const remoteStream = container.querySelector<RemoteStreamAudioHost>(
+    "dahuabridge-remote-stream",
+  );
+  if (remoteStream) {
+    remoteStream.syncAudioState(muted);
+    return true;
+  }
+
+  const video = findVideoElementInTree(container);
+  if (!video) {
+    return false;
+  }
+  video.dataset.audioMuted = muted ? "true" : "false";
+  video.muted = muted;
+  void video.play().catch(() => undefined);
+  return true;
 }
 
 export function cameraImageSrc(
@@ -278,6 +338,32 @@ function uniqueSourceOrder(
     ordered.push(candidate);
   }
   return ordered;
+}
+
+function findVideoElementInTree(root: ParentNode): HTMLVideoElement | null {
+  const pending: ParentNode[] = [root];
+  const visited = new Set<ParentNode>();
+
+  while (pending.length > 0) {
+    const current = pending.pop();
+    if (!current || visited.has(current)) {
+      continue;
+    }
+    visited.add(current);
+
+    const directVideo = current.querySelector("video");
+    if (directVideo instanceof HTMLVideoElement) {
+      return directVideo;
+    }
+
+    for (const element of current.querySelectorAll("*")) {
+      if (element.shadowRoot) {
+        pending.push(element.shadowRoot);
+      }
+    }
+  }
+
+  return null;
 }
 
 function applyHostStreamStyles(streamHost: Element): void {

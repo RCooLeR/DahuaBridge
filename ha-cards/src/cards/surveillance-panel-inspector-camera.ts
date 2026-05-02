@@ -125,6 +125,7 @@ function renderCameraStreamProfiles(
               </div>
               <div class="chip-row">
                 ${profile.streamUrl ? html`<span class="badge info">RTSP</span>` : nothing}
+                ${profile.localDashUrl ? html`<span class="badge success">DASH</span>` : nothing}
                 ${profile.localHlsUrl ? html`<span class="badge success">HLS</span>` : nothing}
                 ${profile.localMjpegUrl ? html`<span class="badge">MJPEG</span>` : nothing}
               </div>

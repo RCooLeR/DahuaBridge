@@ -2,23 +2,17 @@ package media
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
-	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
 
-	"RCooLeR/DahuaBridge/internal/config"
 	"RCooLeR/DahuaBridge/internal/dahua"
 	"RCooLeR/DahuaBridge/internal/streams"
 	"github.com/rs/zerolog"
@@ -74,12 +68,15 @@ type ClipQuery struct {
 }
 
 type clipJob struct {
-	info       ClipInfo
-	outputPath string
-	metaPath   string
-	stdin      io.WriteCloser
-	cmd        *exec.Cmd
-	logger     zerolog.Logger
+	info         ClipInfo
+	outputPath   string
+	metaPath     string
+	profile      streams.Profile
+	parent       *Manager
+	includeAudio bool
+	stdin        io.WriteCloser
+	cmd          *exec.Cmd
+	logger       zerolog.Logger
 
 	mu      sync.Mutex
 	done    chan struct{}
@@ -163,7 +160,9 @@ func (m *Manager) StartClip(ctx context.Context, request ClipStartRequest) (Clip
 			Duration:       duration,
 			FileName:       "",
 		},
-		done: make(chan struct{}),
+		profile: profile,
+		parent:  m,
+		done:    make(chan struct{}),
 		logger: m.logger.With().
 			Str("stream_id", entry.ID).
 			Str("profile", resolvedProfileName).
@@ -191,11 +190,7 @@ func (m *Manager) StartClip(ctx context.Context, request ClipStartRequest) (Clip
 	}
 	m.clipJobs[job.info.ID] = job
 	m.setMediaWorkerCountLocked()
-	job.logger.Info().
-		Str("clip_id", job.info.ID).
-		Dur("duration", duration).
-		Str("output_path", job.outputPath).
-		Msg("created clip job")
+	m.logWorkerInventoryLocked("added", job.status())
 	if m.metrics != nil {
 		m.metrics.ObserveMediaStart(entry.ID, resolvedProfileName, nil)
 	}
@@ -329,284 +324,4 @@ func (m *Manager) clipJob(clipID string) (*clipJob, ClipInfo, error) {
 		return nil, ClipInfo{}, ErrClipNotFound
 	}
 	return job, job.snapshot(), nil
-}
-
-func (m *Manager) persistClip(info ClipInfo) error {
-	if strings.TrimSpace(m.cfg.ClipPath) == "" {
-		return errClipStorageMissing
-	}
-	if err := os.MkdirAll(m.cfg.ClipPath, 0o755); err != nil {
-		return err
-	}
-	body, err := json.MarshalIndent(info, "", "  ")
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(filepath.Join(m.cfg.ClipPath, info.ID+".json"), body, 0o644)
-}
-
-func (m *Manager) loadClip(clipID string) (ClipInfo, error) {
-	clipID = strings.TrimSpace(clipID)
-	if clipID == "" {
-		return ClipInfo{}, ErrClipNotFound
-	}
-	body, err := os.ReadFile(filepath.Join(strings.TrimSpace(m.cfg.ClipPath), clipID+".json"))
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return ClipInfo{}, ErrClipNotFound
-		}
-		return ClipInfo{}, err
-	}
-	var info ClipInfo
-	if err := json.Unmarshal(body, &info); err != nil {
-		return ClipInfo{}, err
-	}
-	return info, nil
-}
-
-func (job *clipJob) run(parent *Manager, profile streams.Profile, duration time.Duration, started chan<- error) {
-	defer close(job.done)
-	defer parent.removeClipJob(job.info.ID, job)
-
-	if duration <= 0 {
-		if playbackDuration, ok := playbackDurationFromStreamURL(profile.StreamURL); ok {
-			duration = playbackDuration
-		}
-	}
-	disableStdin := duration > 0
-	includeAudio := parent.shouldIncludeSourceAudio(profile, job.logger)
-	args := buildClipFFmpegArgs(parent.cfg, profile, duration, job.outputPath, includeAudio, disableStdin)
-	job.logger.Debug().Strs("ffmpeg_args", redactFFmpegArgs(args)).Msg("starting clip worker")
-	job.logger.Info().
-		Str("clip_id", job.info.ID).
-		Dur("duration", duration).
-		Bool("include_audio", includeAudio).
-		Bool("disable_stdin", disableStdin).
-		Msg("clip transcode starting")
-
-	cmd := exec.Command(parent.cfg.FFmpegPath, args...)
-	var stdin io.WriteCloser
-	var err error
-	if !disableStdin {
-		stdin, err = cmd.StdinPipe()
-		if err != nil {
-			started <- fmt.Errorf("ffmpeg stdin pipe: %w", err)
-			job.complete(parent, err)
-			return
-		}
-	}
-	stderr, err := cmd.StderrPipe()
-	if err != nil {
-		started <- fmt.Errorf("ffmpeg stderr pipe: %w", err)
-		job.complete(parent, err)
-		return
-	}
-	cmd.Stdout = io.Discard
-
-	job.mu.Lock()
-	job.stdin = stdin
-	job.cmd = cmd
-	job.mu.Unlock()
-
-	if err := cmd.Start(); err != nil {
-		started <- fmt.Errorf("start ffmpeg: %w", err)
-		job.complete(parent, err)
-		return
-	}
-	job.logger.Info().
-		Str("clip_id", job.info.ID).
-		Msg("clip transcode started")
-	started <- nil
-
-	stderrDone := drainFFmpegStderr(stderr, 64*1024)
-
-	waitErr := cmd.Wait()
-	stderrText := <-stderrDone
-	if waitErr != nil && stderrText != "" {
-		waitErr = fmt.Errorf("%w: %s", waitErr, stderrText)
-	}
-	job.complete(parent, waitErr)
-}
-
-func (job *clipJob) complete(parent *Manager, waitErr error) {
-	job.mu.Lock()
-	defer job.mu.Unlock()
-
-	job.waitErr = waitErr
-	job.info.EndedAt = time.Now().UTC()
-	if waitErr != nil {
-		job.info.Status = ClipStatusFailed
-		job.info.Error = waitErr.Error()
-	} else {
-		job.info.Status = ClipStatusCompleted
-		job.info.Error = ""
-	}
-
-	if stat, err := os.Stat(job.outputPath); err == nil {
-		job.info.Bytes = stat.Size()
-	}
-	if err := parent.persistClip(job.info); err != nil {
-		job.logger.Warn().Err(err).Msg("persist clip metadata failed")
-	}
-	if waitErr != nil {
-		job.logger.Error().Err(waitErr).Msg("clip worker stopped")
-		return
-	}
-	job.logger.Info().
-		Str("clip_id", job.info.ID).
-		Int64("bytes", job.info.Bytes).
-		Str("status", string(job.info.Status)).
-		Msg("clip transcode completed")
-}
-
-func (job *clipJob) stop(ctx context.Context) error {
-	job.mu.Lock()
-	stdin := job.stdin
-	cmd := job.cmd
-	done := job.done
-	job.mu.Unlock()
-
-	if stdin != nil {
-		job.logger.Info().Str("clip_id", job.info.ID).Msg("clip stop requested")
-		_, _ = io.WriteString(stdin, "q\n")
-		_ = stdin.Close()
-	}
-
-	timer := time.NewTimer(5 * time.Second)
-	defer timer.Stop()
-
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-done:
-		return nil
-	case <-timer.C:
-		if cmd != nil && cmd.Process != nil {
-			_ = cmd.Process.Kill()
-		}
-		<-done
-		return nil
-	}
-}
-
-func (job *clipJob) snapshot() ClipInfo {
-	job.mu.Lock()
-	defer job.mu.Unlock()
-	return job.info
-}
-
-func (m *Manager) removeClipJob(id string, job *clipJob) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if existing, ok := m.clipJobs[id]; ok && existing == job {
-		delete(m.clipJobs, id)
-		m.setMediaWorkerCountLocked()
-		job.logger.Info().Str("clip_id", id).Msg("removed clip job")
-	}
-}
-
-func matchesClipQuery(info ClipInfo, query ClipQuery) bool {
-	if query.StreamID != "" && info.StreamID != query.StreamID {
-		return false
-	}
-	if query.RootDeviceID != "" && info.RootDeviceID != query.RootDeviceID {
-		return false
-	}
-	if query.Channel > 0 && info.Channel != query.Channel {
-		return false
-	}
-	if !query.StartTime.IsZero() {
-		_, end := clipQueryWindow(info)
-		if end.Before(query.StartTime) {
-			return false
-		}
-	}
-	start, _ := clipQueryWindow(info)
-	if !query.EndTime.IsZero() && start.After(query.EndTime) {
-		return false
-	}
-	return true
-}
-
-func clipQueryWindow(info ClipInfo) (time.Time, time.Time) {
-	start := info.SourceStartAt
-	if start.IsZero() {
-		start = info.StartedAt
-	}
-	end := info.SourceEndAt
-	if end.IsZero() {
-		end = info.EndedAt
-	}
-	if end.IsZero() {
-		end = start
-	}
-	return start, end
-}
-
-func clipSourceWindow(streamURL string, duration time.Duration) (time.Time, time.Time) {
-	sourceURL, err := url.Parse(strings.TrimSpace(streamURL))
-	if err != nil {
-		return time.Time{}, time.Time{}
-	}
-	query := sourceURL.Query()
-	startTime, err := time.Parse("2006_01_02_15_04_05", strings.TrimSpace(query.Get("starttime")))
-	if err != nil {
-		return time.Time{}, time.Time{}
-	}
-	endTime, err := time.Parse("2006_01_02_15_04_05", strings.TrimSpace(query.Get("endtime")))
-	if err != nil {
-		endTime = time.Time{}
-	}
-	if duration > 0 {
-		durationEnd := startTime.Add(duration)
-		if endTime.IsZero() || durationEnd.Before(endTime) {
-			endTime = durationEnd
-		}
-	}
-	return startTime.UTC(), endTime.UTC()
-}
-
-func buildClipFFmpegArgs(cfg config.MediaConfig, profile streams.Profile, duration time.Duration, outputPath string, includeAudio bool, disableStdin bool) []string {
-	args := []string{
-		"-hide_banner",
-		"-loglevel", ffmpegLogLevel(cfg),
-	}
-	if disableStdin {
-		args = append(args, "-nostdin")
-	}
-	args = append(args, buildRTSPInputArgs(profile, cfg.InputPreset)...)
-	if duration > 0 {
-		args = append(args, "-t", formatFFmpegSeconds(duration))
-	}
-	args = append(args,
-		"-map", "0:v:0",
-		"-c:v", "libx264",
-		"-preset", "veryfast",
-		"-pix_fmt", "yuv420p",
-		"-profile:v", "high",
-		"-tag:v", "avc1",
-		"-movflags", "+faststart",
-		"-y",
-	)
-	if includeAudio {
-		args = append(args,
-			"-map", "0:a:0?",
-			"-c:a", "aac",
-			"-b:a", "128k",
-			"-ac", "2",
-			"-ar", "48000",
-		)
-	} else {
-		args = append(args, "-an")
-	}
-	args = append(args, outputPath)
-	return args
-}
-
-func newClipID() string {
-	buffer := make([]byte, 8)
-	if _, err := rand.Read(buffer); err != nil {
-		return "clip_" + strconv.FormatInt(time.Now().UnixNano(), 10)
-	}
-	return "clip_" + hex.EncodeToString(buffer)
 }

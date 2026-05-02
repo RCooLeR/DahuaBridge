@@ -4,6 +4,7 @@ import {type BridgeEvent, type BridgeEventQuery, fetchBridgeEvents} from "../ha/
 import {fetchRegistrySnapshot, type RegistrySnapshot} from "../ha/registry";
 import type {SurveillancePanelCardConfig} from "../types/card-config";
 import type {HomeAssistant} from "../types/home-assistant";
+import {logCardInfo, logCardWarn, redactUrlForLog} from "../utils/logging";
 
 interface BridgeEventRequest {
     eventsUrl: string;
@@ -98,9 +99,9 @@ export class SurveillancePanelRuntime {
         const hass = this.host.getHass();
         if (!hass?.callWS && !hass?.connection?.sendMessagePromise) {
             this.host.setRegistrySnapshot(null);
-            console.warn(
-                "[DahuaBridgeCard] Home Assistant registry websocket API is unavailable. Room mapping will fall back to Unassigned.",
-            );
+            logCardWarn("card runtime registry unavailable", {
+                fallback: "unassigned",
+            });
             return;
         }
 
@@ -108,9 +109,9 @@ export class SurveillancePanelRuntime {
             const registrySnapshot = await fetchRegistrySnapshot(hass);
             if (registrySnapshot === null) {
                 this.host.setRegistrySnapshot(null);
-                console.warn(
-                    "[DahuaBridgeCard] Home Assistant registry snapshot returned no data. Room mapping will fall back to Unassigned.",
-                );
+                logCardWarn("card runtime registry empty", {
+                    fallback: "unassigned",
+                });
                 this.host.requestUpdate();
                 return;
             }
@@ -119,10 +120,10 @@ export class SurveillancePanelRuntime {
             this.host.requestUpdate();
         } catch (error) {
             this.host.setRegistrySnapshot(null);
-            console.warn(
-                "[DahuaBridgeCard] Failed to load Home Assistant registry snapshot. Room mapping will fall back to Unassigned.",
-                error,
-            );
+            logCardWarn("card runtime registry load failed", {
+                fallback: "unassigned",
+                error: error instanceof Error ? error.message : String(error),
+            });
             this.host.requestUpdate();
         }
     }
@@ -151,7 +152,11 @@ export class SurveillancePanelRuntime {
         try {
             const events = await fetchBridgeEvents(request.eventsUrl, request.query, controller.signal);
 
-            console.debug("[DahuaBridgeCard] bridge events parsed", {count: events.length, query: request.query});
+            logCardInfo("card runtime bridge events parsed", {
+                count: events.length,
+                events_url: redactUrlForLog(request.eventsUrl),
+                query: request.query,
+            });
             if (this.eventAbort !== controller) {
                 return;
             }

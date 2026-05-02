@@ -391,6 +391,9 @@ describe("buildPanelModel", () => {
     expect(model.cameras[0]?.recordingStopUrl).toBe(
       "http://bridge.local:9205/api/v1/media/recordings/clip_active/stop",
     );
+    expect(model.cameras[0]?.recordingsUrl).toBe(
+      "http://bridge.local:9205/api/v1/media/recordings?stream_id=west20_nvr_channel_01",
+    );
     expect(model.cameras[0]?.recording).toMatchObject({
       supported: true,
       active: true,
@@ -627,6 +630,9 @@ describe("buildPanelModel", () => {
     );
     expect(model.cameras[0]?.recordingStopUrl).toBe(
       "https://ha.example.com/bridge/api/v1/media/recordings/clip123/stop",
+    );
+    expect(model.cameras[0]?.recordingsUrl).toBe(
+      "https://ha.example.com/bridge/api/v1/media/recordings?stream_id=west20_nvr_channel_01",
     );
     expect(model.cameras[0]?.aux?.targets[0]?.url).toBe(
       "https://ha.example.com/bridge/api/v1/nvr/west20_nvr/channels/1/aux",

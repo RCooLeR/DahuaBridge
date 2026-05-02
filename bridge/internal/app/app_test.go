@@ -577,6 +577,12 @@ func TestRuntimeServicesListStreamsIncludesCaptureSummary(t *testing.T) {
 }
 
 func TestRuntimeServicesCreateNVRPlaybackSessionResolvesPlaybackStream(t *testing.T) {
+	previousLocal := time.Local
+	time.Local = time.UTC
+	t.Cleanup(func() {
+		time.Local = previousLocal
+	})
+
 	probes := store.NewProbeStore()
 	probes.Set("west20_nvr", &dahua.ProbeResult{
 		Root: dahua.Device{
@@ -655,11 +661,47 @@ func TestRuntimeServicesCreateNVRPlaybackSessionResolvesPlaybackStream(t *testin
 	if !ok {
 		t.Fatal("expected stable playback stream to resolve")
 	}
-	if !strings.Contains(stableProfile.StreamURL, "subtype=0") {
-		t.Fatalf("expected stable playback profile to use main subtype, got %q", stableProfile.StreamURL)
+	if !strings.Contains(stableProfile.StreamURL, "subtype=1") {
+		t.Fatalf("expected stable playback profile to use substream subtype, got %q", stableProfile.StreamURL)
 	}
-	if stableProfile.SourceWidth != 1920 || stableProfile.SourceHeight != 1080 {
-		t.Fatalf("expected stable playback profile to use main source size, got %dx%d", stableProfile.SourceWidth, stableProfile.SourceHeight)
+	if stableProfile.SourceWidth != 704 || stableProfile.SourceHeight != 576 {
+		t.Fatalf("expected stable playback profile to use substream source size, got %dx%d", stableProfile.SourceWidth, stableProfile.SourceHeight)
+	}
+}
+
+func TestRuntimeServicesPlaybackRTSPUsesLocalWallClock(t *testing.T) {
+	previousLocal := time.Local
+	time.Local = time.FixedZone("EEST", 3*60*60)
+	t.Cleanup(func() {
+		time.Local = previousLocal
+	})
+
+	services := newRuntimeServices(config.Config{}, store.NewProbeStore())
+	services.RegisterNVR("west20_nvr", nil, nil, config.DeviceConfig{
+		ID:               "west20_nvr",
+		BaseURL:          "http://192.168.150.10",
+		ChannelAllowlist: []int{1},
+	})
+
+	session, err := services.CreateNVRPlaybackSession(context.Background(), "west20_nvr", dahua.NVRPlaybackSessionRequest{
+		Channel:   1,
+		StartTime: time.Date(2026, 4, 27, 21, 0, 0, 0, time.UTC),
+		EndTime:   time.Date(2026, 4, 27, 22, 0, 0, 0, time.UTC),
+		SeekTime:  time.Date(2026, 4, 27, 21, 15, 0, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatalf("CreateNVRPlaybackSession returned error: %v", err)
+	}
+
+	_, profile, ok := services.GetStream(session.StreamID, "quality", true)
+	if !ok {
+		t.Fatal("expected playback stream to resolve")
+	}
+	if !strings.Contains(profile.StreamURL, "starttime=2026_04_28_00_15_00") {
+		t.Fatalf("expected local seek time in playback stream url, got %q", profile.StreamURL)
+	}
+	if !strings.Contains(profile.StreamURL, "endtime=2026_04_28_01_00_00") {
+		t.Fatalf("expected local end time in playback stream url, got %q", profile.StreamURL)
 	}
 }
 

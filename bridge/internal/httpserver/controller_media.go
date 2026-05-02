@@ -379,4 +379,49 @@ func (c *controller) registerMediaRoutes(router chi.Router) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write(body)
 	})
+	router.With(rateLimitMiddleware(c.mediaLimiter)).Get("/api/v1/media/dash/{streamID}/{profile}/manifest.mpd", func(w http.ResponseWriter, r *http.Request) {
+		if c.media == nil || !c.media.Enabled() {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "media layer is disabled"})
+			return
+		}
+
+		body, err := c.media.DASHManifest(r.Context(), chi.URLParam(r, "streamID"), chi.URLParam(r, "profile"))
+		if err != nil {
+			if errors.Is(err, mediaapi.ErrWorkerLimitReached) {
+				writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": err.Error()})
+				return
+			}
+			writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/dash+xml")
+		w.Header().Set("Cache-Control", "no-store")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(body)
+	})
+	router.With(rateLimitMiddleware(c.mediaLimiter)).Get("/api/v1/media/dash/{streamID}/{profile}/{assetName}", func(w http.ResponseWriter, r *http.Request) {
+		if c.media == nil || !c.media.Enabled() {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "media layer is disabled"})
+			return
+		}
+
+		body, contentType, err := c.media.DASHAsset(r.Context(), chi.URLParam(r, "streamID"), chi.URLParam(r, "profile"), chi.URLParam(r, "assetName"))
+		if err != nil {
+			if errors.Is(err, mediaapi.ErrWorkerLimitReached) {
+				writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": err.Error()})
+				return
+			}
+			writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+			return
+		}
+
+		if contentType == "" {
+			contentType = "application/octet-stream"
+		}
+		w.Header().Set("Content-Type", contentType)
+		w.Header().Set("Cache-Control", "no-store")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(body)
+	})
 }

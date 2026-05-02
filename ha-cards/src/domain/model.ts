@@ -154,6 +154,7 @@ export interface CameraStreamProfileViewModel {
   streamUrl: string | null;
   localMjpegUrl: string | null;
   localHlsUrl: string | null;
+  localDashUrl: string | null;
   localWebRtcUrl: string | null;
   subtype: number | null;
   rtspTransport: string | null;
@@ -170,6 +171,7 @@ export interface CameraStreamViewModel {
   onvifStreamUrl: string | null;
   onvifSnapshotUrl: string | null;
   recommendedProfile: string | null;
+  recommendedHaIntegration: string | null;
   preferredVideoProfile: string | null;
   preferredVideoSource: string | null;
   resolution: string;
@@ -558,7 +560,12 @@ function buildCameraViewModel(
       camera.media.capture?.stopRecordingUrl ?? null,
       browserBridgeUrl,
     ),
-    recordingsUrl: rewriteBridgeUrl(camera.media.capture?.recordingsUrl ?? null, browserBridgeUrl),
+    recordingsUrl: normalizeCaptureRecordingsUrl(
+      camera.media.capture?.recordingsUrl ?? null,
+      camera.media.capture?.startRecordingUrl ?? null,
+      camera.deviceId,
+      browserBridgeUrl,
+    ),
     resolution: camera.media.resolution,
     codec: camera.media.codec,
     frameRate: camera.media.frameRate,
@@ -597,6 +604,38 @@ function buildCameraAuxViewModel(
     features: [...aux.features],
     targets: aux.targets.map((target) => buildCameraAuxTargetViewModel(target, browserBridgeUrl)),
   };
+}
+
+function normalizeCaptureRecordingsUrl(
+  rawUrl: string | null,
+  startRecordingUrl: string | null,
+  streamID: string,
+  browserBridgeUrl: string | null,
+): string | null {
+  const sourceUrl = rawUrl?.trim() ? rawUrl : startRecordingUrl;
+  if (!sourceUrl?.trim()) {
+    return null;
+  }
+  const normalizedRawUrl = rewriteBridgeUrl(sourceUrl, browserBridgeUrl);
+  if (normalizedRawUrl) {
+    try {
+      const url = new URL(normalizedRawUrl, "https://dahuabridge.invalid");
+      const streamMatch = url.pathname.match(/^(.*\/api\/v1\/media\/)streams\/([^/]+)\/recordings\/?$/);
+      if (!streamMatch) {
+        return normalizedRawUrl;
+      }
+      const resolvedStreamID = decodeURIComponent(streamMatch[2] ?? streamID);
+      url.pathname = `${streamMatch[1]}recordings`;
+      url.search = `?stream_id=${encodeURIComponent(resolvedStreamID)}`;
+      if (/^[a-z][a-z0-9+.-]*:\/\//i.test(normalizedRawUrl)) {
+        return url.toString();
+      }
+      return `${url.pathname}${url.search}${url.hash}`;
+    } catch {
+      return normalizedRawUrl;
+    }
+  }
+  return null;
 }
 
 function buildCameraAuxTargetViewModel(
@@ -646,6 +685,7 @@ function buildCameraStreamViewModel(
     onvifStreamUrl: rewriteBridgeUrl(camera.media.onvifStreamUrl, browserBridgeUrl),
     onvifSnapshotUrl: rewriteBridgeUrl(camera.media.onvifSnapshotUrl, browserBridgeUrl),
     recommendedProfile: camera.media.recommendedProfile,
+    recommendedHaIntegration: camera.media.recommendedHaIntegration,
     preferredVideoProfile: camera.media.preferredVideoProfile,
     preferredVideoSource: camera.media.preferredVideoSource,
     resolution: camera.media.resolution,
@@ -661,6 +701,7 @@ function buildCameraStreamViewModel(
         streamUrl: rewriteBridgeUrl(profile.streamUrl, browserBridgeUrl),
         localMjpegUrl: rewriteBridgeUrl(profile.localMjpegUrl, browserBridgeUrl),
         localHlsUrl: rewriteBridgeUrl(profile.localHlsUrl, browserBridgeUrl),
+        localDashUrl: rewriteBridgeUrl(profile.localDashUrl, browserBridgeUrl),
         localWebRtcUrl: rewriteBridgeUrl(profile.localWebRtcUrl, browserBridgeUrl),
         subtype: profile.subtype,
         rtspTransport: profile.rtspTransport,
@@ -816,7 +857,12 @@ function buildVtoViewModel(
       vto.media.capture?.stopRecordingUrl ?? null,
       browserBridgeUrl,
     ),
-    recordingsUrl: rewriteBridgeUrl(vto.media.capture?.recordingsUrl ?? null, browserBridgeUrl),
+    recordingsUrl: normalizeCaptureRecordingsUrl(
+      vto.media.capture?.recordingsUrl ?? null,
+      vto.media.capture?.startRecordingUrl ?? null,
+      vto.deviceId,
+      browserBridgeUrl,
+    ),
     doorbell: vto.doorbell,
     callActive: vto.callActive,
     accessActive: vto.accessActive,

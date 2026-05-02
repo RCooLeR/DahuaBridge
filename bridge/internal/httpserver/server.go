@@ -49,6 +49,8 @@ type MediaReader interface {
 	CaptureFrame(context.Context, string, string, int) ([]byte, string, error)
 	HLSPlaylist(context.Context, string, string) ([]byte, error)
 	HLSSegment(context.Context, string, string, string) ([]byte, string, error)
+	DASHManifest(context.Context, string, string) ([]byte, error)
+	DASHAsset(context.Context, string, string, string) ([]byte, string, error)
 	StartClip(context.Context, mediaapi.ClipStartRequest) (mediaapi.ClipInfo, error)
 	StopClip(context.Context, string) (mediaapi.ClipInfo, error)
 	GetClip(string) (mediaapi.ClipInfo, error)
@@ -407,7 +409,7 @@ func parseClipStartRequest(r *http.Request) (mediaapi.ClipStartRequest, error) {
 	}
 
 	return mediaapi.ClipStartRequest{
-		ProfileName: strings.TrimSpace(request.ProfileName),
+		ProfileName: firstNonEmpty(strings.TrimSpace(request.ProfileName), "quality"),
 		Duration:    duration,
 	}, nil
 }
@@ -1234,7 +1236,7 @@ func buildNVRRecordingExportURL(r *http.Request, deviceID string, channel int, s
 		"channel":    []string{strconv.Itoa(channel)},
 		"start_time": []string{startTime},
 		"end_time":   []string{endTime},
-		"profile":    []string{"quality"},
+		"profile":    []string{"stable"},
 	}
 	path := "/api/v1/nvr/" + url.PathEscape(deviceID) + "/recordings/export?" + query.Encode()
 	return buildAbsoluteRequestURL(r, path)

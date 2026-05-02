@@ -84,8 +84,16 @@ export function streamProfileLabel(value: string | null | undefined): string {
 
 export function streamSourceLabel(value: string | null | undefined): string {
   switch (value?.trim().toLowerCase()) {
+    case "native":
+    case "ha":
+    case "homeassistant":
+    case "home_assistant":
+    case "onvif":
     case "rtsp":
-      return "Direct RTSP";
+    case "direct_rtsp":
+      return "Native HA / RTSP";
+    case "dash":
+      return "Bridge DASH";
     case "hls":
       return "Bridge HLS (H.264/AAC)";
     case "webrtc":

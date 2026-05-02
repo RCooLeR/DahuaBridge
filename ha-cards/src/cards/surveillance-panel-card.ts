@@ -23,6 +23,9 @@ import {
   availableStreamViewportSources,
   defaultOverviewStreamProfileKey,
   defaultSelectedStreamProfileKey,
+  preserveCameraViewportSourceSelection,
+  preserveCameraViewportSourceSelectionOnProfileChange,
+  preservePlaybackViewportSourceSelection,
   renderClipPlaybackViewport,
   renderPlaybackViewport,
   renderSelectedCameraViewport,
@@ -34,9 +37,9 @@ import {
   resolveSelectedCameraViewportSource,
   resolveStreamViewportSource,
   syncRemoteStreamStyles,
+  syncViewportAudioState,
   type CameraViewportSource,
 } from "./surveillance-panel-media";
-import type { RemoteStreamAudioHost } from "./surveillance-remote-stream";
 import {
   renderControlButton as renderControlPrimitive,
   renderIconButton as renderIconPrimitive,
@@ -650,10 +653,10 @@ export class DahuaBridgeSurveillancePanelCard
                                     const previousProfile = this._selectedCameraStreamProfile;
                                     this._selectedCameraStreamProfile = key;
                                     this._selectedCameraStreamSource =
-                                      resolveSelectedCameraViewportSource(
+                                      preserveCameraViewportSourceSelectionOnProfileChange(
                                         camera,
-                                        this._selectedCameraStreamSource,
                                         key,
+                                        this._selectedCameraStreamSource,
                                       );
                                     this.requestUpdate(
                                       "_selectedCameraStreamProfile",
@@ -676,10 +679,10 @@ export class DahuaBridgeSurveillancePanelCard
                                       const previousProfile = this._selectedPlaybackStreamProfile;
                                       this._selectedPlaybackStreamProfile = nextKey;
                                       this._selectedPlaybackStreamSource =
-                                        resolvePlaybackViewportSource(
+                                        preservePlaybackViewportSourceSelection(
                                           selectedPlayback.session,
-                                          this._selectedPlaybackStreamSource,
                                           nextKey,
+                                          this._selectedPlaybackStreamSource,
                                         );
                                       this.requestUpdate(
                                         "_selectedPlaybackStreamProfile",
@@ -736,7 +739,7 @@ export class DahuaBridgeSurveillancePanelCard
                   ? renderPlaybackViewport(
                       selectedPlayback.session,
                       selectedStreamProfileKey,
-                      selectedStreamSource,
+                      this._selectedPlaybackStreamSource,
                       this._selectedCameraAudioMuted,
                     )
                   : selectedBridgeRecordingPlayback?.recording.playbackUrl
@@ -749,7 +752,7 @@ export class DahuaBridgeSurveillancePanelCard
                       this.hass,
                       camera,
                       selectedStreamProfileKey,
-                      selectedStreamSource,
+                      this._selectedCameraStreamSource,
                       this._selectedCameraAudioMuted,
                     )}
                 ${!playbackActive && this._ptzAdjusting && camera.supportsPtz
@@ -956,6 +959,7 @@ export class DahuaBridgeSurveillancePanelCard
       const availableVtoStreamSources = availableStreamViewportSources(
         vto.stream,
         this._selectedVtoStreamProfile,
+        Boolean(vto.cameraEntity),
       );
 
       return html`
@@ -999,6 +1003,7 @@ export class DahuaBridgeSurveillancePanelCard
                                       vto.stream,
                                       this._selectedVtoStreamSource,
                                       key,
+                                      Boolean(vto.cameraEntity),
                                     );
                                     this.requestUpdate(
                                       "_selectedVtoStreamProfile",
@@ -1841,17 +1846,11 @@ export class DahuaBridgeSurveillancePanelCard
       defaultSelectedStreamProfileKey(camera.stream) ??
       resolveSelectedCameraStreamProfile(camera, null)?.key ??
       null;
-    const cameraSource = resolveSelectedCameraViewportSource(
-      camera,
-      null,
-      cameraProfile,
-    );
     this.resetSharedSelectionViewState();
     this.clearVtoSelectionState();
     this.applySelectionTransition(nextState, {
       openInspector: true,
       cameraProfile,
-      cameraSource,
     });
     this.requestUpdate("_selection", previousSelection);
   }
@@ -1877,17 +1876,11 @@ export class DahuaBridgeSurveillancePanelCard
     const previousSelection = this._selection;
     const nextState = selectVtoState(vto);
     const vtoProfile = defaultSelectedStreamProfileKey(vto.stream);
-    const vtoSource = resolveStreamViewportSource(
-      vto.stream,
-      null,
-      vtoProfile,
-    );
     this.resetSharedSelectionViewState();
     this.clearCameraSelectionState();
     this.applySelectionTransition(nextState, {
       openInspector: true,
       vtoProfile,
-      vtoSource,
     });
     this.requestUpdate("_selection", previousSelection);
   }
@@ -2386,19 +2379,29 @@ export class DahuaBridgeSurveillancePanelCard
             this._selectedCameraStreamProfile ??
             defaultSelectedStreamProfileKey(archiveSource.stream) ??
             null,
-          cameraSource: resolveSelectedCameraViewportSource(
+          cameraSource: preserveCameraViewportSourceSelection(
             archiveSource,
-            this._selectedCameraStreamSource,
             this._selectedCameraStreamProfile,
+            this._selectedCameraStreamSource,
           ),
         },
       );
-      this._selectedPlaybackStreamProfile = session.recommendedProfile;
-      this._selectedPlaybackStreamSource = resolveInitialPlaybackViewportSource(
-        session,
-        session.recommendedProfile,
-        this._selectedPlaybackStreamSource,
-      );
+      this._selectedPlaybackStreamProfile =
+        this._selectedPlaybackStreamProfile &&
+        session.profiles[this._selectedPlaybackStreamProfile]
+          ? this._selectedPlaybackStreamProfile
+          : session.recommendedProfile;
+      this._selectedPlaybackStreamSource =
+        preservePlaybackViewportSourceSelection(
+          session,
+          this._selectedPlaybackStreamProfile,
+          this._selectedPlaybackStreamSource,
+        ) ??
+        resolveInitialPlaybackViewportSource(
+          session,
+          this._selectedPlaybackStreamProfile,
+          this._selectedPlaybackStreamSource,
+        );
       this._selectedPlayback = {
         sourceDeviceId: archiveSource.deviceId,
         bridgeBaseUrl: browserBridgeUrl,
@@ -2713,10 +2716,13 @@ export class DahuaBridgeSurveillancePanelCard
         ...playback,
         session,
       };
-      this._selectedPlaybackStreamProfile = session.recommendedProfile;
-      this._selectedPlaybackStreamSource = resolveInitialPlaybackViewportSource(
+      this._selectedPlaybackStreamProfile =
+        this._selectedPlaybackStreamProfile && session.profiles[this._selectedPlaybackStreamProfile]
+          ? this._selectedPlaybackStreamProfile
+          : session.recommendedProfile;
+      this._selectedPlaybackStreamSource = preservePlaybackViewportSourceSelection(
         session,
-        session.recommendedProfile,
+        this._selectedPlaybackStreamProfile,
         this._selectedPlaybackStreamSource,
       );
       this.logMedia("card panel playback seek completed", {
@@ -2859,6 +2865,10 @@ export class DahuaBridgeSurveillancePanelCard
 
   private streamSourceLabel(source: CameraViewportSource): string {
     switch (source) {
+      case "native":
+        return "Native HA";
+      case "dash":
+        return "DASH";
       case "hls":
         return "HLS";
       case "mjpeg":
@@ -2889,24 +2899,32 @@ export class DahuaBridgeSurveillancePanelCard
       return true;
     }
 
-    if (selectedSource !== "hls") {
-      return false;
-    }
     const profile = resolveSelectedCameraStreamProfile(camera, selectedProfileKey);
     if (!profile) {
       return false;
     }
-    return Boolean(profile.localHlsUrl);
+    switch (selectedSource) {
+      case "native":
+        return Boolean(camera.cameraEntity);
+      case "dash":
+        return Boolean(profile.localDashUrl);
+      case "hls":
+        return Boolean(profile.localHlsUrl);
+      default:
+        return false;
+    }
   }
 
   private hasPlayableVtoStream(vto: VtoViewModel): boolean {
     return (
       vto.streamAvailable &&
-      vto.stream.profiles.some(
-        (profile) =>
-          Boolean(profile.localHlsUrl) ||
-          Boolean(profile.localMjpegUrl),
-      )
+      (Boolean(vto.cameraEntity) ||
+        vto.stream.profiles.some(
+          (profile) =>
+            Boolean(profile.localDashUrl) ||
+            Boolean(profile.localHlsUrl) ||
+            Boolean(profile.localMjpegUrl),
+        ))
     );
   }
 
@@ -2915,30 +2933,17 @@ export class DahuaBridgeSurveillancePanelCard
     selectedProfileKey: string | null,
     selectedSource: CameraViewportSource | null,
   ): boolean {
-    if (selectedSource !== "hls") {
-      return false;
-    }
-    return availablePlaybackViewportSources(session, selectedProfileKey).includes(selectedSource);
+    return (
+      (selectedSource === "hls" || selectedSource === "dash") &&
+      availablePlaybackViewportSources(session, selectedProfileKey).includes(selectedSource)
+    );
   }
 
   private syncSelectedCameraViewportAudioState(muted: boolean): void {
-    const remoteStream = this.renderRoot.querySelector<RemoteStreamAudioHost>(
-      "section.main .viewport dahuabridge-remote-stream",
+    syncViewportAudioState(
+      this.renderRoot.querySelector("section.main .viewport"),
+      muted,
     );
-    if (remoteStream) {
-      remoteStream.syncAudioState(muted);
-      return;
-    }
-
-    const video = this.renderRoot.querySelector<HTMLVideoElement>(
-      "video#remote-stream.remote-stream, video#remote-stream, video.remote-stream",
-    );
-    if (!video) {
-      return;
-    }
-    video.dataset.audioMuted = muted ? "true" : "false";
-    video.muted = muted;
-    void video.play().catch(() => undefined);
   }
 
   private hasAvailableVtoIntercom(vto: VtoViewModel): boolean {
@@ -2993,6 +2998,7 @@ export class DahuaBridgeSurveillancePanelCard
         vto.stream,
         null,
         this._selectedVtoStreamProfile,
+        Boolean(vto.cameraEntity),
       );
     }
   }
