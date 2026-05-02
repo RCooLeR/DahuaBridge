@@ -50,6 +50,7 @@ export {
 
 const STREAM_STYLE_ELEMENT_ID = "dahuabridge-remote-stream-style";
 const streamShadowObservers = new WeakMap<Node, MutationObserver>();
+const STREAM_HOST_SELECTOR = "ha-camera-stream, dahuabridge-remote-stream";
 
 export function renderLiveViewport(
   hass: HomeAssistant | undefined,
@@ -251,7 +252,7 @@ export function renderClipPlaybackViewport(
 }
 
 export function syncRemoteStreamStyles(renderRoot: ParentNode): void {
-  const streamHosts = renderRoot.querySelectorAll("ha-camera-stream");
+  const streamHosts = renderRoot.querySelectorAll(STREAM_HOST_SELECTOR);
   for (const streamHost of streamHosts) {
     applyHostStreamStyles(streamHost);
     applyStreamStylesInTree(streamHost);
@@ -367,11 +368,19 @@ function findVideoElementInTree(root: ParentNode): HTMLVideoElement | null {
 }
 
 function applyHostStreamStyles(streamHost: Element): void {
-  const hostStyle = (streamHost as HTMLElement).style;
+  if (!(streamHost instanceof HTMLElement)) {
+    return;
+  }
+  const hostStyle = streamHost.style;
   hostStyle.setProperty("display", "block", "important");
   hostStyle.setProperty("width", "100%", "important");
   hostStyle.setProperty("height", "100%", "important");
+  hostStyle.setProperty("min-width", "0", "important");
+  hostStyle.setProperty("min-height", "0", "important");
+  hostStyle.setProperty("max-width", "100%", "important");
+  hostStyle.setProperty("max-height", "100%", "important");
   hostStyle.setProperty("aspect-ratio", "16 / 9", "important");
+  hostStyle.setProperty("overflow", "hidden", "important");
 }
 
 function ensureShadowStreamStyles(shadowRoot: ShadowRoot): void {
@@ -386,7 +395,12 @@ function ensureShadowStreamStyles(shadowRoot: ShadowRoot): void {
       display: block !important;
       width: 100% !important;
       height: 100% !important;
+      min-width: 0 !important;
+      min-height: 0 !important;
+      max-width: 100% !important;
+      max-height: 100% !important;
       aspect-ratio: 16 / 9 !important;
+      overflow: hidden !important;
     }
 
     video#remote-stream,
@@ -394,12 +408,22 @@ function ensureShadowStreamStyles(shadowRoot: ShadowRoot): void {
     video,
     img#remote-stream,
     img.remote-stream,
-    img {
+    img,
+    .viewport-empty {
       display: block !important;
       width: 100% !important;
       height: 100% !important;
-      object-fit: fill !important;
+      min-width: 0 !important;
+      min-height: 0 !important;
+      max-width: 100% !important;
+      max-height: 100% !important;
       aspect-ratio: 16 / 9 !important;
+    }
+
+    video,
+    img {
+      object-fit: fill !important;
+      object-position: center center !important;
     }
 
     img[src*="logo"],
@@ -413,6 +437,7 @@ function ensureShadowStreamStyles(shadowRoot: ShadowRoot): void {
       transform: translateY(50%) !important;
     }
   `;
+
   shadowRoot.append(style);
 }
 
@@ -425,7 +450,12 @@ function applyMediaElementStyles(root: ParentNode): void {
     streamStyle.setProperty("display", "block", "important");
     streamStyle.setProperty("width", "100%", "important");
     streamStyle.setProperty("height", "100%", "important");
+    streamStyle.setProperty("min-width", "0", "important");
+    streamStyle.setProperty("min-height", "0", "important");
+    streamStyle.setProperty("max-width", "100%", "important");
+    streamStyle.setProperty("max-height", "100%", "important");
     streamStyle.setProperty("object-fit", "fill", "important");
+    streamStyle.setProperty("object-position", "center center", "important");
     streamStyle.setProperty("aspect-ratio", "16 / 9", "important");
   }
 }
@@ -446,12 +476,15 @@ function applyStreamStylesInTree(root: ParentNode): void {
       observeShadowRoot(current);
     }
 
+    if (current instanceof Element && current.shadowRoot) {
+      pending.push(current.shadowRoot);
+    }
+
     applyMediaElementStyles(current);
 
     for (const element of current.querySelectorAll("*")) {
-      const shadowRoot = element.shadowRoot;
-      if (shadowRoot) {
-        pending.push(shadowRoot);
+      if (element.shadowRoot) {
+        pending.push(element.shadowRoot);
       }
     }
   }
