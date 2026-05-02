@@ -168,6 +168,32 @@ func (s *SQLiteStore) LoadClipAssets(ctx context.Context, deviceID string, items
 	return result, rows.Err()
 }
 
+func (s *SQLiteStore) DeleteClipAsset(ctx context.Context, recordKind string, recordID string, deviceID string) error {
+	recordKind = strings.TrimSpace(recordKind)
+	recordID = strings.TrimSpace(recordID)
+	deviceID = strings.TrimSpace(deviceID)
+	if recordKind == "" || recordID == "" || deviceID == "" {
+		return nil
+	}
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM transcoded_assets
+		WHERE device_id = ? AND record_kind = ? AND record_id = ?`,
+		deviceID,
+		recordKind,
+		recordID,
+	); err != nil {
+		return err
+	}
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM transcode_jobs
+		WHERE device_id = ? AND record_kind = ? AND record_id = ?`,
+		deviceID,
+		recordKind,
+		recordID,
+	); err != nil {
+		return err
+	}
+	return nil
+}
+
 func clipURLPaths(clipID string) (string, string, string, string) {
 	clipID = strings.TrimSpace(clipID)
 	if clipID == "" {
@@ -205,6 +231,19 @@ func applyClipArchiveAsset(item *dahua.NVRRecording, clip mediaapi.ClipInfo) {
 	item.AssetClipID = strings.TrimSpace(clip.ID)
 	item.AssetStatus = normalizeArchiveAssetState(string(clip.Status))
 	item.AssetError = strings.TrimSpace(clip.Error)
+}
+
+func clearArchiveAsset(item *dahua.NVRRecording) {
+	if item == nil {
+		return
+	}
+	item.AssetStatus = archiveAssetStateIndexed
+	item.AssetClipID = ""
+	item.AssetError = ""
+	item.AssetPlaybackURL = ""
+	item.AssetDownloadURL = ""
+	item.AssetSelfURL = ""
+	item.AssetStopURL = ""
 }
 
 func normalizeArchiveAssetState(value string) string {

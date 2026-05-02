@@ -2376,12 +2376,12 @@ export class DahuaBridgeSurveillancePanelCard
     model: PanelModel,
     recording: NvrArchiveRecordingModel,
   ): Promise<void> {
-    if (recording.assetPlaybackUrl) {
+    if (this.isArchiveEventRecording(recording) && recording.assetPlaybackUrl) {
       const archiveSource = this.resolveArchiveSource(model);
       this.playIndexedArchiveRecording(model, recording, archiveSource?.deviceId ?? null, archiveSource?.rootDeviceId ?? null);
       return;
     }
-    if (recording.filePath && recording.exportUrl) {
+    if (this.isArchiveEventRecording(recording) && recording.filePath && recording.exportUrl) {
       await this.launchArchiveClipPlayback(model, recording);
       return;
     }
@@ -2793,9 +2793,7 @@ export class DahuaBridgeSurveillancePanelCard
     }
 
     const nextItems = this._archiveRecordings.items.map((item) =>
-      item.channel === recording.channel &&
-      item.startTime === recording.startTime &&
-      item.endTime === recording.endTime
+      this.isSameArchiveRecording(item, recording)
         ? {
             ...item,
             assetClipId: clip.id,
@@ -2813,9 +2811,7 @@ export class DahuaBridgeSurveillancePanelCard
 
     if (
       this._selectedPlayback &&
-      this._selectedPlayback.recording.channel === recording.channel &&
-      this._selectedPlayback.recording.startTime === recording.startTime &&
-      this._selectedPlayback.recording.endTime === recording.endTime
+      this.isSameArchiveRecording(this._selectedPlayback.recording, recording)
     ) {
       this._selectedPlayback = {
         ...this._selectedPlayback,
@@ -2975,6 +2971,7 @@ export class DahuaBridgeSurveillancePanelCard
   private archiveRecordingLogContext(recording: NvrArchiveRecordingModel): Record<string, unknown> {
     return {
       recording_id: recording.id,
+      record_kind: recording.recordKind ?? null,
       channel: recording.channel,
       start_time: recording.startTime,
       end_time: recording.endTime,
@@ -2982,6 +2979,40 @@ export class DahuaBridgeSurveillancePanelCard
       asset_status: recording.assetStatus ?? null,
       asset_clip_id: recording.assetClipId ?? null,
     };
+  }
+
+  private isArchiveEventRecording(recording: NvrArchiveRecordingModel): boolean {
+    const recordKind = recording.recordKind?.trim().toLowerCase() ?? "";
+    if (recordKind === "event") {
+      return true;
+    }
+    const source = recording.source?.trim().toLowerCase() ?? "";
+    const recordingType = recording.type?.trim().toLowerCase() ?? "";
+    return (
+      source === "nvr_event" ||
+      recordingType === "event" ||
+      recordingType.startsWith("event.")
+    );
+  }
+
+  private isSameArchiveRecording(
+    left: NvrArchiveRecordingModel,
+    right: NvrArchiveRecordingModel,
+  ): boolean {
+    const leftID = left.id?.trim() ?? "";
+    const rightID = right.id?.trim() ?? "";
+    if (leftID && rightID) {
+      const leftKind = left.recordKind?.trim().toLowerCase() ?? "";
+      const rightKind = right.recordKind?.trim().toLowerCase() ?? "";
+      return leftID === rightID && leftKind === rightKind;
+    }
+    return (
+      left.channel === right.channel &&
+      left.startTime === right.startTime &&
+      left.endTime === right.endTime &&
+      (left.filePath ?? "") === (right.filePath ?? "") &&
+      (left.recordKind ?? "") === (right.recordKind ?? "")
+    );
   }
 
   private logMedia(message: string, details?: Record<string, unknown>): void {
