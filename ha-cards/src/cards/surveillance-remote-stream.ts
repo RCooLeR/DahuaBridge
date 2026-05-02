@@ -321,7 +321,105 @@ class DahuaBridgeRemoteStreamElement extends LitElement {
     this.prepareVideo(video);
     this.startStartupTimer(sourceKey);
 
-    if (canPlayNativeHls(video)) {
+    const playbackMode = resolveHlsPlaybackMode({
+      hlsJsSupported: Hls.isSupported(),
+      nativeHlsSupported: canPlayNativeHls(video),
+    });
+
+    if (playbackMode === "hls.js") {
+      const hls = new Hls({
+        enableWorker: true,
+        ...HLS_RETRY_CONFIG,
+      });
+      this._hls = hls;
+      this._hlsMediaRecoveryAttempts = 0;
+      this._hlsNetworkRecoveryAttempts = 0;
+      logCardInfo("card remote stream attach hls.js", {
+        ...this.streamLogContext({ kind: "hls", url: normalizedSource }),
+        source_key: sourceKey,
+      });
+
+      hls.on(Hls.Events.MANIFEST_PARSED, () => {
+        if (!this.isCurrentSource(sourceKey)) {
+          return;
+        }
+        this.startStartupTimer(sourceKey, STARTUP_GRACE_TIMEOUT_MS);
+        this._hlsNetworkRecoveryAttempts = 0;
+        logCardInfo("card remote stream hls manifest parsed", {
+          ...this.streamLogContext({ kind: "hls", url: normalizedSource }),
+          source_key: sourceKey,
+        });
+        this.queuePlayback(video);
+      });
+      hls.on(Hls.Events.LEVEL_LOADED, () => {
+        if (!this.isCurrentSource(sourceKey)) {
+          return;
+        }
+        this.startStartupTimer(sourceKey, STARTUP_GRACE_TIMEOUT_MS);
+        logCardInfo("card remote stream hls level loaded", {
+          ...this.streamLogContext({ kind: "hls", url: normalizedSource }),
+          source_key: sourceKey,
+        });
+      });
+      hls.on(Hls.Events.FRAG_LOADED, () => {
+        if (!this.isCurrentSource(sourceKey)) {
+          return;
+        }
+        this.startStartupTimer(sourceKey, STARTUP_GRACE_TIMEOUT_MS);
+        this._hlsNetworkRecoveryAttempts = 0;
+      });
+      hls.on(Hls.Events.BUFFER_APPENDED, () => {
+        if (!this.isCurrentSource(sourceKey)) {
+          return;
+        }
+        this.clearStartupTimer();
+        logCardInfo("card remote stream hls buffer appended", {
+          ...this.streamLogContext({ kind: "hls", url: normalizedSource }),
+          source_key: sourceKey,
+        });
+        this.queuePlayback(video);
+      });
+      hls.on(Hls.Events.ERROR, (_event, data) => {
+        if (!this.isCurrentSource(sourceKey)) {
+          return;
+        }
+        logCardWarn("card remote stream hls.js error", {
+          ...this.streamLogContext({ kind: "hls", url: normalizedSource }),
+          fatal: data.fatal,
+          type: data.type,
+          details: data.details,
+          reason: data.reason,
+          response_code: data.response?.code,
+        });
+        if (!data.fatal) {
+          return;
+        }
+        if (
+          data.type === Hls.ErrorTypes.MEDIA_ERROR &&
+          this._hlsMediaRecoveryAttempts < 1
+        ) {
+          this._hlsMediaRecoveryAttempts += 1;
+          this.startStartupTimer(sourceKey, STARTUP_GRACE_TIMEOUT_MS);
+          hls.recoverMediaError();
+          return;
+        }
+        if (
+          data.type === Hls.ErrorTypes.NETWORK_ERROR &&
+          this._hlsNetworkRecoveryAttempts < MAX_HLS_NETWORK_RECOVERY_ATTEMPTS
+        ) {
+          this._hlsNetworkRecoveryAttempts += 1;
+          this.startStartupTimer(sourceKey, STARTUP_GRACE_TIMEOUT_MS);
+          hls.startLoad(-1);
+          return;
+        }
+        this.advanceToNextSource(`hls fatal ${data.type}`);
+      });
+      hls.attachMedia(video);
+      hls.loadSource(normalizedSource);
+      return;
+    }
+
+    if (playbackMode === "native") {
       logCardInfo("card remote stream attach native hls", {
         ...this.streamLogContext({ kind: "hls", url: normalizedSource }),
         source_key: sourceKey,
@@ -332,100 +430,10 @@ class DahuaBridgeRemoteStreamElement extends LitElement {
       return;
     }
 
-    if (!Hls.isSupported()) {
+    if (playbackMode === "unsupported") {
       this.advanceToNextSource("hls unsupported");
       return;
     }
-
-    const hls = new Hls({
-      enableWorker: true,
-      ...HLS_RETRY_CONFIG,
-    });
-    this._hls = hls;
-    this._hlsMediaRecoveryAttempts = 0;
-    this._hlsNetworkRecoveryAttempts = 0;
-    logCardInfo("card remote stream attach hls.js", {
-      ...this.streamLogContext({ kind: "hls", url: normalizedSource }),
-      source_key: sourceKey,
-    });
-
-    hls.on(Hls.Events.MANIFEST_PARSED, () => {
-      if (!this.isCurrentSource(sourceKey)) {
-        return;
-      }
-      this.startStartupTimer(sourceKey, STARTUP_GRACE_TIMEOUT_MS);
-      this._hlsNetworkRecoveryAttempts = 0;
-      logCardInfo("card remote stream hls manifest parsed", {
-        ...this.streamLogContext({ kind: "hls", url: normalizedSource }),
-        source_key: sourceKey,
-      });
-      this.queuePlayback(video);
-    });
-    hls.on(Hls.Events.LEVEL_LOADED, () => {
-      if (!this.isCurrentSource(sourceKey)) {
-        return;
-      }
-      this.startStartupTimer(sourceKey, STARTUP_GRACE_TIMEOUT_MS);
-      logCardInfo("card remote stream hls level loaded", {
-        ...this.streamLogContext({ kind: "hls", url: normalizedSource }),
-        source_key: sourceKey,
-      });
-    });
-    hls.on(Hls.Events.FRAG_LOADED, () => {
-      if (!this.isCurrentSource(sourceKey)) {
-        return;
-      }
-      this.startStartupTimer(sourceKey, STARTUP_GRACE_TIMEOUT_MS);
-      this._hlsNetworkRecoveryAttempts = 0;
-    });
-    hls.on(Hls.Events.BUFFER_APPENDED, () => {
-      if (!this.isCurrentSource(sourceKey)) {
-        return;
-      }
-      this.clearStartupTimer();
-      logCardInfo("card remote stream hls buffer appended", {
-        ...this.streamLogContext({ kind: "hls", url: normalizedSource }),
-        source_key: sourceKey,
-      });
-      this.queuePlayback(video);
-    });
-    hls.on(Hls.Events.ERROR, (_event, data) => {
-      if (!this.isCurrentSource(sourceKey)) {
-        return;
-      }
-      logCardWarn("card remote stream hls.js error", {
-        ...this.streamLogContext({ kind: "hls", url: normalizedSource }),
-        fatal: data.fatal,
-        type: data.type,
-        details: data.details,
-        reason: data.reason,
-        response_code: data.response?.code,
-      });
-      if (!data.fatal) {
-        return;
-      }
-      if (
-        data.type === Hls.ErrorTypes.MEDIA_ERROR &&
-        this._hlsMediaRecoveryAttempts < 1
-      ) {
-        this._hlsMediaRecoveryAttempts += 1;
-        this.startStartupTimer(sourceKey, STARTUP_GRACE_TIMEOUT_MS);
-        hls.recoverMediaError();
-        return;
-      }
-      if (
-        data.type === Hls.ErrorTypes.NETWORK_ERROR &&
-        this._hlsNetworkRecoveryAttempts < MAX_HLS_NETWORK_RECOVERY_ATTEMPTS
-      ) {
-        this._hlsNetworkRecoveryAttempts += 1;
-        this.startStartupTimer(sourceKey, STARTUP_GRACE_TIMEOUT_MS);
-        hls.startLoad(-1);
-        return;
-      }
-      this.advanceToNextSource(`hls fatal ${data.type}`);
-    });
-    hls.attachMedia(video);
-    hls.loadSource(normalizedSource);
   }
 
   private advanceToNextSource(reason: string): void {
@@ -571,6 +579,19 @@ function canPlayNativeHls(video: HTMLVideoElement): boolean {
     video.canPlayType("application/vnd.apple.mpegurl") !== "" ||
     video.canPlayType("application/x-mpegURL") !== ""
   );
+}
+
+export function resolveHlsPlaybackMode(capabilities: {
+  hlsJsSupported: boolean;
+  nativeHlsSupported: boolean;
+}): "hls.js" | "native" | "unsupported" {
+  if (capabilities.hlsJsSupported) {
+    return "hls.js";
+  }
+  if (capabilities.nativeHlsSupported) {
+    return "native";
+  }
+  return "unsupported";
 }
 
 function getVideoElementDiagnostics(video: HTMLVideoElement): {
