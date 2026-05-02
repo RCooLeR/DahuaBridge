@@ -22,6 +22,9 @@ const optionalIntegerSchema = z.preprocess((value) => {
 }, z.coerce.number().int().optional().nullable());
 
 const archiveRecordingSchema = z.object({
+  id: z.string().optional().nullable(),
+  record_kind: z.string().optional().nullable(),
+  recordKind: z.string().optional().nullable(),
   source: z.string().optional().nullable(),
   Source: z.string().optional().nullable(),
   channel: optionalIntegerSchema,
@@ -34,6 +37,20 @@ const archiveRecordingSchema = z.object({
   DownloadURL: z.string().optional().nullable(),
   export_url: z.string().optional().nullable(),
   ExportURL: z.string().optional().nullable(),
+  asset_status: z.string().optional().nullable(),
+  assetStatus: z.string().optional().nullable(),
+  asset_clip_id: z.string().optional().nullable(),
+  assetClipId: z.string().optional().nullable(),
+  asset_playback_url: z.string().optional().nullable(),
+  assetPlaybackURL: z.string().optional().nullable(),
+  asset_download_url: z.string().optional().nullable(),
+  assetDownloadURL: z.string().optional().nullable(),
+  asset_self_url: z.string().optional().nullable(),
+  assetSelfURL: z.string().optional().nullable(),
+  asset_stop_url: z.string().optional().nullable(),
+  assetStopURL: z.string().optional().nullable(),
+  asset_error: z.string().optional().nullable(),
+  assetError: z.string().optional().nullable(),
   file_path: z.string().optional().nullable(),
   FilePath: z.string().optional().nullable(),
   type: z.string().optional().nullable(),
@@ -91,6 +108,12 @@ const archiveExportClipSchema = z.object({
 const archiveExportResponseSchema = z.object({
   status: z.string().min(1),
   clip: archiveExportClipSchema,
+});
+
+const bridgeErrorResponseSchema = z.object({
+  error: z.string().optional().nullable(),
+  code: z.string().optional().nullable(),
+  message: z.string().optional().nullable(),
 });
 
 const bridgeRecordingSchema = z.object({
@@ -246,12 +269,21 @@ function mapArchiveRecording(
   },
 ): NvrArchiveRecordingModel {
   return {
+    id: firstNullableString(item.id),
+    recordKind: firstNullableString(item.record_kind, item.recordKind),
     source: firstNullableString(item.source, item.Source),
     channel: firstNumber(item.channel, item.Channel, fallback.channel),
     startTime: firstString(item.start_time, item.StartTime, fallback.startTime),
     endTime: firstString(item.end_time, item.EndTime, fallback.endTime),
     downloadUrl: firstNullableString(item.download_url, item.DownloadURL),
     exportUrl: firstNullableString(item.export_url, item.ExportURL),
+    assetStatus: firstNullableString(item.asset_status, item.assetStatus),
+    assetClipId: firstNullableString(item.asset_clip_id, item.assetClipId),
+    assetPlaybackUrl: firstNullableString(item.asset_playback_url, item.assetPlaybackURL),
+    assetDownloadUrl: firstNullableString(item.asset_download_url, item.assetDownloadURL),
+    assetSelfUrl: firstNullableString(item.asset_self_url, item.assetSelfURL),
+    assetStopUrl: firstNullableString(item.asset_stop_url, item.assetStopURL),
+    assetError: firstNullableString(item.asset_error, item.assetError),
     filePath: firstNullableString(item.file_path, item.FilePath),
     type: firstNullableString(item.type, item.Type),
     videoStream: firstNullableString(item.video_stream, item.VideoStream),
@@ -281,7 +313,10 @@ export async function exportArchiveRecording(
   logArchiveRequest("response", "POST", exportUrl, response.status, performance.now() - started);
 
   if (!response.ok) {
-    throw new Error(`Bridge archive export failed with status ${response.status}`);
+    throw new Error(
+      (await readBridgeErrorMessage(response)) ??
+        `Bridge archive export failed with status ${response.status}`,
+    );
   }
 
   const payload = archiveExportResponseSchema.parse(await response.json());
@@ -310,7 +345,10 @@ export async function waitForArchiveExportCompletion(
       signal,
     });
     if (!response.ok) {
-      throw new Error(`Bridge archive export status failed with status ${response.status}`);
+      throw new Error(
+        (await readBridgeErrorMessage(response)) ??
+          `Bridge archive export status failed with status ${response.status}`,
+      );
     }
     current = mapArchiveExportClip(archiveExportClipSchema.parse(await response.json()), browserBridgeUrl);
   }
@@ -372,6 +410,23 @@ function normalizeBrowserBridgeUrl(value: string): string | null {
   try {
     const url = new URL(value, window.location.origin);
     return `${url.protocol}//${url.host}`;
+  } catch {
+    return null;
+  }
+}
+
+async function readBridgeErrorMessage(response: Response): Promise<string | null> {
+  const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
+  try {
+    if (contentType.includes("application/json")) {
+      const payload = bridgeErrorResponseSchema.safeParse(await response.json());
+      if (payload.success) {
+        return firstNullableString(payload.data.error, payload.data.message);
+      }
+      return null;
+    }
+    const text = (await response.text()).trim();
+    return text || null;
   } catch {
     return null;
   }

@@ -458,7 +458,8 @@ func buildPlaybackRecordingDownloadURL(deviceCfg config.DeviceConfig, filePath s
 		return ""
 	}
 
-	base.Path = "/cgi-bin/RPC_Loadfile" + escapePlaybackRecordingFilePath(filePath)
+	base.Path = "/cgi-bin/RPC_Loadfile" + filePath
+	base.RawPath = "/cgi-bin/RPC_Loadfile" + escapePlaybackRecordingFilePath(filePath)
 	base.RawQuery = ""
 	base.Fragment = ""
 	if includeCredentials {
@@ -478,7 +479,9 @@ func escapePlaybackRecordingFilePath(filePath string) string {
 		if index == 0 && segment == "" {
 			continue
 		}
-		segments[index] = url.PathEscape(segment)
+		escapedSegment := url.PathEscape(segment)
+		escapedSegment = strings.ReplaceAll(escapedSegment, "@", "%40")
+		segments[index] = escapedSegment
 	}
 	escaped := strings.Join(segments, "/")
 	if strings.HasPrefix(filePath, "/") && !strings.HasPrefix(escaped, "/") {

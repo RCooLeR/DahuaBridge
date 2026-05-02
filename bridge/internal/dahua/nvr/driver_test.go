@@ -322,6 +322,14 @@ func TestDecodeRecordingDownloadResponseRejectsInlineRPCError(t *testing.T) {
 	}
 }
 
+func TestEscapeRecordingFilePathEscapesAtSign(t *testing.T) {
+	got := escapeRecordingFilePath("/mnt/dvr/2026-05-02/0/dav/01/1/0/627506/01.30.00-02.00.00[R][0@0][0].dav")
+	want := "/mnt/dvr/2026-05-02/0/dav/01/1/0/627506/01.30.00-02.00.00%5BR%5D%5B0%400%5D%5B0%5D.dav"
+	if got != want {
+		t.Fatalf("unexpected escaped file path %q", got)
+	}
+}
+
 func TestDriverDownloadRecordingClipUsesRPC3LoadfileForEvents(t *testing.T) {
 	previousLocal := time.Local
 	time.Local = time.FixedZone("EEST", 3*60*60)

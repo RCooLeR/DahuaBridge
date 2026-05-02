@@ -113,24 +113,33 @@ type NVRRecordingQuery struct {
 }
 
 type NVRRecording struct {
-	Source         string   `json:"source,omitempty"`
-	Status         string   `json:"status,omitempty"`
-	ClipID         string   `json:"clip_id,omitempty"`
-	StreamID       string   `json:"stream_id,omitempty"`
-	DownloadURL    string   `json:"download_url,omitempty"`
-	ExportURL      string   `json:"export_url,omitempty"`
-	Channel        int      `json:"channel"`
-	StartTime      string   `json:"start_time"`
-	EndTime        string   `json:"end_time"`
-	FilePath       string   `json:"file_path,omitempty"`
-	Type           string   `json:"type,omitempty"`
-	VideoStream    string   `json:"video_stream,omitempty"`
-	Disk           int      `json:"disk,omitempty"`
-	Partition      int      `json:"partition,omitempty"`
-	Cluster        int      `json:"cluster,omitempty"`
-	LengthBytes    int64    `json:"length_bytes,omitempty"`
-	CutLengthBytes int64    `json:"cut_length_bytes,omitempty"`
-	Flags          []string `json:"flags,omitempty"`
+	ID               string   `json:"id,omitempty"`
+	RecordKind       string   `json:"record_kind,omitempty"`
+	Source           string   `json:"source,omitempty"`
+	Status           string   `json:"status,omitempty"`
+	ClipID           string   `json:"clip_id,omitempty"`
+	StreamID         string   `json:"stream_id,omitempty"`
+	DownloadURL      string   `json:"download_url,omitempty"`
+	ExportURL        string   `json:"export_url,omitempty"`
+	AssetStatus      string   `json:"asset_status,omitempty"`
+	AssetClipID      string   `json:"asset_clip_id,omitempty"`
+	AssetError       string   `json:"asset_error,omitempty"`
+	AssetPlaybackURL string   `json:"asset_playback_url,omitempty"`
+	AssetDownloadURL string   `json:"asset_download_url,omitempty"`
+	AssetSelfURL     string   `json:"asset_self_url,omitempty"`
+	AssetStopURL     string   `json:"asset_stop_url,omitempty"`
+	Channel          int      `json:"channel"`
+	StartTime        string   `json:"start_time"`
+	EndTime          string   `json:"end_time"`
+	FilePath         string   `json:"file_path,omitempty"`
+	Type             string   `json:"type,omitempty"`
+	VideoStream      string   `json:"video_stream,omitempty"`
+	Disk             int      `json:"disk,omitempty"`
+	Partition        int      `json:"partition,omitempty"`
+	Cluster          int      `json:"cluster,omitempty"`
+	LengthBytes      int64    `json:"length_bytes,omitempty"`
+	CutLengthBytes   int64    `json:"cut_length_bytes,omitempty"`
+	Flags            []string `json:"flags,omitempty"`
 }
 
 type NVRRecordingSearchResult struct {

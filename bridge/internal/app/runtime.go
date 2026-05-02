@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	archiveapi "RCooLeR/DahuaBridge/internal/archive"
 	"RCooLeR/DahuaBridge/internal/config"
 	"RCooLeR/DahuaBridge/internal/dahua"
 	"RCooLeR/DahuaBridge/internal/media"
@@ -22,6 +23,7 @@ type runtimeServices struct {
 	cfg              config.Config
 	probes           *store.ProbeStore
 	media            runtimeMediaReader
+	archive          runtimeArchiveReader
 	nvrSnapshots     map[string]dahua.SnapshotProvider
 	nvrDownloads     map[string]dahua.NVRRecordingDownloader
 	nvrClipDownloads map[string]dahua.NVRRecordingClipDownloader
@@ -42,7 +44,19 @@ type runtimeMediaReader interface {
 	IntercomStatus(string) media.IntercomStatus
 	CaptureFrame(context.Context, string, string, int) ([]byte, string, error)
 	FindClips(media.ClipQuery) ([]media.ClipInfo, error)
+	GetClip(string) (media.ClipInfo, error)
 	ActiveClip(string) (media.ClipInfo, bool)
+}
+
+type runtimeArchiveReader interface {
+	SearchRecordings(
+		context.Context,
+		string,
+		dahua.NVRRecordingQuery,
+		func(context.Context, string, dahua.NVRRecordingQuery) (dahua.NVRRecordingSearchResult, error),
+	) (dahua.NVRRecordingSearchResult, error)
+	EnrichRecordings(context.Context, string, *dahua.NVRRecordingSearchResult, archiveapi.ClipFinder) error
+	TrackClipExport(context.Context, string, dahua.NVRPlaybackSessionRequest, media.ClipInfo) error
 }
 
 type cachedSnapshot struct {
@@ -98,6 +112,12 @@ func (r *runtimeServices) AttachMedia(reader runtimeMediaReader) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.media = reader
+}
+
+func (r *runtimeServices) AttachArchive(reader runtimeArchiveReader) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.archive = reader
 }
 
 func (r *runtimeServices) RegisterNVR(deviceID string, provider dahua.SnapshotProvider, recordings dahua.NVRRecordingSearcher, cfg config.DeviceConfig) {
@@ -219,6 +239,8 @@ func (r *runtimeServices) NVRRecordings(ctx context.Context, deviceID string, qu
 
 	r.mu.RLock()
 	searcher, ok := r.nvrRecordings[deviceID]
+	archiveReader := r.archive
+	mediaReader := r.media
 	r.mu.RUnlock()
 	if !ok {
 		err := fmt.Errorf("%w: %s", dahua.ErrDeviceNotFound, deviceID)
@@ -226,7 +248,19 @@ func (r *runtimeServices) NVRRecordings(ctx context.Context, deviceID string, qu
 		return dahua.NVRRecordingSearchResult{}, err
 	}
 
-	result, err := searcher.FindRecordings(ctx, query)
+	searchLive := func(callCtx context.Context, _ string, callQuery dahua.NVRRecordingQuery) (dahua.NVRRecordingSearchResult, error) {
+		return searcher.FindRecordings(callCtx, callQuery)
+	}
+
+	var (
+		result dahua.NVRRecordingSearchResult
+		err    error
+	)
+	if archiveReader != nil {
+		result, err = archiveReader.SearchRecordings(ctx, deviceID, query, searchLive)
+	} else {
+		result, err = searchLive(ctx, deviceID, query)
+	}
 	if err != nil {
 		r.finishRecordingSearchFlight(cacheKey, flight, dahua.NVRRecordingSearchResult{}, err)
 		return dahua.NVRRecordingSearchResult{}, err
@@ -236,6 +270,12 @@ func (r *runtimeServices) NVRRecordings(ctx context.Context, deviceID string, qu
 	}
 	if result.Items == nil {
 		result.Items = []dahua.NVRRecording{}
+	}
+	if archiveReader != nil {
+		if enrichErr := archiveReader.EnrichRecordings(ctx, deviceID, &result, mediaReader); enrichErr != nil {
+			r.finishRecordingSearchFlight(cacheKey, flight, dahua.NVRRecordingSearchResult{}, enrichErr)
+			return dahua.NVRRecordingSearchResult{}, enrichErr
+		}
 	}
 	r.storeRecordingSearch(cacheKey, result)
 	r.finishRecordingSearchFlight(cacheKey, flight, result, nil)
@@ -269,6 +309,16 @@ func (r *runtimeServices) NVRDownloadRecordingClip(ctx context.Context, deviceID
 		return dahua.NVRRecordingDownload{}, fmt.Errorf("%w: %s", dahua.ErrDeviceNotFound, deviceID)
 	}
 	return downloader.DownloadRecordingClip(ctx, request)
+}
+
+func (r *runtimeServices) TrackNVRArchiveClip(ctx context.Context, deviceID string, request dahua.NVRPlaybackSessionRequest, clip media.ClipInfo) error {
+	r.mu.RLock()
+	archiveReader := r.archive
+	r.mu.RUnlock()
+	if archiveReader == nil {
+		return nil
+	}
+	return archiveReader.TrackClipExport(ctx, deviceID, request, clip)
 }
 
 func (r *runtimeServices) VTOSnapshot(ctx context.Context, deviceID string) ([]byte, string, error) {
@@ -408,6 +458,18 @@ func (r *runtimeServices) AdminSettings() map[string]any {
 			"hwaccel_args":          append([]string(nil), cfg.Media.HWAccelArgs...),
 			"webrtc_ice_servers":    redactICEServers(cfg.Media.WebRTCICEServers),
 			"webrtc_uplink_targets": append([]string(nil), cfg.Media.WebRTCUplinkTargets...),
+		},
+		"archive": map[string]any{
+			"enabled":           cfg.Archive.Enabled,
+			"db_path":           cfg.Archive.DBPath,
+			"cache_dir":         cfg.Archive.CacheDir,
+			"temp_dir":          cfg.Archive.TempDir,
+			"prefetch_days":     cfg.Archive.PrefetchDays,
+			"retain_days":       cfg.Archive.RetainDays,
+			"max_parallel_jobs": cfg.Archive.MaxParallelJobs,
+			"prefetch_smd":      cfg.Archive.PrefetchSMD,
+			"prefetch_ivs":      cfg.Archive.PrefetchIVS,
+			"cron":              cfg.Archive.Cron,
 		},
 		"state_store": map[string]any{
 			"enabled":        cfg.StateStore.Enabled,

@@ -18,6 +18,7 @@ type Config struct {
 	HTTP          HTTPConfig          `yaml:"http"`
 	MQTT          MQTTConfig          `yaml:"mqtt"`
 	Media         MediaConfig         `yaml:"media"`
+	Archive       ArchiveConfig       `yaml:"archive"`
 	HomeAssistant HomeAssistantConfig `yaml:"home_assistant"`
 	Imou          ImouConfig          `yaml:"imou"`
 	StateStore    StateStoreConfig    `yaml:"state_store"`
@@ -96,6 +97,19 @@ type MediaConfig struct {
 	HLSTmpDir           string                  `yaml:"hls_tmp_dir"`
 	HLSTempPath         string                  `yaml:"hls_temp_path"`
 	HLSKeepAfterExit    time.Duration           `yaml:"hls_keep_after_exit"`
+}
+
+type ArchiveConfig struct {
+	Enabled         bool   `yaml:"enabled"`
+	DBPath          string `yaml:"db_path"`
+	CacheDir        string `yaml:"cache_dir"`
+	TempDir         string `yaml:"temp_dir"`
+	PrefetchDays    int    `yaml:"prefetch_days"`
+	RetainDays      int    `yaml:"retain_days"`
+	MaxParallelJobs int    `yaml:"max_parallel_jobs"`
+	PrefetchSMD     bool   `yaml:"prefetch_smd"`
+	PrefetchIVS     bool   `yaml:"prefetch_ivs"`
+	Cron            string `yaml:"cron"`
 }
 
 type WebRTCICEServerConfig struct {
@@ -272,6 +286,18 @@ func defaultConfig() Config {
 			HLSTempPath:        "/data/tmp/dahuabridge/hls",
 			HLSKeepAfterExit:   6 * time.Hour,
 		},
+		Archive: ArchiveConfig{
+			Enabled:         false,
+			DBPath:          "/data/archive/archive.db",
+			CacheDir:        "/data/archive/cache",
+			TempDir:         "/data/archive/tmp",
+			PrefetchDays:    7,
+			RetainDays:      7,
+			MaxParallelJobs: 2,
+			PrefetchSMD:     true,
+			PrefetchIVS:     true,
+			Cron:            "5,35 * * * *",
+		},
 		HomeAssistant: HomeAssistantConfig{
 			Enabled:              true,
 			NodeID:               "dahuabridge",
@@ -419,6 +445,31 @@ func (c *Config) normalize() error {
 	if c.Media.HLSListSize <= 0 {
 		c.Media.HLSListSize = 6
 	}
+	c.Archive.DBPath = strings.TrimSpace(c.Archive.DBPath)
+	if c.Archive.DBPath == "" {
+		c.Archive.DBPath = "/data/archive/archive.db"
+	}
+	c.Archive.CacheDir = strings.TrimSpace(c.Archive.CacheDir)
+	if c.Archive.CacheDir == "" {
+		c.Archive.CacheDir = "/data/archive/cache"
+	}
+	c.Archive.TempDir = strings.TrimSpace(c.Archive.TempDir)
+	if c.Archive.TempDir == "" {
+		c.Archive.TempDir = "/data/archive/tmp"
+	}
+	if c.Archive.PrefetchDays <= 0 {
+		c.Archive.PrefetchDays = 7
+	}
+	if c.Archive.RetainDays <= 0 {
+		c.Archive.RetainDays = c.Archive.PrefetchDays
+	}
+	if c.Archive.MaxParallelJobs <= 0 {
+		c.Archive.MaxParallelJobs = 2
+	}
+	c.Archive.Cron = strings.TrimSpace(c.Archive.Cron)
+	if c.Archive.Cron == "" {
+		c.Archive.Cron = "5,35 * * * *"
+	}
 	for index := range c.Media.WebRTCICEServers {
 		server := &c.Media.WebRTCICEServers[index]
 		server.Username = strings.TrimSpace(server.Username)
@@ -476,6 +527,26 @@ func (c *Config) normalize() error {
 func (c Config) validate() error {
 	if c.MQTT.Enabled && c.MQTT.Broker == "" {
 		return errors.New("mqtt.broker is required when mqtt.enabled=true")
+	}
+	if c.Archive.Enabled {
+		if c.Archive.DBPath == "" {
+			return errors.New("archive.db_path is required when archive.enabled=true")
+		}
+		if c.Archive.CacheDir == "" {
+			return errors.New("archive.cache_dir is required when archive.enabled=true")
+		}
+		if c.Archive.TempDir == "" {
+			return errors.New("archive.temp_dir is required when archive.enabled=true")
+		}
+		if c.Archive.PrefetchDays <= 0 {
+			return errors.New("archive.prefetch_days must be > 0 when archive.enabled=true")
+		}
+		if c.Archive.RetainDays <= 0 {
+			return errors.New("archive.retain_days must be > 0 when archive.enabled=true")
+		}
+		if c.Archive.MaxParallelJobs <= 0 {
+			return errors.New("archive.max_parallel_jobs must be > 0 when archive.enabled=true")
+		}
 	}
 
 	if c.StateStore.Enabled && c.StateStore.Path == "" {

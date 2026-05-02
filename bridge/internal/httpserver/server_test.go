@@ -523,6 +523,7 @@ func newTestServerWithConfig(cfg config.HTTPConfig, snapshots SnapshotReader, me
 func newTestServerWithReaders(cfg config.HTTPConfig, probes ProbeReader, snapshots SnapshotReader, media MediaReader, actions ActionReader, events EventReader) *Server {
 	return New(
 		cfg,
+		config.ArchiveConfig{},
 		zerolog.Nop(),
 		metrics.New(buildinfo.Info()),
 		probes,
@@ -1289,6 +1290,7 @@ func TestServerClampsWriteTimeoutForLongAdminActions(t *testing.T) {
 			MetricsPath:   "/metrics",
 			WriteTimeout:  10 * time.Second,
 		},
+		config.ArchiveConfig{},
 		zerolog.Nop(),
 		metrics.New(buildinfo.Info()),
 		stubProbeReader{},
@@ -2803,6 +2805,84 @@ func TestNVRRecordingsEndpointParsesEventOnlyQuery(t *testing.T) {
 		!strings.Contains(rec.Body.String(), `type=Event.smdTypeHuman`) ||
 		!strings.Contains(rec.Body.String(), `video_stream=Main`) {
 		t.Fatalf("expected event export URL parameters in response: %s", rec.Body.String())
+	}
+}
+
+func TestNVRRecordingsEndpointAttachesArchiveAssetURLsByState(t *testing.T) {
+	server := newTestServerWithConfig(config.HTTPConfig{
+		ListenAddress: ":0",
+		MetricsPath:   "/metrics",
+		HealthPath:    "/healthz",
+	}, stubSnapshotReader{
+		nvrRecordings: func(_ context.Context, _ string, query dahua.NVRRecordingQuery) (dahua.NVRRecordingSearchResult, error) {
+			return dahua.NVRRecordingSearchResult{
+				DeviceID:      "west20_nvr",
+				Channel:       query.Channel,
+				StartTime:     "2026-04-28 00:00:00",
+				EndTime:       "2026-04-28 01:00:00",
+				Limit:         query.Limit,
+				ReturnedCount: 3,
+				Items: []dahua.NVRRecording{
+					{
+						ID:          "file_ready",
+						RecordKind:  "file",
+						Source:      "nvr",
+						Channel:     query.Channel,
+						StartTime:   "2026-04-28 00:10:00",
+						EndTime:     "2026-04-28 00:10:20",
+						FilePath:    "/mnt/dvr/ready.dav",
+						AssetStatus: "ready",
+						AssetClipID: "clip_ready",
+					},
+					{
+						ID:          "event_transcoding",
+						RecordKind:  "event",
+						Source:      "nvr_event",
+						Channel:     query.Channel,
+						StartTime:   "2026-04-28 00:20:00",
+						EndTime:     "2026-04-28 00:20:20",
+						FilePath:    "/mnt/dvr/transcoding.dav",
+						Type:        "Event.smdTypeHuman",
+						AssetStatus: "transcoding",
+						AssetClipID: "clip_transcoding",
+					},
+					{
+						ID:          "file_indexed",
+						RecordKind:  "file",
+						Source:      "nvr",
+						Channel:     query.Channel,
+						StartTime:   "2026-04-28 00:30:00",
+						EndTime:     "2026-04-28 00:30:20",
+						FilePath:    "/mnt/dvr/indexed.dav",
+						AssetStatus: "indexed",
+						AssetClipID: "clip_indexed",
+					},
+				},
+			}, nil
+		},
+	}, nil, stubActionReader{}, stubEventReader{})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/nvr/west20_nvr/recordings?channel=1&start=2026-04-28T00:00:00Z&end=2026-04-28T01:00:00Z&limit=5", nil)
+	rec := httptest.NewRecorder()
+
+	server.httpServer.Handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, `"asset_status":"ready"`) ||
+		!strings.Contains(body, `"asset_download_url":"http://example.com/api/v1/media/recordings/clip_ready/download"`) ||
+		!strings.Contains(body, `"asset_playback_url":"http://example.com/api/v1/media/recordings/clip_ready/play"`) {
+		t.Fatalf("expected ready asset urls in response: %s", body)
+	}
+	if !strings.Contains(body, `"asset_status":"transcoding"`) ||
+		!strings.Contains(body, `"asset_stop_url":"http://example.com/api/v1/media/recordings/clip_transcoding/stop"`) {
+		t.Fatalf("expected transcoding asset stop url in response: %s", body)
+	}
+	if strings.Contains(body, `"asset_download_url":"http://example.com/api/v1/media/recordings/clip_indexed/download"`) ||
+		strings.Contains(body, `"asset_playback_url":"http://example.com/api/v1/media/recordings/clip_indexed/play"`) {
+		t.Fatalf("expected indexed assets to avoid playable urls: %s", body)
 	}
 }
 

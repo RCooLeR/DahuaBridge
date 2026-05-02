@@ -18,6 +18,7 @@ type stubRuntimeMedia struct {
 	status       map[string]media.IntercomStatus
 	captureFrame func(context.Context, string, string, int) ([]byte, string, error)
 	findClips    func(media.ClipQuery) ([]media.ClipInfo, error)
+	getClip      func(string) (media.ClipInfo, error)
 	activeClip   func(string) (media.ClipInfo, bool)
 }
 
@@ -241,6 +242,13 @@ func (s stubRuntimeMedia) FindClips(query media.ClipQuery) ([]media.ClipInfo, er
 		return s.findClips(query)
 	}
 	return nil, nil
+}
+
+func (s stubRuntimeMedia) GetClip(clipID string) (media.ClipInfo, error) {
+	if s.getClip != nil {
+		return s.getClip(clipID)
+	}
+	return media.ClipInfo{}, nil
 }
 
 func (s stubRuntimeMedia) ActiveClip(streamID string) (media.ClipInfo, bool) {

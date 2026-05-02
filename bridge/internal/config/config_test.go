@@ -93,6 +93,58 @@ func TestMediaDefaults(t *testing.T) {
 	}
 }
 
+func TestArchiveDefaults(t *testing.T) {
+	cfg := defaultConfig()
+	if cfg.Archive.DBPath != "/data/archive/archive.db" {
+		t.Fatalf("unexpected default archive db_path %q", cfg.Archive.DBPath)
+	}
+	if cfg.Archive.CacheDir != "/data/archive/cache" {
+		t.Fatalf("unexpected default archive cache_dir %q", cfg.Archive.CacheDir)
+	}
+	if cfg.Archive.TempDir != "/data/archive/tmp" {
+		t.Fatalf("unexpected default archive temp_dir %q", cfg.Archive.TempDir)
+	}
+	if cfg.Archive.Cron != "5,35 * * * *" {
+		t.Fatalf("unexpected default archive cron %q", cfg.Archive.Cron)
+	}
+}
+
+func TestNormalizeArchiveTempDir(t *testing.T) {
+	cfg := defaultConfig()
+	cfg.Archive.TempDir = " /srv/archive/tmp "
+
+	if err := cfg.normalize(); err != nil {
+		t.Fatalf("normalize returned error: %v", err)
+	}
+
+	if cfg.Archive.TempDir != "/srv/archive/tmp" {
+		t.Fatalf("unexpected normalized archive temp_dir %q", cfg.Archive.TempDir)
+	}
+}
+
+func TestValidateRequiresArchiveTempDirWhenEnabled(t *testing.T) {
+	cfg := defaultConfig()
+	cfg.MQTT.Enabled = false
+	cfg.Archive.Enabled = true
+	cfg.Archive.TempDir = ""
+	cfg.Devices.NVR = []DeviceConfig{{
+		ID:       "nvr",
+		BaseURL:  "http://127.0.0.1",
+		Username: "admin",
+		Password: "secret",
+		Enabled:  boolPtr(true),
+	}}
+
+	if err := cfg.normalize(); err != nil {
+		t.Fatalf("normalize returned error: %v", err)
+	}
+	cfg.Archive.TempDir = ""
+	err := cfg.validate()
+	if err == nil || !strings.Contains(err.Error(), "archive.temp_dir") {
+		t.Fatalf("expected archive.temp_dir validation error, got %v", err)
+	}
+}
+
 func TestHTTPRateLimitDefaults(t *testing.T) {
 	cfg := defaultConfig()
 	if cfg.HTTP.WriteTimeout != 60*time.Second {

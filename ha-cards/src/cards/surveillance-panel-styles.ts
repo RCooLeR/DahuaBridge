@@ -1270,6 +1270,60 @@ export const surveillancePanelOverviewStyles = css`
     pointer-events: auto;
   }
 
+  .tile-event-counts {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+    z-index: 2;
+    pointer-events: none;
+  }
+
+  .tile-event-counts-inline {
+    flex-wrap: wrap;
+    align-self: center;
+  }
+
+  .tile-event-counts-overlay {
+    position: absolute;
+    top: 12px;
+    left: 12px;
+    flex-wrap: wrap;
+  }
+
+  .tile-event-count {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    min-height: 24px;
+    padding: 0 8px;
+    border-radius: 999px;
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    background: rgba(7, 18, 29, 0.66);
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
+    color: var(--db-text);
+    font-size: 12px;
+    font-weight: 600;
+    white-space: nowrap;
+  }
+
+  .tile-event-count.info {
+    border-color: rgba(75, 129, 255, 0.35);
+    color: #bfd0ff;
+  }
+
+  .tile-event-count.warning {
+    border-color: rgba(248, 161, 29, 0.35);
+    color: #ffd494;
+  }
+
+  .tile-event-count ha-icon {
+    font-size: 14px;
+    width: 14px;
+    height: 14px;
+  }
+
   .tile-controls .icon-button {
     width: 32px;
     height: 32px;

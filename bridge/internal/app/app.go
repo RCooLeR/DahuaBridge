@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"RCooLeR/DahuaBridge/internal/archive"
 	"RCooLeR/DahuaBridge/internal/buildinfo"
 	"RCooLeR/DahuaBridge/internal/config"
 	"RCooLeR/DahuaBridge/internal/dahua"
@@ -57,8 +58,23 @@ func Run(ctx context.Context, cfg config.Config, info buildinfo.BuildInfo) error
 	if len(drivers) == 0 {
 		return errors.New("no enabled drivers were created from config")
 	}
+	archiveService, err := archive.New(cfg.Archive, cfg.Devices.NVR, services, probeStore, logger)
+	if err != nil {
+		return fmt.Errorf("create archive service: %w", err)
+	}
+	if archiveService != nil {
+		services.AttachArchive(archiveService)
+		if err := archiveService.Start(ctx); err != nil {
+			return fmt.Errorf("start archive service: %w", err)
+		}
+		defer func() {
+			if closeErr := archiveService.Close(); closeErr != nil {
+				logger.Error().Err(closeErr).Msg("archive service shutdown failed")
+			}
+		}()
+	}
 	adminActions := newAdminActions(logger, metricsRegistry, probeStore, services, drivers)
-	adminServer := httpserver.New(cfg.HTTP, logger, metricsRegistry, probeStore, services, mediaManager, adminActions, recentEvents)
+	adminServer := httpserver.New(cfg.HTTP, cfg.Archive, logger, metricsRegistry, probeStore, services, mediaManager, adminActions, recentEvents)
 
 	serverErrors := make(chan error, 1)
 	go func() {

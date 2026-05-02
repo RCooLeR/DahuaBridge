@@ -29,14 +29,23 @@ import type {
 } from "../types/home-assistant";
 import { postBridgeRequest } from "../ha/actions";
 import {
+  buildNvrEventSummaryUrl,
+  fetchNvrEventSummary,
+} from "../ha/bridge-event-summary";
+import {
   BridgeIntercomSessionController,
   type BridgeIntercomSnapshot,
   resolveIntercomOfferUrl,
 } from "../ha/bridge-intercom";
 import {
+  summarizePanelTodayEvents,
+  type PanelTodayEventSummaryModel,
+} from "../domain/event-summary";
+import {
   syncRemoteStreamStyles,
 } from "./surveillance-panel-media";
 import { surveillancePanelBaseStyles, surveillancePanelOverviewStyles } from "./surveillance-panel-styles";
+import { renderCameraEventCountBadges } from "./surveillance-panel-event-badges";
 import { openExternalUrl } from "../utils/browser";
 import { logCardInfo, redactUrlForLog } from "../utils/logging";
 
@@ -90,6 +99,7 @@ export class DahuaBridgeSurveillanceTileCard
     _cameraAudioMuted: { state: true },
     _vtoStreamPlaying: { state: true },
     _vtoMicrophoneState: { state: true },
+    _eventSummary: { state: true },
   } as const;
 
   static styles = [
@@ -140,9 +150,18 @@ export class DahuaBridgeSurveillanceTileCard
         pointer-events: none;
       }
 
+      .tile-topbar-copy {
+        display: flex;
+        align-items: flex-start;
+        gap: 8px;
+        min-width: 0;
+        max-width: 100%;
+      }
+
       .tile-title-banner {
         min-width: 0;
-        max-width: calc(100% - 88px);
+        max-width: 100%;
+        flex: 1 1 auto;
         padding: 7px 10px;
         border-radius: 8px;
         border: 1px solid rgba(255, 255, 255, 0.14);
@@ -194,8 +213,8 @@ export class DahuaBridgeSurveillanceTileCard
       }
 
       @media (max-width: 480px) {
-        .tile-title-banner {
-          max-width: calc(100% - 72px);
+        .tile-topbar-copy {
+          flex-wrap: wrap;
         }
 
         .tile-overlay-badges {
@@ -221,7 +240,13 @@ export class DahuaBridgeSurveillanceTileCard
   private _cameraAudioMuted = true;
   private _vtoStreamPlaying = false;
   private _vtoMicrophoneState = INITIAL_VTO_MICROPHONE_STATE;
+  private _eventSummary: PanelTodayEventSummaryModel | null = null;
   private _remoteStreamSyncTimer: number | null = null;
+  private _eventSummaryAbort?: AbortController;
+  private _eventSummaryRequestVersion = 0;
+  private _eventSummaryRefreshedAt = 0;
+  private _eventSummaryCameraKey = "";
+  private _eventSummaryRefreshTimer: number | null = null;
 
   private readonly _actions = new SurveillancePanelActions({
     getHass: () => this.hass,
@@ -253,6 +278,10 @@ export class DahuaBridgeSurveillanceTileCard
     this._cameraAudioMuted = true;
     this._vtoStreamPlaying = false;
     this._vtoMicrophoneState = INITIAL_VTO_MICROPHONE_STATE;
+    this._eventSummary = null;
+    this._eventSummaryRefreshedAt = 0;
+    this._eventSummaryCameraKey = "";
+    this.cancelEventSummaryRefresh();
     void this.stopVtoMicrophone();
   }
 
@@ -262,6 +291,7 @@ export class DahuaBridgeSurveillanceTileCard
       this._remoteStreamSyncTimer = null;
     }
 
+    this.cancelEventSummaryRefresh();
     void this.stopVtoMicrophone();
     super.disconnectedCallback();
   }
@@ -291,6 +321,9 @@ export class DahuaBridgeSurveillanceTileCard
   }
 
   protected updated(changedProperties: Map<PropertyKey, unknown>): void {
+    if (this.shouldRefreshEventSummary(changedProperties)) {
+      void this.refreshEventSummary();
+    }
     this.scheduleRemoteStreamStyleSync();
     window.requestAnimationFrame(() => {
       this.syncCameraViewportAudioState(this._cameraAudioMuted);
@@ -330,6 +363,10 @@ export class DahuaBridgeSurveillanceTileCard
         vto: this._config.vto,
       },
       { kind: "overview" },
+      undefined,
+      undefined,
+      undefined,
+      this._eventSummary,
     );
     const camera = model.cameras.find((item) => item.deviceId === this._config?.device_id) ?? null;
     const vto = model.vtos.find((item) => item.deviceId === this._config?.device_id) ?? null;
@@ -382,8 +419,11 @@ export class DahuaBridgeSurveillanceTileCard
                 },
               )}
               <div class="tile-topbar">
-                <div class="tile-title-banner">
-                  <div class="tile-name">${title}</div>
+                <div class="tile-topbar-copy">
+                  <div class="tile-title-banner">
+                    <div class="tile-name">${title}</div>
+                  </div>
+                  ${renderCameraEventCountBadges(camera, "inline")}
                 </div>
               </div>
               <div class="media-overlay">
@@ -827,6 +867,138 @@ export class DahuaBridgeSurveillanceTileCard
 
   private renderIcon(icon: string): TemplateResult {
     return html`<ha-icon .icon=${icon}></ha-icon>`;
+  }
+
+  private shouldRefreshEventSummary(
+    changedProperties: Map<PropertyKey, unknown>,
+  ): boolean {
+    if (!this.hass || !this._config) {
+      return false;
+    }
+    if (!changedProperties.has("_config") && !changedProperties.has("hass")) {
+      return false;
+    }
+
+    const camera = this.resolveSummaryCamera();
+    if (!camera) {
+      return this._eventSummary !== null || this._eventSummaryCameraKey !== "";
+    }
+    const cameraKey = `${camera.rootDeviceId}:${camera.channelNumber}`;
+    if (cameraKey !== this._eventSummaryCameraKey) {
+      return true;
+    }
+    if (!this._eventSummary) {
+      return true;
+    }
+    return Date.now() - this._eventSummaryRefreshedAt >= 60_000;
+  }
+
+  private async refreshEventSummary(): Promise<void> {
+    const camera = this.resolveSummaryCamera();
+    if (!camera) {
+      this.cancelEventSummaryRefresh();
+      this._eventSummary = null;
+      this._eventSummaryCameraKey = "";
+      this._eventSummaryRefreshedAt = Date.now();
+      return;
+    }
+
+    const summaryUrl = buildNvrEventSummaryUrl(camera.bridgeBaseUrl, camera.rootDeviceId);
+    if (!summaryUrl) {
+      this.cancelEventSummaryRefresh();
+      this._eventSummary = null;
+      this._eventSummaryCameraKey = `${camera.rootDeviceId}:${camera.channelNumber}`;
+      this._eventSummaryRefreshedAt = Date.now();
+      return;
+    }
+
+    this.cancelEventSummaryRefresh();
+    const controller = new AbortController();
+    this._eventSummaryAbort = controller;
+    const requestVersion = ++this._eventSummaryRequestVersion;
+    const endTime = new Date();
+    const startTime = new Date(endTime.getTime() - (24 * 60 * 60 * 1000));
+
+    try {
+      const summary = await fetchNvrEventSummary(
+        summaryUrl,
+        {
+          startTime: startTime.toISOString(),
+          endTime: endTime.toISOString(),
+          eventCode: "all",
+        },
+        controller.signal,
+      );
+      if (
+        controller.signal.aborted ||
+        this._eventSummaryAbort !== controller ||
+        requestVersion !== this._eventSummaryRequestVersion
+      ) {
+        return;
+      }
+      this._eventSummary = summarizePanelTodayEvents(
+        summary.startTime,
+        summary.endTime,
+        [summary],
+      );
+      this._eventSummaryCameraKey = `${camera.rootDeviceId}:${camera.channelNumber}`;
+    } catch {
+      if (
+        controller.signal.aborted ||
+        this._eventSummaryAbort !== controller ||
+        requestVersion !== this._eventSummaryRequestVersion
+      ) {
+        return;
+      }
+    } finally {
+      if (
+        this._eventSummaryAbort === controller &&
+        requestVersion === this._eventSummaryRequestVersion
+      ) {
+        this._eventSummaryAbort = undefined;
+        this._eventSummaryRefreshedAt = Date.now();
+        this.scheduleEventSummaryRefresh(60_000);
+      }
+    }
+  }
+
+  private scheduleEventSummaryRefresh(delayMs: number): void {
+    if (this._eventSummaryRefreshTimer !== null) {
+      window.clearTimeout(this._eventSummaryRefreshTimer);
+    }
+    this._eventSummaryRefreshTimer = window.setTimeout(() => {
+      this._eventSummaryRefreshTimer = null;
+      void this.refreshEventSummary();
+    }, delayMs);
+  }
+
+  private cancelEventSummaryRefresh(): void {
+    this._eventSummaryAbort?.abort();
+    this._eventSummaryAbort = undefined;
+    if (this._eventSummaryRefreshTimer !== null) {
+      window.clearTimeout(this._eventSummaryRefreshTimer);
+      this._eventSummaryRefreshTimer = null;
+    }
+  }
+
+  private resolveSummaryCamera(): CameraViewModel | null {
+    if (!this.hass || !this._config) {
+      return null;
+    }
+    const model = buildPanelModel(
+      this.hass,
+      {
+        ...DISCOVERY_CONFIG_BASE,
+        browser_bridge_url: this._config.browser_bridge_url,
+        vto: this._config.vto,
+      },
+      { kind: "overview" },
+    );
+    const camera = model.cameras.find((item) => item.deviceId === this._config?.device_id) ?? null;
+    if (!camera || camera.deviceKind !== "nvr_channel" || camera.channelNumber === null) {
+      return null;
+    }
+    return camera;
   }
 }
 

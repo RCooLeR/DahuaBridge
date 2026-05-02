@@ -739,24 +739,94 @@ describe("buildPanelModel", () => {
       undefined,
       undefined,
       {
-        date: "2026-05-01",
+        windowStart: "2026-05-01T10:00:00Z",
+        windowEnd: "2026-05-02T10:00:00Z",
         totalCount: 9,
         humanCount: 4,
         vehicleCount: 3,
         animalCount: 1,
         ivsCount: 2,
+        cameras: [],
       },
     );
 
     expect(model.headerMetrics).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ label: "Events Today", value: "9", tone: "warning" }),
+        expect.objectContaining({ label: "Events 24H", value: "9", tone: "warning" }),
         expect.objectContaining({ label: "Human", value: "4", tone: "info" }),
         expect.objectContaining({ label: "Vehicle", value: "3", tone: "info" }),
         expect.objectContaining({ label: "IVS", value: "2", tone: "warning" }),
       ]),
     );
     expect(model.headerMetrics.some((metric) => metric.label === "Motion")).toBe(false);
+  });
+
+  it("maps rolling 24h summary counts onto matching NVR camera tiles", () => {
+    const now = new Date().toISOString();
+    const hass: HomeAssistant = {
+      states: {
+        "camera.west20_nvr_channel_01_camera": {
+          entity_id: "camera.west20_nvr_channel_01_camera",
+          state: "streaming",
+          attributes: {
+            friendly_name: "Entrance Gate",
+            bridge_device_id: "west20_nvr_channel_01",
+            bridge_root_device_id: "west20_nvr",
+            bridge_device_kind: "nvr_channel",
+            stream_source: "http://bridge.local:9205/api/v1/media/hls/west20_nvr_channel_01/quality",
+          },
+          last_changed: now,
+          last_updated: now,
+        },
+        "binary_sensor.west20_nvr_channel_01_online": {
+          entity_id: "binary_sensor.west20_nvr_channel_01_online",
+          state: "on",
+          attributes: {},
+          last_changed: now,
+          last_updated: now,
+        },
+      },
+      callService: async () => undefined,
+    };
+
+    const config: SurveillancePanelCardConfig = {
+      type: "custom:dahuabridge-surveillance-panel",
+    };
+
+    const model = buildPanelModel(
+      hass,
+      config,
+      { kind: "overview" },
+      undefined,
+      undefined,
+      undefined,
+      {
+        windowStart: "2026-05-01T10:00:00Z",
+        windowEnd: "2026-05-02T10:00:00Z",
+        totalCount: 5,
+        humanCount: 2,
+        vehicleCount: 3,
+        animalCount: 0,
+        ivsCount: 0,
+        cameras: [
+          {
+            rootDeviceId: "west20_nvr",
+            channel: 1,
+            totalCount: 5,
+            humanCount: 2,
+            vehicleCount: 3,
+            animalCount: 0,
+            ivsCount: 0,
+          },
+        ],
+      },
+    );
+
+    expect(model.cameras[0]).toMatchObject({
+      eventCount24h: 5,
+      humanCount24h: 2,
+      vehicleCount24h: 3,
+    });
   });
 
   it("preserves VTO lock, alarm, and intercom session detail in the panel model", () => {

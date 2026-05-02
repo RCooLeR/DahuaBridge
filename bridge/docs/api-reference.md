@@ -368,17 +368,23 @@ Example catalog skeleton:
 ```
 
 - Returns a normalized search result with `items`.
-- The final `items` list can include:
-  - native NVR archive items
-  - bridge-owned MP4 clip items merged into the same time range for unfiltered searches
-- Bridge-owned items are the ones that can include `clip_id`, `stream_id`, and `download_url`.
+- Every item now carries a stable bridge `id` plus `record_kind` (`file` or `event`).
+- Native non-event NVR archive items can also include `download_url` when the recorder returned a usable `file_path`.
 - The bridge caches identical archive-search queries briefly and coalesces concurrent misses so repeated UI polling does not duplicate recorder searches.
-- Event-backed items such as SMD and IVS results are intended for playback sessions and MP4 export through the bridge.
-- Native NVR archive items expose `export_url` as the supported recorder-footage path for bridge playback/export workflows.
+- Event-backed items such as SMD and IVS results are intended for bridge playback/export workflows and do not expose raw direct-download URLs.
+- Native NVR archive items expose `export_url` as the supported bridge MP4 export path.
+- Archive items can also include persisted asset metadata:
+  - `asset_status`: `indexed`, `transcoding`, `ready`, `failed`, or `missing`
+  - `asset_clip_id`: bridge clip ID when an export/transcode job already exists
+  - `asset_self_url`: bridge clip status endpoint when a clip exists
+  - `asset_playback_url` and `asset_download_url`: present only when the asset is `ready`
+  - `asset_stop_url`: present when the asset is still `transcoding`
 
 ### `POST /api/v1/nvr/{deviceID}/recordings/export`
 
-- Exports a native NVR archive window by creating a playback session and recording that playback stream into a bridge-owned MP4 clip.
+- Exports a native NVR archive window as a bridge-owned MP4 clip.
+- When `file_path` is supplied, the bridge downloads the recorder `.dav` file first and transcodes from that file.
+- When `file_path` is absent, the bridge creates an archive playback session and records that playback stream into a bridge-owned MP4 clip.
 - Accepts query params or JSON body fields:
 
 ```json
@@ -398,9 +404,17 @@ Example catalog skeleton:
 - Live validation on May 2, 2026 confirmed a 22-second SMD export on channel 1 completed cleanly as a video-only MP4 on the tested recorder.
 - The same export flow is the supported path for SMD and IVS event-backed archive items.
 - Returns:
-  - `session`: playback session metadata
+  - `session`: playback session metadata when the playback-session path was used
   - `clip`: bridge MP4 clip metadata with `self_url` and `download_url`
 - Poll `clip.self_url` until `clip.status` is `completed`, then download from `clip.download_url`.
+
+### `GET /api/v1/nvr/{deviceID}/recordings/download`
+
+- Downloads a native recorder file through the bridge.
+- Required query param:
+  - `file_path`
+- Intended for native non-event archive items that resolved to a recorder `file_path`.
+- Returns the raw recorder payload, typically a `.dav` file.
 
 ### `POST /api/v1/nvr/{deviceID}/playback/sessions`
 

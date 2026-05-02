@@ -100,6 +100,7 @@ type Server struct {
 
 func New(
 	cfg config.HTTPConfig,
+	archiveCfg config.ArchiveConfig,
 	logger zerolog.Logger,
 	metricsRegistry *metrics.Registry,
 	probes ProbeReader,
@@ -128,6 +129,7 @@ func New(
 	httpLogger := logger.With().Str("component", "http").Logger()
 	controller := newController(
 		cfg,
+		archiveCfg.TempDir,
 		metricsRegistry,
 		probes,
 		snapshots,
@@ -1114,6 +1116,29 @@ func attachNVRRecordingExportURLs(r *http.Request, deviceID string, result *dahu
 				"/api/v1/nvr/"+url.PathEscape(deviceID)+"/recordings/download?"+query.Encode(),
 			)
 		}
+		attachNVRRecordingAssetURLs(r, item)
+	}
+}
+
+func attachNVRRecordingAssetURLs(r *http.Request, item *dahua.NVRRecording) {
+	if item == nil {
+		return
+	}
+	clipID := strings.TrimSpace(item.AssetClipID)
+	if clipID == "" {
+		return
+	}
+	status := strings.ToLower(strings.TrimSpace(item.AssetStatus))
+	if status == "indexed" || status == "missing" {
+		return
+	}
+	item.AssetSelfURL = buildAbsoluteRequestURL(r, "/api/v1/media/recordings/"+url.PathEscape(clipID))
+	if status == "ready" {
+		item.AssetDownloadURL = buildAbsoluteRequestURL(r, "/api/v1/media/recordings/"+url.PathEscape(clipID)+"/download")
+		item.AssetPlaybackURL = buildAbsoluteRequestURL(r, "/api/v1/media/recordings/"+url.PathEscape(clipID)+"/play")
+	}
+	if status == "transcoding" {
+		item.AssetStopURL = buildAbsoluteRequestURL(r, "/api/v1/media/recordings/"+url.PathEscape(clipID)+"/stop")
 	}
 }
 
