@@ -91,7 +91,12 @@ class DahuaBridgeRemoteStreamElement extends LitElement {
       display: block;
       width: 100%;
       height: 100%;
+      min-width: 0;
+      min-height: 0;
+      max-width: 100%;
+      max-height: 100%;
       aspect-ratio: 16 / 9;
+      overflow: hidden;
       background: #06101a;
     }
 
@@ -101,12 +106,18 @@ class DahuaBridgeRemoteStreamElement extends LitElement {
       display: block;
       width: 100%;
       height: 100%;
+      min-width: 0;
+      min-height: 0;
+      max-width: 100%;
+      max-height: 100%;
       aspect-ratio: 16 / 9;
     }
 
     video,
     img {
       object-fit: fill;
+      object-position: center center;
+      background: #06101a;
     }
 
     .viewport-empty {

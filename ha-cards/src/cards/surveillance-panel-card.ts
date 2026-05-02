@@ -1687,7 +1687,7 @@ export class DahuaBridgeSurveillancePanelCard
     if (this._remoteStreamSyncTimer !== null) {
       window.clearTimeout(this._remoteStreamSyncTimer);
     }
-    const syncDelays = [0, 100, 300, 800, 1500];
+    const syncDelays = [0, 50, 150, 400, 1000, 2500, 5000];
     const runSyncAt = (index: number): void => {
       syncRemoteStreamStyles(this.renderRoot);
       if (index >= syncDelays.length - 1) {

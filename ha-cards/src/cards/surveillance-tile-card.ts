@@ -221,6 +221,8 @@ export class DahuaBridgeSurveillanceTileCard
   private _cameraAudioMuted = true;
   private _vtoStreamPlaying = false;
   private _vtoMicrophoneState = INITIAL_VTO_MICROPHONE_STATE;
+  private _remoteStreamSyncTimer: number | null = null;
+
   private readonly _actions = new SurveillancePanelActions({
     getHass: () => this.hass,
     getBusyActions: () => this._busyActions,
@@ -255,12 +257,41 @@ export class DahuaBridgeSurveillanceTileCard
   }
 
   disconnectedCallback(): void {
+    if (this._remoteStreamSyncTimer !== null) {
+      window.clearTimeout(this._remoteStreamSyncTimer);
+      this._remoteStreamSyncTimer = null;
+    }
+
     void this.stopVtoMicrophone();
     super.disconnectedCallback();
   }
 
+  private scheduleRemoteStreamStyleSync(): void {
+    if (this._remoteStreamSyncTimer !== null) {
+      window.clearTimeout(this._remoteStreamSyncTimer);
+    }
+
+    const syncDelays = [0, 50, 150, 400, 1000, 2500, 5000];
+
+    const runSyncAt = (index: number): void => {
+      syncRemoteStreamStyles(this.renderRoot);
+
+      if (index >= syncDelays.length - 1) {
+        this._remoteStreamSyncTimer = null;
+        return;
+      }
+
+      this._remoteStreamSyncTimer = window.setTimeout(
+        () => runSyncAt(index + 1),
+        syncDelays[index + 1]!,
+      );
+    };
+
+    runSyncAt(0);
+  }
+
   protected updated(changedProperties: Map<PropertyKey, unknown>): void {
-    syncRemoteStreamStyles(this.renderRoot);
+    this.scheduleRemoteStreamStyleSync();
     window.requestAnimationFrame(() => {
       this.syncCameraViewportAudioState(this._cameraAudioMuted);
     });
