@@ -81,6 +81,7 @@ const archiveSearchResultSchema = z.object({
 const archiveExportClipSchema = z.object({
   id: z.string().min(1),
   status: z.string().min(1),
+  playback_url: z.string().optional().nullable(),
   download_url: z.string().optional().nullable(),
   self_url: z.string().optional().nullable(),
   duration_ms: z.number().int().optional().nullable(),
@@ -330,6 +331,7 @@ function mapArchiveExportClip(
   return {
     id: clip.id,
     status: clip.status,
+    playbackUrl: rewriteBridgeUrl(clip.playback_url ?? null, browserBridgeUrl),
     downloadUrl: rewriteBridgeUrl(clip.download_url ?? null, browserBridgeUrl),
     selfUrl: rewriteBridgeUrl(clip.self_url ?? null, browserBridgeUrl),
     durationMs: clip.duration_ms ?? null,

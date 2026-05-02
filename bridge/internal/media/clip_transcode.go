@@ -4,11 +4,13 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"strconv"
+	"strings"
 	"time"
 
 	"RCooLeR/DahuaBridge/internal/config"
@@ -111,6 +113,14 @@ func (job *clipJob) run(parent *Manager, profile streams.Profile, duration time.
 func (job *clipJob) complete(parent *Manager, waitErr error) {
 	job.mu.Lock()
 	defer job.mu.Unlock()
+	defer func() {
+		if path := strings.TrimSpace(job.temporarySourcePath); path != "" {
+			if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+				job.logger.Warn().Err(err).Str("path", path).Msg("failed to cleanup temporary clip source")
+			}
+			job.temporarySourcePath = ""
+		}
+	}()
 
 	job.waitErr = waitErr
 	job.info.EndedAt = time.Now().UTC()

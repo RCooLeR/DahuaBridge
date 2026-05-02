@@ -19,8 +19,9 @@ import (
 )
 
 const (
-	loginPath = "/RPC2_Login"
-	rpcPath   = "/RPC2"
+	loginPath        = "/RPC2_Login"
+	rpcPath          = "/RPC2"
+	rpc3LoadfilePath = "/RPC3_Loadfile"
 )
 
 type Client struct {
@@ -133,6 +134,26 @@ func (c *Client) CallObject(ctx context.Context, method string, params any, obje
 	}
 
 	return nil
+}
+
+func (c *Client) CallLoadfile(ctx context.Context, method string, params any) (*http.Response, error) {
+	if err := c.ensureLogin(ctx); err != nil {
+		return nil, err
+	}
+
+	req := c.buildRequest(method, params, nil)
+	resp, err := c.postRaw(ctx, rpc3LoadfilePath, req)
+	if err != nil {
+		if rpcErr, ok := err.(*Error); ok && isAuthError(rpcErr.Code) {
+			c.resetSession()
+			if loginErr := c.ensureLogin(ctx); loginErr != nil {
+				return nil, loginErr
+			}
+			return c.postRaw(ctx, rpc3LoadfilePath, c.buildRequest(method, params, nil))
+		}
+		return nil, err
+	}
+	return resp, nil
 }
 
 func (c *Client) ensureLogin(ctx context.Context) error {
@@ -292,6 +313,40 @@ func (c *Client) post(ctx context.Context, path string, req Request, target *Res
 	return nil
 }
 
+func (c *Client) postRaw(ctx context.Context, path string, req Request) (*http.Response, error) {
+	body, err := json.Marshal(req)
+	if err != nil {
+		return nil, err
+	}
+
+	baseURL, client := c.currentHTTPState()
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+path, bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	if session := strings.TrimSpace(sessionHeaderValue(req.Session)); session != "" {
+		httpReq.Header.Set("X-Api-Session", session)
+	}
+
+	started := time.Now()
+	resp, err := client.Do(httpReq)
+	if err != nil {
+		c.logRPCRequest(path, req.Method, req.ID, 0, 0, time.Since(started), err)
+		return nil, err
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		defer resp.Body.Close()
+		payload, _ := io.ReadAll(resp.Body)
+		err := fmt.Errorf("unexpected status %s: %s", resp.Status, strings.TrimSpace(string(payload)))
+		c.logRPCRequest(path, req.Method, req.ID, resp.StatusCode, len(payload), time.Since(started), err)
+		return nil, err
+	}
+
+	c.logRPCRequest(path, req.Method, req.ID, resp.StatusCode, 0, time.Since(started), nil)
+	return resp, nil
+}
+
 func (c *Client) logRPCRequest(path string, method string, requestID int64, status int, payloadBytes int, duration time.Duration, err error) {
 	event := c.logger.Debug().
 		Str("path", path).
@@ -380,6 +435,20 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func sessionHeaderValue(session any) string {
+	if session == nil {
+		return ""
+	}
+	switch typed := session.(type) {
+	case string:
+		return typed
+	case fmt.Stringer:
+		return typed.String()
+	default:
+		return fmt.Sprint(session)
+	}
 }
 
 func isAuthError(code int) bool {

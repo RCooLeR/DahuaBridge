@@ -47,6 +47,7 @@ function buildCamera(overrides: Partial<CameraViewModel> = {}): CameraViewModel 
       onvifStreamUrl: null,
       onvifSnapshotUrl: null,
       recommendedProfile: null,
+      recommendedHaIntegration: null,
       preferredVideoProfile: null,
       preferredVideoSource: null,
       resolution: "",

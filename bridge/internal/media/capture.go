@@ -58,6 +58,26 @@ type ClipStartRequest struct {
 	Duration    time.Duration
 }
 
+type DirectClipStartRequest struct {
+	StreamID                     string
+	RootDeviceID                 string
+	SourceDeviceID               string
+	DeviceKind                   dahua.DeviceKind
+	Name                         string
+	Channel                      int
+	ProfileName                  string
+	Duration                     time.Duration
+	SourceURL                    string
+	VideoCodec                   string
+	AudioCodec                   string
+	SourceWidth                  int
+	SourceHeight                 int
+	RTSPTransport                string
+	UseWallclockAsTimestamps     bool
+	Recommended                  bool
+	TemporarySourcePathToCleanup string
+}
+
 type ClipQuery struct {
 	StreamID     string
 	RootDeviceID string
@@ -68,15 +88,16 @@ type ClipQuery struct {
 }
 
 type clipJob struct {
-	info         ClipInfo
-	outputPath   string
-	metaPath     string
-	profile      streams.Profile
-	parent       *Manager
-	includeAudio bool
-	stdin        io.WriteCloser
-	cmd          *exec.Cmd
-	logger       zerolog.Logger
+	info                ClipInfo
+	outputPath          string
+	metaPath            string
+	profile             streams.Profile
+	parent              *Manager
+	includeAudio        bool
+	temporarySourcePath string
+	stdin               io.WriteCloser
+	cmd                 *exec.Cmd
+	logger              zerolog.Logger
 
 	mu      sync.Mutex
 	done    chan struct{}
@@ -141,6 +162,49 @@ func (m *Manager) StartClip(ctx context.Context, request ClipStartRequest) (Clip
 	if duration < 0 {
 		duration = 0
 	}
+	return m.startClipJob(ctx, entry, profile, resolvedProfileName, duration, "")
+}
+
+func (m *Manager) StartDirectClip(ctx context.Context, request DirectClipStartRequest) (ClipInfo, error) {
+	if !m.Enabled() {
+		return ClipInfo{}, errors.New("media layer is disabled")
+	}
+
+	profileName := firstNonEmpty(strings.TrimSpace(request.ProfileName), "quality")
+	entry := streams.Entry{
+		ID:             strings.TrimSpace(request.StreamID),
+		RootDeviceID:   strings.TrimSpace(request.RootDeviceID),
+		SourceDeviceID: strings.TrimSpace(request.SourceDeviceID),
+		DeviceKind:     request.DeviceKind,
+		Name:           firstNonEmpty(strings.TrimSpace(request.Name), "Archive clip"),
+		Channel:        request.Channel,
+	}
+	if entry.ID == "" {
+		entry.ID = newClipID()
+	}
+	profile := streams.Profile{
+		Name:                     profileName,
+		StreamURL:                strings.TrimSpace(request.SourceURL),
+		RTSPTransport:            strings.TrimSpace(request.RTSPTransport),
+		VideoCodec:               strings.TrimSpace(request.VideoCodec),
+		AudioCodec:               strings.TrimSpace(request.AudioCodec),
+		SourceWidth:              request.SourceWidth,
+		SourceHeight:             request.SourceHeight,
+		UseWallclockAsTimestamps: request.UseWallclockAsTimestamps,
+		Recommended:              request.Recommended,
+	}
+	return m.startClipJob(ctx, entry, profile, profileName, request.Duration, request.TemporarySourcePathToCleanup)
+}
+
+func (m *Manager) startClipJob(ctx context.Context, entry streams.Entry, profile streams.Profile, resolvedProfileName string, duration time.Duration, temporarySourcePath string) (ClipInfo, error) {
+	clipDir := strings.TrimSpace(m.cfg.ClipPath)
+	if clipDir == "" {
+		return ClipInfo{}, errClipStorageMissing
+	}
+	if err := os.MkdirAll(clipDir, 0o755); err != nil {
+		return ClipInfo{}, fmt.Errorf("create clip directory: %w", err)
+	}
+
 	sourceStartAt, sourceEndAt := clipSourceWindow(profile.StreamURL, duration)
 
 	job := &clipJob{
@@ -160,9 +224,10 @@ func (m *Manager) StartClip(ctx context.Context, request ClipStartRequest) (Clip
 			Duration:       duration,
 			FileName:       "",
 		},
-		profile: profile,
-		parent:  m,
-		done:    make(chan struct{}),
+		profile:             profile,
+		parent:              m,
+		done:                make(chan struct{}),
+		temporarySourcePath: temporarySourcePath,
 		logger: m.logger.With().
 			Str("stream_id", entry.ID).
 			Str("profile", resolvedProfileName).

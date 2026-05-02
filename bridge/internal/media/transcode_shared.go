@@ -112,6 +112,9 @@ func buildRTSPInputArgs(profile streams.Profile, inputPreset string) []string {
 }
 
 func buildRTSPInputArgsWithWallclock(profile streams.Profile, inputPreset string, useWallclockTimestamps bool) []string {
+	if !isRTSPScheme(profile.StreamURL) {
+		return []string{"-i", profile.StreamURL}
+	}
 	args := []string{
 		"-rtsp_transport", firstNonEmpty(profile.RTSPTransport, "tcp"),
 	}
@@ -128,6 +131,19 @@ func buildRTSPInputArgsWithWallclock(profile streams.Profile, inputPreset string
 	}
 	args = append(args, "-i", profile.StreamURL)
 	return args
+}
+
+func isRTSPScheme(raw string) bool {
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(parsed.Scheme)) {
+	case "rtsp", "rtsps":
+		return true
+	default:
+		return false
+	}
 }
 
 func buildFilterChain(frameRate int, scaleWidth int, sourceWidth int, sourceHeight int) []string {

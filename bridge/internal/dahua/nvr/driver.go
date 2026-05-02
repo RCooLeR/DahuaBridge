@@ -1110,6 +1110,79 @@ func (d *Driver) DownloadRecording(ctx context.Context, filePath string) (dahua.
 	return decodeRecordingDownloadResponse(resp.Body, resp.Header.Get("Content-Type"), resp.Header.Get("Content-Length"), path.Base(filePath))
 }
 
+func (d *Driver) DownloadRecordingClip(ctx context.Context, request dahua.NVRRecordingClipRequest) (dahua.NVRRecordingDownload, error) {
+	if shouldUseInlineEventClip(request) {
+		download, err := d.downloadInlineEventClip(ctx, request)
+		if err == nil {
+			return download, nil
+		}
+		d.logger.Debug().
+			Err(err).
+			Int("channel", request.Channel).
+			Str("recording_type", strings.TrimSpace(request.Type)).
+			Str("video_stream", strings.TrimSpace(request.VideoStream)).
+			Msg("inline event clip download failed, falling back to file path")
+	}
+
+	return d.DownloadRecording(ctx, request.FilePath)
+}
+
+func shouldUseInlineEventClip(request dahua.NVRRecordingClipRequest) bool {
+	source := strings.ToLower(strings.TrimSpace(request.Source))
+	recordingType := strings.ToLower(strings.TrimSpace(request.Type))
+	return !request.StartTime.IsZero() &&
+		request.Channel > 0 &&
+		(source == "nvr_event" || recordingType == "event" || strings.HasPrefix(recordingType, "event."))
+}
+
+func (d *Driver) downloadInlineEventClip(ctx context.Context, request dahua.NVRRecordingClipRequest) (dahua.NVRRecordingDownload, error) {
+	if d.rpc == nil {
+		return dahua.NVRRecordingDownload{}, fmt.Errorf("rpc client is not configured")
+	}
+
+	resp, err := d.rpc.CallLoadfile(ctx, "StorageAssistant.getIFrameData", map[string]any{
+		"Infos": map[string]any{
+			"Channel":     request.Channel - 1,
+			"Time":        formatRecordingWallTime(request.StartTime),
+			"VideoStream": inlineEventClipVideoStream(request.VideoStream),
+		},
+	})
+	if err != nil {
+		return dahua.NVRRecordingDownload{}, fmt.Errorf("download inline event clip: %w", err)
+	}
+
+	fileName := inlineEventClipFileName(request)
+	return decodeRecordingDownloadResponse(
+		resp.Body,
+		resp.Header.Get("Content-Type"),
+		resp.Header.Get("Content-Length"),
+		fileName,
+	)
+}
+
+func inlineEventClipVideoStream(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "extra", "sub", "substream":
+		return "Extra"
+	default:
+		return "Main"
+	}
+}
+
+func inlineEventClipFileName(request dahua.NVRRecordingClipRequest) string {
+	label := strings.TrimSpace(request.Type)
+	if label == "" {
+		label = "event"
+	}
+	replacer := strings.NewReplacer(":", "-", "/", "-", "\\", "-", " ", "_")
+	return fmt.Sprintf(
+		"ch%d_%s_%s.dav",
+		request.Channel,
+		replacer.Replace(request.StartTime.In(time.Local).Format("20060102_150405")),
+		replacer.Replace(label),
+	)
+}
+
 func decodeRecordingDownloadResponse(body io.ReadCloser, contentTypeHeader string, contentLengthHeader string, fileName string) (dahua.NVRRecordingDownload, error) {
 	if body == nil {
 		return dahua.NVRRecordingDownload{}, fmt.Errorf("recording response body is empty")

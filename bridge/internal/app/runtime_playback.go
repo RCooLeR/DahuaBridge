@@ -31,6 +31,7 @@ type playbackSession struct {
 	StartTime          time.Time
 	EndTime            time.Time
 	SeekTime           time.Time
+	FilePath           string
 	SnapshotURL        string
 	MainCodec          string
 	MainResolution     string
@@ -154,6 +155,7 @@ func (r *runtimeServices) newPlaybackSession(deviceID string, request dahua.NVRP
 		StartTime:          request.StartTime,
 		EndTime:            request.EndTime,
 		SeekTime:           seekTime,
+		FilePath:           strings.TrimSpace(request.FilePath),
 		SnapshotURL:        firstNonEmptyPlayback(metadata.SnapshotURL, playbackSnapshotURL(r.cfg.HomeAssistant.PublicBaseURL, deviceID, request.Channel)),
 		MainCodec:          metadata.MainCodec,
 		MainResolution:     metadata.MainResolution,
@@ -306,10 +308,47 @@ func buildPlaybackProfiles(cfg config.Config, deviceCfg config.DeviceConfig, ses
 		substreamWidth, substreamHeight = mainWidth, mainHeight
 	}
 
+	mainPlaybackURL := buildPlaybackRTSPURL(
+		deviceCfg,
+		session.Channel,
+		mainSubtype,
+		session.SeekTime,
+		session.EndTime,
+		includeCredentials,
+	)
+	stablePlaybackURL := buildPlaybackRTSPURL(
+		deviceCfg,
+		session.Channel,
+		stableSubtype,
+		session.SeekTime,
+		session.EndTime,
+		includeCredentials,
+	)
+	substreamPlaybackURL := buildPlaybackRTSPURL(
+		deviceCfg,
+		session.Channel,
+		substreamSubtype,
+		session.SeekTime,
+		session.EndTime,
+		includeCredentials,
+	)
+	useWallclock := true
+	if strings.TrimSpace(session.FilePath) != "" {
+		filePlaybackURL := buildPlaybackRecordingDownloadURL(
+			deviceCfg,
+			session.FilePath,
+			includeCredentials,
+		)
+		mainPlaybackURL = filePlaybackURL
+		stablePlaybackURL = filePlaybackURL
+		substreamPlaybackURL = filePlaybackURL
+		useWallclock = false
+	}
+
 	return map[string]streams.Profile{
 		"default": {
 			Name:                     "default",
-			StreamURL:                buildPlaybackRTSPURL(deviceCfg, session.Channel, mainSubtype, session.SeekTime, session.EndTime, includeCredentials),
+			StreamURL:                mainPlaybackURL,
 			LocalMJPEGURL:            playbackMJPEGURL(cfg.HomeAssistant.PublicBaseURL, session.ID, "default"),
 			LocalHLSURL:              playbackHLSURL(cfg.HomeAssistant.PublicBaseURL, session.ID, "default"),
 			LocalDASHURL:             playbackDASHURL(cfg.HomeAssistant.PublicBaseURL, session.ID, "default"),
@@ -319,12 +358,12 @@ func buildPlaybackProfiles(cfg config.Config, deviceCfg config.DeviceConfig, ses
 			AudioCodec:               session.AudioCodec,
 			SourceWidth:              mainWidth,
 			SourceHeight:             mainHeight,
-			UseWallclockAsTimestamps: true,
+			UseWallclockAsTimestamps: useWallclock,
 			Recommended:              recommended == "default",
 		},
 		"quality": {
 			Name:                     "quality",
-			StreamURL:                buildPlaybackRTSPURL(deviceCfg, session.Channel, mainSubtype, session.SeekTime, session.EndTime, includeCredentials),
+			StreamURL:                mainPlaybackURL,
 			LocalMJPEGURL:            playbackMJPEGURL(cfg.HomeAssistant.PublicBaseURL, session.ID, "quality"),
 			LocalHLSURL:              playbackHLSURL(cfg.HomeAssistant.PublicBaseURL, session.ID, "quality"),
 			LocalDASHURL:             playbackDASHURL(cfg.HomeAssistant.PublicBaseURL, session.ID, "quality"),
@@ -335,12 +374,12 @@ func buildPlaybackProfiles(cfg config.Config, deviceCfg config.DeviceConfig, ses
 			AudioCodec:               session.AudioCodec,
 			SourceWidth:              mainWidth,
 			SourceHeight:             mainHeight,
-			UseWallclockAsTimestamps: true,
+			UseWallclockAsTimestamps: useWallclock,
 			Recommended:              recommended == "quality",
 		},
 		"stable": {
 			Name:                     "stable",
-			StreamURL:                buildPlaybackRTSPURL(deviceCfg, session.Channel, stableSubtype, session.SeekTime, session.EndTime, includeCredentials),
+			StreamURL:                stablePlaybackURL,
 			LocalMJPEGURL:            playbackMJPEGURL(cfg.HomeAssistant.PublicBaseURL, session.ID, "stable"),
 			LocalHLSURL:              playbackHLSURL(cfg.HomeAssistant.PublicBaseURL, session.ID, "stable"),
 			LocalDASHURL:             playbackDASHURL(cfg.HomeAssistant.PublicBaseURL, session.ID, "stable"),
@@ -352,12 +391,12 @@ func buildPlaybackProfiles(cfg config.Config, deviceCfg config.DeviceConfig, ses
 			AudioCodec:               session.AudioCodec,
 			SourceWidth:              stableWidth,
 			SourceHeight:             stableHeight,
-			UseWallclockAsTimestamps: true,
+			UseWallclockAsTimestamps: useWallclock,
 			Recommended:              recommended == "stable",
 		},
 		"substream": {
 			Name:                     "substream",
-			StreamURL:                buildPlaybackRTSPURL(deviceCfg, session.Channel, substreamSubtype, session.SeekTime, session.EndTime, includeCredentials),
+			StreamURL:                substreamPlaybackURL,
 			LocalMJPEGURL:            playbackMJPEGURL(cfg.HomeAssistant.PublicBaseURL, session.ID, "substream"),
 			LocalHLSURL:              playbackHLSURL(cfg.HomeAssistant.PublicBaseURL, session.ID, "substream"),
 			LocalDASHURL:             playbackDASHURL(cfg.HomeAssistant.PublicBaseURL, session.ID, "substream"),
@@ -369,7 +408,7 @@ func buildPlaybackProfiles(cfg config.Config, deviceCfg config.DeviceConfig, ses
 			AudioCodec:               session.AudioCodec,
 			SourceWidth:              substreamWidth,
 			SourceHeight:             substreamHeight,
-			UseWallclockAsTimestamps: true,
+			UseWallclockAsTimestamps: useWallclock,
 			Recommended:              recommended == "substream",
 		},
 	}
@@ -406,6 +445,46 @@ func buildPlaybackRTSPURL(deviceCfg config.DeviceConfig, channel int, subtype in
 		rtspURL.User = url.UserPassword(deviceCfg.Username, deviceCfg.Password)
 	}
 	return rtspURL.String()
+}
+
+func buildPlaybackRecordingDownloadURL(deviceCfg config.DeviceConfig, filePath string, includeCredentials bool) string {
+	filePath = strings.TrimSpace(filePath)
+	if filePath == "" {
+		return ""
+	}
+
+	base, err := url.Parse(deviceCfg.BaseURL)
+	if err != nil || base.Hostname() == "" {
+		return ""
+	}
+
+	base.Path = "/cgi-bin/RPC_Loadfile" + escapePlaybackRecordingFilePath(filePath)
+	base.RawQuery = ""
+	base.Fragment = ""
+	if includeCredentials {
+		base.User = url.UserPassword(deviceCfg.Username, deviceCfg.Password)
+	} else {
+		base.User = nil
+	}
+	return base.String()
+}
+
+func escapePlaybackRecordingFilePath(filePath string) string {
+	if filePath == "" {
+		return ""
+	}
+	segments := strings.Split(filePath, "/")
+	for index, segment := range segments {
+		if index == 0 && segment == "" {
+			continue
+		}
+		segments[index] = url.PathEscape(segment)
+	}
+	escaped := strings.Join(segments, "/")
+	if strings.HasPrefix(filePath, "/") && !strings.HasPrefix(escaped, "/") {
+		return "/" + escaped
+	}
+	return escaped
 }
 
 func playbackSnapshotURL(publicBaseURL string, deviceID string, channel int) string {

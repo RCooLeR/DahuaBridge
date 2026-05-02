@@ -37,6 +37,7 @@ export interface NvrPlaybackSessionRequestModel {
   startTime: string;
   endTime: string;
   seekTime: string | null;
+  filePath?: string | null;
 }
 
 export interface NvrPlaybackSeekRequestModel {
@@ -93,6 +94,7 @@ export interface NvrArchiveRecordingModel {
 export interface NvrArchiveExportClipModel {
   id: string;
   status: "recording" | "completed" | "failed" | string;
+  playbackUrl: string | null;
   downloadUrl: string | null;
   selfUrl: string | null;
   durationMs: number | null;
@@ -225,13 +227,18 @@ export function createPlaybackSessionRequest(
   startTime: string,
   endTime: string,
   seekTime?: string | null,
+  filePath?: string | null,
 ): NvrPlaybackSessionRequestModel {
-  return {
+  const request: NvrPlaybackSessionRequestModel = {
     channel,
     startTime,
     endTime,
     seekTime: seekTime ?? null,
   };
+  if (filePath) {
+    request.filePath = filePath;
+  }
+  return request;
 }
 
 export function createPlaybackSeekRequest(seekTime: string): NvrPlaybackSeekRequestModel {
