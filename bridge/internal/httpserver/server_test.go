@@ -1255,6 +1255,26 @@ func TestServerClampsWriteTimeoutForLongAdminActions(t *testing.T) {
 	}
 }
 
+type writeDeadlineRecorder struct {
+	*httptest.ResponseRecorder
+	writeDeadline time.Time
+}
+
+func (w *writeDeadlineRecorder) SetWriteDeadline(deadline time.Time) error {
+	w.writeDeadline = deadline
+	return nil
+}
+
+func TestClearStreamingWriteDeadline(t *testing.T) {
+	rec := &writeDeadlineRecorder{ResponseRecorder: httptest.NewRecorder()}
+
+	clearStreamingWriteDeadline(rec)
+
+	if !rec.writeDeadline.IsZero() {
+		t.Fatalf("expected zero write deadline, got %s", rec.writeDeadline)
+	}
+}
+
 func TestIPCSnapshotEndpointRateLimited(t *testing.T) {
 	server := newTestServerWithConfig(config.HTTPConfig{
 		ListenAddress:              ":0",
