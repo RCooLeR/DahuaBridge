@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -56,6 +57,7 @@ type stubSnapshotReader struct {
 	adminSettings            func() map[string]any
 	nvrRecordings            func(context.Context, string, dahua.NVRRecordingQuery) (dahua.NVRRecordingSearchResult, error)
 	nvrDownloadRecording     func(context.Context, string, string) (dahua.NVRRecordingDownload, error)
+	nvrDownloadRecordingClip func(context.Context, string, dahua.NVRRecordingClipRequest) (dahua.NVRRecordingDownload, error)
 	createNVRPlaybackSession func(context.Context, string, dahua.NVRPlaybackSessionRequest) (dahua.NVRPlaybackSession, error)
 	getNVRPlaybackSession    func(string) (dahua.NVRPlaybackSession, error)
 	seekNVRPlaybackSession   func(context.Context, string, time.Time) (dahua.NVRPlaybackSession, error)
@@ -73,6 +75,15 @@ func (s stubSnapshotReader) NVRRecordings(ctx context.Context, deviceID string, 
 func (s stubSnapshotReader) NVRDownloadRecording(ctx context.Context, deviceID string, filePath string) (dahua.NVRRecordingDownload, error) {
 	if s.nvrDownloadRecording != nil {
 		return s.nvrDownloadRecording(ctx, deviceID, filePath)
+	}
+	return dahua.NVRRecordingDownload{}, nil
+}
+func (s stubSnapshotReader) NVRDownloadRecordingClip(ctx context.Context, deviceID string, request dahua.NVRRecordingClipRequest) (dahua.NVRRecordingDownload, error) {
+	if s.nvrDownloadRecordingClip != nil {
+		return s.nvrDownloadRecordingClip(ctx, deviceID, request)
+	}
+	if s.nvrDownloadRecording != nil {
+		return s.nvrDownloadRecording(ctx, deviceID, request.FilePath)
 	}
 	return dahua.NVRRecordingDownload{}, nil
 }
@@ -124,6 +135,7 @@ type stubMediaReader struct {
 	dashManifest             func(context.Context, string, string) ([]byte, error)
 	dashAsset                func(context.Context, string, string, string) ([]byte, string, error)
 	startClip                func(context.Context, mediaapi.ClipStartRequest) (mediaapi.ClipInfo, error)
+	startDirectClip          func(context.Context, mediaapi.DirectClipStartRequest) (mediaapi.ClipInfo, error)
 	stopClip                 func(context.Context, string) (mediaapi.ClipInfo, error)
 	getClip                  func(string) (mediaapi.ClipInfo, error)
 	findClips                func(mediaapi.ClipQuery) ([]mediaapi.ClipInfo, error)
@@ -276,6 +288,26 @@ func (s stubMediaReader) StartClip(ctx context.Context, request mediaapi.ClipSta
 		StartedAt: time.Date(2026, 4, 29, 12, 0, 0, 0, time.UTC),
 		Duration:  request.Duration,
 		FileName:  "clip_test.mp4",
+	}, nil
+}
+
+func (s stubMediaReader) StartDirectClip(ctx context.Context, request mediaapi.DirectClipStartRequest) (mediaapi.ClipInfo, error) {
+	if s.startDirectClip != nil {
+		return s.startDirectClip(ctx, request)
+	}
+	return mediaapi.ClipInfo{
+		ID:             "clip_direct_test",
+		StreamID:       request.StreamID,
+		RootDeviceID:   request.RootDeviceID,
+		SourceDeviceID: request.SourceDeviceID,
+		DeviceKind:     request.DeviceKind,
+		Name:           request.Name,
+		Channel:        request.Channel,
+		Profile:        request.ProfileName,
+		Status:         mediaapi.ClipStatusRecording,
+		StartedAt:      time.Date(2026, 4, 29, 12, 0, 0, 0, time.UTC),
+		Duration:       request.Duration,
+		FileName:       "clip_direct_test.mp4",
 	}, nil
 }
 
@@ -2739,12 +2771,14 @@ func TestNVRRecordingsEndpointParsesEventOnlyQuery(t *testing.T) {
 				Limit:         query.Limit,
 				ReturnedCount: 1,
 				Items: []dahua.NVRRecording{{
-					Source:    "nvr_event",
-					Channel:   query.Channel,
-					StartTime: "2026-04-28 00:10:00",
-					EndTime:   "2026-04-28 00:10:20",
-					Type:      "Event.smdTypeHuman",
-					Flags:     []string{"Event", "smdTypeHuman"},
+					Source:      "nvr_event",
+					Channel:     query.Channel,
+					StartTime:   "2026-04-28 00:10:00",
+					EndTime:     "2026-04-28 00:10:20",
+					FilePath:    "/mnt/dvr/2026-04-28/0/dav/00.00.00-00.30.00[R][0@0][0].dav",
+					Type:        "Event.smdTypeHuman",
+					VideoStream: "Main",
+					Flags:       []string{"Event", "smdTypeHuman"},
 				}},
 			}, nil
 		},
@@ -2761,6 +2795,14 @@ func TestNVRRecordingsEndpointParsesEventOnlyQuery(t *testing.T) {
 	if !strings.Contains(rec.Body.String(), `"source":"nvr_event"`) ||
 		!strings.Contains(rec.Body.String(), `"type":"Event.smdTypeHuman"`) {
 		t.Fatalf("expected nvr event response: %s", rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), `"download_url":"http://example.com/api/v1/nvr/west20_nvr/recordings/download?`) {
+		t.Fatalf("expected event recordings to avoid direct file download URL: %s", rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `source=nvr_event`) ||
+		!strings.Contains(rec.Body.String(), `type=Event.smdTypeHuman`) ||
+		!strings.Contains(rec.Body.String(), `video_stream=Main`) {
+		t.Fatalf("expected event export URL parameters in response: %s", rec.Body.String())
 	}
 }
 
@@ -2981,6 +3023,90 @@ func TestNVRRecordingExportEndpointCreatesPlaybackClip(t *testing.T) {
 		!strings.Contains(rec.Body.String(), `"id":"clip_archive"`) ||
 		!strings.Contains(rec.Body.String(), `"download_url":"http://example.com/api/v1/media/recordings/clip_archive/download"`) {
 		t.Fatalf("unexpected export response: %s", rec.Body.String())
+	}
+}
+
+func TestNVRRecordingExportEndpointUsesRecordingClipRequestForEvents(t *testing.T) {
+	start := time.Date(2026, 4, 29, 0, 0, 0, 0, time.UTC)
+	end := start.Add(20 * time.Second)
+
+	server := newTestServerWithConfig(config.HTTPConfig{
+		ListenAddress: ":0",
+		MetricsPath:   "/metrics",
+		HealthPath:    "/healthz",
+	}, stubSnapshotReader{
+		nvrDownloadRecordingClip: func(_ context.Context, deviceID string, request dahua.NVRRecordingClipRequest) (dahua.NVRRecordingDownload, error) {
+			if deviceID != "west20_nvr" {
+				t.Fatalf("unexpected device id %q", deviceID)
+			}
+			if request.Channel != 5 || !request.StartTime.Equal(start) || !request.EndTime.Equal(end) {
+				t.Fatalf("unexpected clip request %+v", request)
+			}
+			if request.FilePath != "/mnt/dvr/2026-04-29/4/dav/00.00.00-00.30.00[R][0@0][0].dav" {
+				t.Fatalf("unexpected file path %q", request.FilePath)
+			}
+			if request.Source != "nvr_event" || request.Type != "Event.smdTypeVehicle" || request.VideoStream != "Main" {
+				t.Fatalf("unexpected event clip metadata %+v", request)
+			}
+			return dahua.NVRRecordingDownload{
+				Body:          io.NopCloser(strings.NewReader("dav-bytes")),
+				ContentType:   "application/octet-stream",
+				ContentLength: int64(len("dav-bytes")),
+				FileName:      "event.dav",
+			}, nil
+		},
+		listStreams: func(bool) []streams.Entry {
+			return []streams.Entry{{
+				ID:                 "west20_nvr_channel_05",
+				RootDeviceID:       "west20_nvr",
+				DeviceKind:         dahua.DeviceKindNVRChannel,
+				Name:               "Channel 5",
+				Channel:            5,
+				RecommendedProfile: "stable",
+				Profiles: map[string]streams.Profile{
+					"stable": {
+						Name:         "stable",
+						VideoCodec:   "H.264",
+						AudioCodec:   "AAC",
+						SourceWidth:  704,
+						SourceHeight: 576,
+						Recommended:  true,
+					},
+				},
+			}}
+		},
+	}, stubMediaReader{
+		enabled: true,
+		startDirectClip: func(_ context.Context, request mediaapi.DirectClipStartRequest) (mediaapi.ClipInfo, error) {
+			if request.Channel != 5 || request.SourceURL == "" {
+				t.Fatalf("unexpected direct clip request %+v", request)
+			}
+			return mediaapi.ClipInfo{
+				ID:        "clip_event",
+				StreamID:  request.StreamID,
+				Profile:   request.ProfileName,
+				Status:    mediaapi.ClipStatusRecording,
+				StartedAt: start,
+				Duration:  request.Duration,
+				FileName:  "clip_event.mp4",
+			}, nil
+		},
+	}, stubActionReader{}, stubEventReader{})
+
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/api/v1/nvr/west20_nvr/recordings/export?channel=5&start_time=2026-04-29T00:00:00Z&end_time=2026-04-29T00:00:20Z&file_path=%2Fmnt%2Fdvr%2F2026-04-29%2F4%2Fdav%2F00.00.00-00.30.00%5BR%5D%5B0%400%5D%5B0%5D.dav&source=nvr_event&type=Event.smdTypeVehicle&video_stream=Main",
+		nil,
+	)
+	rec := httptest.NewRecorder()
+
+	server.httpServer.Handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"id":"clip_event"`) {
+		t.Fatalf("unexpected event export response: %s", rec.Body.String())
 	}
 }
 

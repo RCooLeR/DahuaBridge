@@ -33,6 +33,7 @@ type SnapshotReader interface {
 	NVRSnapshot(context.Context, string, int) ([]byte, string, error)
 	NVRRecordings(context.Context, string, dahua.NVRRecordingQuery) (dahua.NVRRecordingSearchResult, error)
 	NVRDownloadRecording(context.Context, string, string) (dahua.NVRRecordingDownload, error)
+	NVRDownloadRecordingClip(context.Context, string, dahua.NVRRecordingClipRequest) (dahua.NVRRecordingDownload, error)
 	CreateNVRPlaybackSession(context.Context, string, dahua.NVRPlaybackSessionRequest) (dahua.NVRPlaybackSession, error)
 	GetNVRPlaybackSession(string) (dahua.NVRPlaybackSession, error)
 	SeekNVRPlaybackSession(context.Context, string, time.Time) (dahua.NVRPlaybackSession, error)
@@ -52,6 +53,7 @@ type MediaReader interface {
 	DASHManifest(context.Context, string, string) ([]byte, error)
 	DASHAsset(context.Context, string, string, string) ([]byte, string, error)
 	StartClip(context.Context, mediaapi.ClipStartRequest) (mediaapi.ClipInfo, error)
+	StartDirectClip(context.Context, mediaapi.DirectClipStartRequest) (mediaapi.ClipInfo, error)
 	StopClip(context.Context, string) (mediaapi.ClipInfo, error)
 	GetClip(string) (mediaapi.ClipInfo, error)
 	FindClips(mediaapi.ClipQuery) ([]mediaapi.ClipInfo, error)
@@ -546,10 +548,14 @@ func parseNVRPlaybackSessionRequest(r *http.Request) (dahua.NVRPlaybackSessionRe
 	}
 
 	var request struct {
-		Channel   int    `json:"channel"`
-		StartTime string `json:"start_time"`
-		EndTime   string `json:"end_time"`
-		SeekTime  string `json:"seek_time"`
+		Channel     int    `json:"channel"`
+		StartTime   string `json:"start_time"`
+		EndTime     string `json:"end_time"`
+		SeekTime    string `json:"seek_time"`
+		FilePath    string `json:"file_path"`
+		Source      string `json:"source"`
+		Type        string `json:"type"`
+		VideoStream string `json:"video_stream"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 		if errors.Is(err, io.EOF) {
@@ -576,10 +582,14 @@ func parseNVRPlaybackSessionRequest(r *http.Request) (dahua.NVRPlaybackSessionRe
 	}
 
 	return dahua.NVRPlaybackSessionRequest{
-		Channel:   request.Channel,
-		StartTime: startTime,
-		EndTime:   endTime,
-		SeekTime:  seekTime,
+		Channel:     request.Channel,
+		StartTime:   startTime,
+		EndTime:     endTime,
+		SeekTime:    seekTime,
+		FilePath:    strings.TrimSpace(request.FilePath),
+		Source:      strings.TrimSpace(request.Source),
+		Type:        strings.TrimSpace(request.Type),
+		VideoStream: strings.TrimSpace(request.VideoStream),
 	}, nil
 }
 
@@ -608,14 +618,22 @@ func parseNVRRecordingExportRequest(r *http.Request) (dahua.NVRPlaybackSessionRe
 		StartTime       string
 		EndTime         string
 		SeekTime        string
+		FilePath        string
+		Source          string
+		Type            string
+		VideoStream     string
 		Profile         string
 		DurationSeconds *int
 		DurationMS      *int
 	}{
-		StartTime: firstNonEmptyQueryValue(values, "start_time", "start"),
-		EndTime:   firstNonEmptyQueryValue(values, "end_time", "end"),
-		SeekTime:  firstNonEmptyQueryValue(values, "seek_time", "seek"),
-		Profile:   strings.TrimSpace(values.Get("profile")),
+		StartTime:   firstNonEmptyQueryValue(values, "start_time", "start"),
+		EndTime:     firstNonEmptyQueryValue(values, "end_time", "end"),
+		SeekTime:    firstNonEmptyQueryValue(values, "seek_time", "seek"),
+		FilePath:    strings.TrimSpace(values.Get("file_path")),
+		Source:      strings.TrimSpace(values.Get("source")),
+		Type:        strings.TrimSpace(values.Get("type")),
+		VideoStream: strings.TrimSpace(values.Get("video_stream")),
+		Profile:     strings.TrimSpace(values.Get("profile")),
 	}
 	if rawChannel := strings.TrimSpace(values.Get("channel")); rawChannel != "" {
 		channel, err := strconv.Atoi(rawChannel)
@@ -645,6 +663,10 @@ func parseNVRRecordingExportRequest(r *http.Request) (dahua.NVRPlaybackSessionRe
 			StartTime       string `json:"start_time"`
 			EndTime         string `json:"end_time"`
 			SeekTime        string `json:"seek_time"`
+			FilePath        string `json:"file_path"`
+			Source          string `json:"source"`
+			Type            string `json:"type"`
+			VideoStream     string `json:"video_stream"`
 			Profile         string `json:"profile"`
 			DurationSeconds *int   `json:"duration_seconds"`
 			DurationMS      *int   `json:"duration_ms"`
@@ -665,6 +687,18 @@ func parseNVRRecordingExportRequest(r *http.Request) (dahua.NVRPlaybackSessionRe
 			}
 			if strings.TrimSpace(bodyRequest.SeekTime) != "" {
 				request.SeekTime = strings.TrimSpace(bodyRequest.SeekTime)
+			}
+			if strings.TrimSpace(bodyRequest.FilePath) != "" {
+				request.FilePath = strings.TrimSpace(bodyRequest.FilePath)
+			}
+			if strings.TrimSpace(bodyRequest.Source) != "" {
+				request.Source = strings.TrimSpace(bodyRequest.Source)
+			}
+			if strings.TrimSpace(bodyRequest.Type) != "" {
+				request.Type = strings.TrimSpace(bodyRequest.Type)
+			}
+			if strings.TrimSpace(bodyRequest.VideoStream) != "" {
+				request.VideoStream = strings.TrimSpace(bodyRequest.VideoStream)
 			}
 			if strings.TrimSpace(bodyRequest.Profile) != "" {
 				request.Profile = strings.TrimSpace(bodyRequest.Profile)
@@ -723,10 +757,14 @@ func parseNVRRecordingExportRequest(r *http.Request) (dahua.NVRPlaybackSessionRe
 	}
 
 	return dahua.NVRPlaybackSessionRequest{
-		Channel:   request.Channel,
-		StartTime: startTime,
-		EndTime:   endTime,
-		SeekTime:  seekTime,
+		Channel:     request.Channel,
+		StartTime:   startTime,
+		EndTime:     endTime,
+		SeekTime:    seekTime,
+		FilePath:    strings.TrimSpace(request.FilePath),
+		Source:      strings.TrimSpace(request.Source),
+		Type:        strings.TrimSpace(request.Type),
+		VideoStream: strings.TrimSpace(request.VideoStream),
 	}, profile, duration, nil
 }
 
@@ -1058,8 +1096,31 @@ func attachNVRRecordingExportURLs(r *http.Request, deviceID string, result *dahu
 		if channel <= 0 || strings.TrimSpace(startTime) == "" || strings.TrimSpace(endTime) == "" {
 			continue
 		}
-		item.ExportURL = buildNVRRecordingExportURL(r, deviceID, channel, startTime, endTime)
+		item.ExportURL = buildNVRRecordingExportURL(
+			r,
+			deviceID,
+			channel,
+			startTime,
+			endTime,
+			item.FilePath,
+			item.Source,
+			item.Type,
+			item.VideoStream,
+		)
+		if strings.TrimSpace(item.FilePath) != "" && !isEventRecordingItem(*item) {
+			query := url.Values{"file_path": []string{item.FilePath}}
+			item.DownloadURL = buildAbsoluteRequestURL(
+				r,
+				"/api/v1/nvr/"+url.PathEscape(deviceID)+"/recordings/download?"+query.Encode(),
+			)
+		}
 	}
+}
+
+func isEventRecordingItem(item dahua.NVRRecording) bool {
+	source := strings.ToLower(strings.TrimSpace(item.Source))
+	recordingType := strings.ToLower(strings.TrimSpace(item.Type))
+	return source == "nvr_event" || recordingType == "event" || strings.HasPrefix(recordingType, "event.")
 }
 
 func buildNVREventSummary(ctx context.Context, snapshots SnapshotReader, deviceID string, query nvrEventSummaryQuery) (dahua.NVREventSummary, error) {
@@ -1231,12 +1292,24 @@ func normalizeNVRRecordingSearchResult(result *dahua.NVRRecordingSearchResult) {
 	}
 }
 
-func buildNVRRecordingExportURL(r *http.Request, deviceID string, channel int, startTime string, endTime string) string {
+func buildNVRRecordingExportURL(r *http.Request, deviceID string, channel int, startTime string, endTime string, filePath string, source string, recordingType string, videoStream string) string {
 	query := url.Values{
 		"channel":    []string{strconv.Itoa(channel)},
 		"start_time": []string{startTime},
 		"end_time":   []string{endTime},
 		"profile":    []string{"stable"},
+	}
+	if strings.TrimSpace(filePath) != "" {
+		query.Set("file_path", strings.TrimSpace(filePath))
+	}
+	if strings.TrimSpace(source) != "" {
+		query.Set("source", strings.TrimSpace(source))
+	}
+	if strings.TrimSpace(recordingType) != "" {
+		query.Set("type", strings.TrimSpace(recordingType))
+	}
+	if strings.TrimSpace(videoStream) != "" {
+		query.Set("video_stream", strings.TrimSpace(videoStream))
 	}
 	path := "/api/v1/nvr/" + url.PathEscape(deviceID) + "/recordings/export?" + query.Encode()
 	return buildAbsoluteRequestURL(r, path)

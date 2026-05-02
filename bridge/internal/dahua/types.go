@@ -179,11 +179,29 @@ type NVRRecordingDownloader interface {
 	DownloadRecording(context.Context, string) (NVRRecordingDownload, error)
 }
 
+type NVRRecordingClipRequest struct {
+	Channel     int
+	StartTime   time.Time
+	EndTime     time.Time
+	FilePath    string
+	Source      string
+	Type        string
+	VideoStream string
+}
+
+type NVRRecordingClipDownloader interface {
+	DownloadRecordingClip(context.Context, NVRRecordingClipRequest) (NVRRecordingDownload, error)
+}
+
 type NVRPlaybackSessionRequest struct {
-	Channel   int
-	StartTime time.Time
-	EndTime   time.Time
-	SeekTime  time.Time
+	Channel     int
+	StartTime   time.Time
+	EndTime     time.Time
+	SeekTime    time.Time
+	FilePath    string
+	Source      string
+	Type        string
+	VideoStream string
 }
 
 type NVRPlaybackProfile struct {

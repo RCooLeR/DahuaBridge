@@ -322,6 +322,92 @@ func TestDecodeRecordingDownloadResponseRejectsInlineRPCError(t *testing.T) {
 	}
 }
 
+func TestDriverDownloadRecordingClipUsesRPC3LoadfileForEvents(t *testing.T) {
+	previousLocal := time.Local
+	time.Local = time.FixedZone("EEST", 3*60*60)
+	t.Cleanup(func() {
+		time.Local = previousLocal
+	})
+
+	loginRequests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/RPC2_Login":
+			loginRequests++
+			if loginRequests == 1 {
+				_, _ = w.Write([]byte(`{"id":1,"params":{"realm":"Login to Test","random":"12345","encryption":"Default"},"result":false,"session":"sess1","error":{"code":268632079,"message":"challenge"}}`))
+				return
+			}
+			_, _ = w.Write([]byte(`{"id":2,"params":{},"result":true,"session":"sess2"}`))
+		case "/RPC3_Loadfile":
+			if got := r.Header.Get("X-Api-Session"); got != "sess2" {
+				t.Fatalf("unexpected x-api-session header %q", got)
+			}
+			var payload struct {
+				Method  string         `json:"method"`
+				Params  map[string]any `json:"params"`
+				Session string         `json:"session"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				t.Fatalf("decode RPC3 request: %v", err)
+			}
+			if payload.Method != "StorageAssistant.getIFrameData" {
+				t.Fatalf("unexpected rpc method %q", payload.Method)
+			}
+			infos, _ := payload.Params["Infos"].(map[string]any)
+			if channel, ok := infos["Channel"].(float64); !ok || channel != 4 {
+				t.Fatalf("unexpected inline clip channel %+v", infos["Channel"])
+			}
+			if timeValue, _ := infos["Time"].(string); timeValue != "2026-04-29 03:00:00" {
+				t.Fatalf("unexpected inline clip time %q", timeValue)
+			}
+			if stream, _ := infos["VideoStream"].(string); stream != "Main" {
+				t.Fatalf("unexpected inline clip video stream %q", stream)
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"result":true,"params":{"body":"QUJDRA==","contentType":"application/octet-stream"}}`))
+		default:
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	driver := New(config.DeviceConfig{
+		ID:             "west20_nvr",
+		BaseURL:        server.URL,
+		Username:       "admin",
+		Password:       "secret",
+		RequestTimeout: 5 * time.Second,
+	}, config.ImouConfig{}, nil, nil, zerolog.Nop(), nil, cgi.New(config.DeviceConfig{
+		ID:             "west20_nvr",
+		BaseURL:        server.URL,
+		Username:       "admin",
+		Password:       "secret",
+		RequestTimeout: 5 * time.Second,
+	}, nil))
+
+	download, err := driver.DownloadRecordingClip(context.Background(), dahua.NVRRecordingClipRequest{
+		Channel:     5,
+		StartTime:   time.Date(2026, 4, 29, 0, 0, 0, 0, time.UTC),
+		FilePath:    "/mnt/dvr/2026-04-29/4/dav/00.00.00-00.30.00[R][0@0][0].dav",
+		Source:      "nvr_event",
+		Type:        "Event.smdTypeVehicle",
+		VideoStream: "Main",
+	})
+	if err != nil {
+		t.Fatalf("DownloadRecordingClip returned error: %v", err)
+	}
+	defer download.Body.Close()
+
+	body, err := io.ReadAll(download.Body)
+	if err != nil {
+		t.Fatalf("read inline clip body: %v", err)
+	}
+	if string(body) != "ABCD" {
+		t.Fatalf("unexpected inline clip body %q", string(body))
+	}
+}
+
 func TestDriverFindRecordingsUsesRPCMediaFileFind(t *testing.T) {
 	loginRequests := 0
 	var rpcCalls []string
@@ -553,6 +639,12 @@ func TestDriverFindRecordingsEventOnlyUsesSMDFinder(t *testing.T) {
 					t.Fatalf("unexpected smd doFind params: %+v", payload.Params)
 				}
 				_, _ = w.Write([]byte(`{"id":11,"params":{"SmdInfo":[{"Channel":0,"StartTime":"2026-05-01 15:09:07","EndTime":"2026-05-01 15:09:28","Type":"smdTypeHuman"},{"Channel":1,"StartTime":"2026-05-01 15:10:00","EndTime":"2026-05-01 15:10:20","Type":"smdTypeHuman"}]},"result":true,"session":"sess2"}`))
+			case "mediaFileFind.factory.create":
+				_, _ = w.Write([]byte(`{"id":12,"result":12345,"session":"sess2"}`))
+			case "mediaFileFind.findFile":
+				_, _ = w.Write([]byte(`{"id":13,"result":true,"session":"sess2"}`))
+			case "mediaFileFind.findNextFile":
+				_, _ = w.Write([]byte(`{"id":14,"params":{"found":1,"items":[{"Channel":0,"StartTime":"2026-05-01 15:09:07","EndTime":"2026-05-01 15:09:28","FilePath":"/mnt/dvr/2026-05-01/0/dav/15.09.07-15.09.28[R][0@0][0].dav","Type":"dav","VideoStream":"Main"}]},"result":true,"session":"sess2"}`))
 			default:
 				http.Error(w, "unexpected rpc method", http.StatusBadRequest)
 			}
@@ -591,7 +683,7 @@ func TestDriverFindRecordingsEventOnlyUsesSMDFinder(t *testing.T) {
 		t.Fatalf("expected one smd event item, got %+v", got.Items)
 	}
 	item := got.Items[0]
-	if item.Source != "nvr_event" || item.FilePath != "" || item.Type != "Event.smdTypeHuman" {
+	if item.Source != "nvr_event" || item.FilePath == "" || item.Type != "Event.smdTypeHuman" {
 		t.Fatalf("unexpected smd event recording %+v", item)
 	}
 	if item.StartTime != "2026-05-01 15:09:07" || item.EndTime != "2026-05-01 15:09:28" {
@@ -600,7 +692,14 @@ func TestDriverFindRecordingsEventOnlyUsesSMDFinder(t *testing.T) {
 	if !containsString(item.Flags, "Event") || !containsString(item.Flags, "smdTypeHuman") {
 		t.Fatalf("expected smd event flags, got %+v", item.Flags)
 	}
-	if len(rpcCalls) != 2 || rpcCalls[0] != "SmdDataFinder.startFind" || rpcCalls[1] != "SmdDataFinder.doFind" {
+	if len(rpcCalls) != 7 ||
+		rpcCalls[0] != "SmdDataFinder.startFind" ||
+		rpcCalls[1] != "SmdDataFinder.doFind" ||
+		rpcCalls[2] != "mediaFileFind.factory.create" ||
+		rpcCalls[3] != "mediaFileFind.findFile" ||
+		rpcCalls[4] != "mediaFileFind.findNextFile" ||
+		rpcCalls[5] != "mediaFileFind.close" ||
+		rpcCalls[6] != "mediaFileFind.destroy" {
 		t.Fatalf("unexpected rpc sequence %+v", rpcCalls)
 	}
 }
@@ -635,6 +734,12 @@ func TestDriverFindRecordingsEventFilterFallsBackToSMDFinder(t *testing.T) {
 				_, _ = w.Write([]byte(`{"id":12,"params":{"Count":1,"Token":10},"result":true,"session":"sess2"}`))
 			case "SmdDataFinder.doFind":
 				_, _ = w.Write([]byte(`{"id":13,"params":{"SmdInfo":[{"Channel":0,"StartTime":"2026-05-01 20:08:43","EndTime":"2026-05-01 20:09:05","Type":"smdTypeHuman"}]},"result":true,"session":"sess2"}`))
+			case "mediaFileFind.factory.create":
+				_, _ = w.Write([]byte(`{"id":14,"result":45678,"session":"sess2"}`))
+			case "mediaFileFind.findFile":
+				_, _ = w.Write([]byte(`{"id":15,"result":true,"session":"sess2"}`))
+			case "mediaFileFind.findNextFile":
+				_, _ = w.Write([]byte(`{"id":16,"params":{"found":1,"items":[{"Channel":0,"StartTime":"2026-05-01 20:08:43","EndTime":"2026-05-01 20:09:05","FilePath":"/mnt/dvr/2026-05-01/0/dav/20.08.43-20.09.05[R][0@0][0].dav","Type":"dav","VideoStream":"Main"}]},"result":true,"session":"sess2"}`))
 			default:
 				http.Error(w, "unexpected rpc method", http.StatusBadRequest)
 			}
@@ -675,11 +780,16 @@ func TestDriverFindRecordingsEventFilterFallsBackToSMDFinder(t *testing.T) {
 	if item.StartTime != "2026-05-01 20:08:43" || item.EndTime != "2026-05-01 20:09:05" {
 		t.Fatalf("unexpected smd event time window %+v", item)
 	}
-	if len(rpcCalls) != 4 ||
+	if len(rpcCalls) != 9 ||
 		rpcCalls[0] != "log.startFind" ||
 		rpcCalls[1] != "log.getCount" ||
 		rpcCalls[2] != "SmdDataFinder.startFind" ||
-		rpcCalls[3] != "SmdDataFinder.doFind" {
+		rpcCalls[3] != "SmdDataFinder.doFind" ||
+		rpcCalls[4] != "mediaFileFind.factory.create" ||
+		rpcCalls[5] != "mediaFileFind.findFile" ||
+		rpcCalls[6] != "mediaFileFind.findNextFile" ||
+		rpcCalls[7] != "mediaFileFind.close" ||
+		rpcCalls[8] != "mediaFileFind.destroy" {
 		t.Fatalf("unexpected rpc sequence %+v", rpcCalls)
 	}
 }

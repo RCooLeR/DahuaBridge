@@ -18,23 +18,24 @@ import (
 )
 
 type runtimeServices struct {
-	mu              sync.RWMutex
-	cfg             config.Config
-	probes          *store.ProbeStore
-	media           runtimeMediaReader
-	nvrSnapshots    map[string]dahua.SnapshotProvider
-	nvrDownloads    map[string]dahua.NVRRecordingDownloader
-	nvrRecordings   map[string]dahua.NVRRecordingSearcher
-	playback        map[string]playbackSession
-	nvrConfigs      map[string]config.DeviceConfig
-	vtoSnapshots    map[string]dahua.SnapshotProvider
-	vtoConfigs      map[string]config.DeviceConfig
-	ipcSnapshots    map[string]dahua.SnapshotProvider
-	ipcConfigs      map[string]config.DeviceConfig
-	snapshotCache   map[string]cachedSnapshot
-	recordingCache  map[string]cachedRecordingSearch
-	snapshotFlight  map[string]*snapshotFlight
-	recordingFlight map[string]*recordingSearchFlight
+	mu               sync.RWMutex
+	cfg              config.Config
+	probes           *store.ProbeStore
+	media            runtimeMediaReader
+	nvrSnapshots     map[string]dahua.SnapshotProvider
+	nvrDownloads     map[string]dahua.NVRRecordingDownloader
+	nvrClipDownloads map[string]dahua.NVRRecordingClipDownloader
+	nvrRecordings    map[string]dahua.NVRRecordingSearcher
+	playback         map[string]playbackSession
+	nvrConfigs       map[string]config.DeviceConfig
+	vtoSnapshots     map[string]dahua.SnapshotProvider
+	vtoConfigs       map[string]config.DeviceConfig
+	ipcSnapshots     map[string]dahua.SnapshotProvider
+	ipcConfigs       map[string]config.DeviceConfig
+	snapshotCache    map[string]cachedSnapshot
+	recordingCache   map[string]cachedRecordingSearch
+	snapshotFlight   map[string]*snapshotFlight
+	recordingFlight  map[string]*recordingSearchFlight
 }
 
 type runtimeMediaReader interface {
@@ -74,21 +75,22 @@ const bridgeRecordingTimeLayout = "2006-01-02 15:04:05"
 
 func newRuntimeServices(cfg config.Config, probes *store.ProbeStore) *runtimeServices {
 	return &runtimeServices{
-		cfg:             cfg,
-		probes:          probes,
-		nvrSnapshots:    make(map[string]dahua.SnapshotProvider),
-		nvrDownloads:    make(map[string]dahua.NVRRecordingDownloader),
-		nvrRecordings:   make(map[string]dahua.NVRRecordingSearcher),
-		playback:        make(map[string]playbackSession),
-		nvrConfigs:      make(map[string]config.DeviceConfig),
-		vtoSnapshots:    make(map[string]dahua.SnapshotProvider),
-		vtoConfigs:      make(map[string]config.DeviceConfig),
-		ipcSnapshots:    make(map[string]dahua.SnapshotProvider),
-		ipcConfigs:      make(map[string]config.DeviceConfig),
-		snapshotCache:   make(map[string]cachedSnapshot),
-		recordingCache:  make(map[string]cachedRecordingSearch),
-		snapshotFlight:  make(map[string]*snapshotFlight),
-		recordingFlight: make(map[string]*recordingSearchFlight),
+		cfg:              cfg,
+		probes:           probes,
+		nvrSnapshots:     make(map[string]dahua.SnapshotProvider),
+		nvrDownloads:     make(map[string]dahua.NVRRecordingDownloader),
+		nvrClipDownloads: make(map[string]dahua.NVRRecordingClipDownloader),
+		nvrRecordings:    make(map[string]dahua.NVRRecordingSearcher),
+		playback:         make(map[string]playbackSession),
+		nvrConfigs:       make(map[string]config.DeviceConfig),
+		vtoSnapshots:     make(map[string]dahua.SnapshotProvider),
+		vtoConfigs:       make(map[string]config.DeviceConfig),
+		ipcSnapshots:     make(map[string]dahua.SnapshotProvider),
+		ipcConfigs:       make(map[string]config.DeviceConfig),
+		snapshotCache:    make(map[string]cachedSnapshot),
+		recordingCache:   make(map[string]cachedRecordingSearch),
+		snapshotFlight:   make(map[string]*snapshotFlight),
+		recordingFlight:  make(map[string]*recordingSearchFlight),
 	}
 }
 
@@ -104,6 +106,9 @@ func (r *runtimeServices) RegisterNVR(deviceID string, provider dahua.SnapshotPr
 	r.nvrSnapshots[deviceID] = provider
 	if downloader, ok := provider.(dahua.NVRRecordingDownloader); ok && downloader != nil {
 		r.nvrDownloads[deviceID] = downloader
+	}
+	if downloader, ok := provider.(dahua.NVRRecordingClipDownloader); ok && downloader != nil {
+		r.nvrClipDownloads[deviceID] = downloader
 	}
 	if recordings != nil {
 		r.nvrRecordings[deviceID] = recordings
@@ -254,6 +259,16 @@ func (r *runtimeServices) NVRDownloadRecording(ctx context.Context, deviceID str
 		return dahua.NVRRecordingDownload{}, fmt.Errorf("%w: %s", dahua.ErrDeviceNotFound, deviceID)
 	}
 	return downloader.DownloadRecording(ctx, filePath)
+}
+
+func (r *runtimeServices) NVRDownloadRecordingClip(ctx context.Context, deviceID string, request dahua.NVRRecordingClipRequest) (dahua.NVRRecordingDownload, error) {
+	r.mu.RLock()
+	downloader, ok := r.nvrClipDownloads[deviceID]
+	r.mu.RUnlock()
+	if !ok {
+		return dahua.NVRRecordingDownload{}, fmt.Errorf("%w: %s", dahua.ErrDeviceNotFound, deviceID)
+	}
+	return downloader.DownloadRecordingClip(ctx, request)
 }
 
 func (r *runtimeServices) VTOSnapshot(ctx context.Context, deviceID string) ([]byte, string, error) {

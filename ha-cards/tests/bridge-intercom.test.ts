@@ -29,6 +29,7 @@ describe("bridge intercom helpers", () => {
             key: "quality",
             name: "Quality",
             streamUrl: null,
+            localDashUrl: null,
             localMjpegUrl: null,
             localHlsUrl: null,
             localWebRtcUrl: "https://ha.example.com/bridge/api/v1/media/webrtc/front_vto/quality",

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"RCooLeR/DahuaBridge/internal/dahua"
@@ -107,6 +108,9 @@ func (d *Driver) findEventRecordingsViaSMDRPC(ctx context.Context, query dahua.N
 			if !ok {
 				continue
 			}
+			if filePath, ok := d.resolveSMDRecordingFilePath(ctx, info, query); ok {
+				recording.FilePath = filePath
+			}
 			result.Items = append(result.Items, recording)
 			if len(result.Items) >= query.Limit {
 				break
@@ -119,6 +123,66 @@ func (d *Driver) findEventRecordingsViaSMDRPC(ctx context.Context, query dahua.N
 
 	result.ReturnedCount = len(result.Items)
 	return result, nil
+}
+
+func (d *Driver) resolveSMDRecordingFilePath(ctx context.Context, info nvrSMDInfo, query dahua.NVRRecordingQuery) (string, bool) {
+	var handle int64
+	if err := d.rpc.Call(ctx, "mediaFileFind.factory.create", nil, &handle); err != nil || handle == 0 {
+		return "", false
+	}
+	defer d.closeRecordingSearchHandle(handle)
+
+	startTime, ok := parseNVRRecordingLocalTime(info.StartTime)
+	if !ok {
+		return "", false
+	}
+	endTime, ok := parseNVRRecordingLocalTime(info.EndTime)
+	if !ok || !endTime.After(startTime) {
+		endTime = startTime.Add(20 * time.Second)
+	}
+
+	eventType := strings.TrimSpace(firstNonEmpty(info.SMDType, info.Type, info.Event))
+	if eventType == "" {
+		eventType = "smdTypeHuman"
+	}
+
+	findParams := map[string]any{
+		"condition": map[string]any{
+			"Channel":       info.Channel,
+			"StartTime":     formatRecordingWallTime(startTime),
+			"EndTime":       formatRecordingWallTime(endTime),
+			"Type":          eventType,
+			"Time":          []string{formatRecordingWallTime(startTime), formatRecordingWallTime(endTime)},
+			"VideoStream":   "Main|Extra",
+			"playTime":      formatRecordingWallTime(startTime),
+			"playTimeRange": []string{formatRecordingWallTime(startTime), formatRecordingWallTime(endTime)},
+		},
+	}
+	if err := d.rpc.CallObject(ctx, "mediaFileFind.findFile", findParams, handle, nil); err != nil {
+		return "", false
+	}
+
+	var rawResult map[string]any
+	count := query.Limit
+	if count <= 0 {
+		count = 1
+	}
+	if count > 1024 {
+		count = 1024
+	}
+	if err := d.rpc.CallObject(ctx, "mediaFileFind.findNextFile", map[string]any{
+		"count": count,
+	}, handle, &rawResult); err != nil {
+		return "", false
+	}
+
+	result := parseRPCRecordingSearchResult(rawResult)
+	for _, item := range result.Items {
+		if strings.TrimSpace(item.FilePath) != "" {
+			return strings.TrimSpace(item.FilePath), true
+		}
+	}
+	return "", false
 }
 
 func (d *Driver) findEventRecordingsViaIVSRPC(ctx context.Context, query dahua.NVRRecordingQuery, eventCode string) (dahua.NVRRecordingSearchResult, error) {

@@ -25,6 +25,7 @@ interface RenderSurveillancePanelOverviewArgs {
   onTriggerRecording: (camera: CameraViewModel, action: "start" | "stop") => void;
   onTriggerAux: (camera: CameraViewModel, output: string) => void;
   onEnablePtz: (camera: CameraViewModel) => void;
+  onToggleCameraAudio: (camera: CameraViewModel) => void;
   onVtoUnlock: (vto: VtoViewModel) => void;
   onVtoAnswer: (vto: VtoViewModel) => void;
   onVtoHangup: (vto: VtoViewModel) => void;
@@ -35,6 +36,7 @@ interface RenderSurveillancePanelOverviewArgs {
   onToggleVtoMicrophone: (vto: VtoViewModel) => void;
   renderIcon: (icon: string) => TemplateResult;
   renderCameraViewport: (camera: CameraViewModel) => TemplateResult;
+  isCameraMuted: (camera: CameraViewModel) => boolean;
   cameraImageSrc: (cameraEntity: HassEntity | undefined, snapshotUrl?: string | null) => string;
   renderVtoViewport: (vto: VtoViewModel, playing: boolean) => TemplateResult;
   canOpenSnapshot: (camera: CameraViewModel) => boolean;
@@ -61,6 +63,7 @@ export function renderSurveillancePanelOverview({
   onTriggerRecording,
   onTriggerAux,
   onEnablePtz,
+  onToggleCameraAudio,
   onVtoUnlock,
   onVtoAnswer,
   onVtoHangup,
@@ -71,6 +74,7 @@ export function renderSurveillancePanelOverview({
   onToggleVtoMicrophone,
   renderIcon,
   renderCameraViewport,
+  isCameraMuted,
   cameraImageSrc,
   renderVtoViewport,
   canOpenSnapshot,
@@ -126,8 +130,10 @@ export function renderSurveillancePanelOverview({
                     onTriggerRecording,
                     onTriggerAux,
                     onEnablePtz,
+                    onToggleCameraAudio,
                     renderIcon,
                     renderCameraViewport,
+                    isCameraMuted,
                     canOpenSnapshot,
                     isBridgeRecordingActive,
                     isAuxActive,
@@ -149,8 +155,10 @@ function renderCameraTile({
   onTriggerRecording,
   onTriggerAux,
   onEnablePtz,
+  onToggleCameraAudio,
   renderIcon,
   renderCameraViewport,
+  isCameraMuted,
   canOpenSnapshot,
   isBridgeRecordingActive,
   isAuxActive,
@@ -164,8 +172,10 @@ function renderCameraTile({
   onTriggerRecording: (camera: CameraViewModel, action: "start" | "stop") => void;
   onTriggerAux: (camera: CameraViewModel, output: string) => void;
   onEnablePtz: (camera: CameraViewModel) => void;
+  onToggleCameraAudio: (camera: CameraViewModel) => void;
   renderIcon: (icon: string) => TemplateResult;
   renderCameraViewport: (camera: CameraViewModel) => TemplateResult;
+  isCameraMuted: (camera: CameraViewModel) => boolean;
   canOpenSnapshot: (camera: CameraViewModel) => boolean;
   isBridgeRecordingActive: (camera: CameraViewModel) => boolean;
   isAuxActive: (camera: CameraViewModel, output: string) => boolean;
@@ -180,10 +190,12 @@ function renderCameraTile({
   const lightActive = isAuxActive(camera, "light");
   const warningLightActive = isAuxActive(camera, "warning_light");
   const sirenActive = isAuxActive(camera, "siren");
+  const cameraMuted = isCameraMuted(camera);
 
   return html`
     <article
       class="camera-tile ${selected ? "selected" : ""}"
+      data-device-id=${camera.deviceId}
       @click=${() => onSelectCamera(camera)}
     >
       <div class="tile-header">
@@ -301,6 +313,17 @@ function renderCameraTile({
                     {
                       active: selected && ptzAdjusting,
                       tone: selected && ptzAdjusting ? "primary" : undefined,
+                    },
+                  )
+                : null}
+              ${camera.audioCodec.trim()
+                ? renderIconButton(
+                    cameraMuted ? "Enable Stream Audio" : "Disable Stream Audio",
+                    cameraMuted ? "mdi:volume-high" : "mdi:volume-off",
+                    () => onToggleCameraAudio(camera),
+                    renderIcon,
+                    {
+                      active: !cameraMuted,
                     },
                   )
                 : null}

@@ -3,8 +3,10 @@ package httpserver
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -12,6 +14,7 @@ import (
 
 	"RCooLeR/DahuaBridge/internal/dahua"
 	mediaapi "RCooLeR/DahuaBridge/internal/media"
+	"RCooLeR/DahuaBridge/internal/streams"
 
 	"github.com/go-chi/chi/v5"
 )
@@ -183,7 +186,27 @@ func (c *controller) registerNVRRoutes(router chi.Router) {
 			return
 		}
 
-		session, err := c.snapshots.CreateNVRPlaybackSession(r.Context(), chi.URLParam(r, "deviceID"), playbackRequest)
+		deviceID := chi.URLParam(r, "deviceID")
+		if strings.TrimSpace(playbackRequest.FilePath) != "" {
+			clip, err := c.startDirectNVRRecordingExport(
+				r.Context(),
+				deviceID,
+				playbackRequest,
+				profile,
+				duration,
+			)
+			if err != nil {
+				writeClassifiedActionError(w, err, http.StatusBadGateway)
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]any{
+				"status": "ok",
+				"clip":   clipAPIResponse(r, clip),
+			})
+			return
+		}
+
+		session, err := c.snapshots.CreateNVRPlaybackSession(r.Context(), deviceID, playbackRequest)
 		if err != nil {
 			writeClassifiedActionError(w, err, http.StatusBadRequest)
 			return
@@ -466,6 +489,103 @@ func (c *controller) registerNVRRoutes(router chi.Router) {
 
 		writeJSON(w, http.StatusOK, session)
 	})
+}
+
+func (c *controller) startDirectNVRRecordingExport(
+	ctx context.Context,
+	deviceID string,
+	request dahua.NVRPlaybackSessionRequest,
+	profileName string,
+	duration time.Duration,
+) (mediaapi.ClipInfo, error) {
+	if c.media == nil {
+		return mediaapi.ClipInfo{}, fmt.Errorf("media layer is not configured")
+	}
+
+	download, err := c.snapshots.NVRDownloadRecordingClip(ctx, deviceID, dahua.NVRRecordingClipRequest{
+		Channel:     request.Channel,
+		StartTime:   request.StartTime,
+		EndTime:     request.EndTime,
+		FilePath:    request.FilePath,
+		Source:      request.Source,
+		Type:        request.Type,
+		VideoStream: request.VideoStream,
+	})
+	if err != nil {
+		return mediaapi.ClipInfo{}, err
+	}
+	defer download.Body.Close()
+
+	tempFile, err := os.CreateTemp("", "dahuabridge-recording-*.dav")
+	if err != nil {
+		return mediaapi.ClipInfo{}, fmt.Errorf("create temporary recording file: %w", err)
+	}
+	tempPath := tempFile.Name()
+	cleanupTemp := true
+	defer func() {
+		_ = tempFile.Close()
+		if cleanupTemp {
+			_ = os.Remove(tempPath)
+		}
+	}()
+
+	if _, err := io.Copy(tempFile, download.Body); err != nil {
+		return mediaapi.ClipInfo{}, fmt.Errorf("copy recording to temporary file: %w", err)
+	}
+	if err := tempFile.Close(); err != nil {
+		return mediaapi.ClipInfo{}, fmt.Errorf("close temporary recording file: %w", err)
+	}
+
+	entry, streamProfile := c.lookupNVRStreamProfile(deviceID, request.Channel, profileName)
+	clip, err := c.media.StartDirectClip(ctx, mediaapi.DirectClipStartRequest{
+		StreamID:                     firstNonEmpty(strings.TrimSpace(entry.ID), fmt.Sprintf("nvr_export_%s_%d", deviceID, request.Channel)),
+		RootDeviceID:                 firstNonEmpty(strings.TrimSpace(entry.RootDeviceID), deviceID),
+		SourceDeviceID:               firstNonEmpty(strings.TrimSpace(entry.ID), fmt.Sprintf("%s_channel_%02d", deviceID, request.Channel)),
+		DeviceKind:                   dahua.DeviceKindNVRChannel,
+		Name:                         firstNonEmpty(strings.TrimSpace(entry.Name), fmt.Sprintf("Channel %d", request.Channel)),
+		Channel:                      request.Channel,
+		ProfileName:                  profileName,
+		Duration:                     duration,
+		SourceURL:                    tempPath,
+		VideoCodec:                   streamProfile.VideoCodec,
+		AudioCodec:                   streamProfile.AudioCodec,
+		SourceWidth:                  streamProfile.SourceWidth,
+		SourceHeight:                 streamProfile.SourceHeight,
+		Recommended:                  streamProfile.Recommended,
+		TemporarySourcePathToCleanup: tempPath,
+	})
+	if err != nil {
+		return mediaapi.ClipInfo{}, err
+	}
+	cleanupTemp = false
+	return clip, nil
+}
+
+func (c *controller) lookupNVRStreamProfile(deviceID string, channel int, profileName string) (streams.Entry, streams.Profile) {
+	profileName = strings.TrimSpace(profileName)
+	for _, entry := range c.snapshots.ListStreams(false) {
+		if entry.DeviceKind != dahua.DeviceKindNVRChannel {
+			continue
+		}
+		if entry.RootDeviceID != deviceID || entry.Channel != channel {
+			continue
+		}
+		if profileName != "" {
+			if profile, ok := entry.Profiles[profileName]; ok {
+				return entry, profile
+			}
+		}
+		if recommended := strings.TrimSpace(entry.RecommendedProfile); recommended != "" {
+			if profile, ok := entry.Profiles[recommended]; ok {
+				return entry, profile
+			}
+		}
+		for _, profile := range entry.Profiles {
+			return entry, profile
+		}
+		return entry, streams.Profile{}
+	}
+	return streams.Entry{}, streams.Profile{}
 }
 
 func (c *controller) registerEventRoutes(router chi.Router) {

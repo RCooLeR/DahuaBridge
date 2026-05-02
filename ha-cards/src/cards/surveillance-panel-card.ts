@@ -47,6 +47,7 @@ import {
 } from "./surveillance-panel-primitives";
 import type { BridgeEvent } from "../ha/bridge-events";
 import type {
+  NvrArchiveExportClipModel,
   BridgeRecordingClipListModel,
   BridgeRecordingClipModel,
   NvrArchiveRecordingModel,
@@ -231,6 +232,7 @@ export class DahuaBridgeSurveillancePanelCard
     _selectedPlaybackStreamProfile: { state: true },
     _selectedPlaybackStreamSource: { state: true },
     _selectedCameraAudioMuted: { state: true },
+    _overviewCameraAudioMuted: { state: true },
     _selectedVtoStreamProfile: { state: true },
     _selectedVtoStreamSource: { state: true },
     _selectedVtoStreamPlaying: { state: true },
@@ -280,6 +282,7 @@ export class DahuaBridgeSurveillancePanelCard
   private _selectedPlaybackStreamProfile: string | null = null;
   private _selectedPlaybackStreamSource: CameraViewportSource | null = null;
   private _selectedCameraAudioMuted = true;
+  private _overviewCameraAudioMuted: Record<string, boolean> = {};
   private _selectedVtoStreamProfile: string | null = null;
   private _selectedVtoStreamSource: CameraViewportSource | null = null;
   private _selectedVtoStreamPlaying = false;
@@ -369,6 +372,7 @@ export class DahuaBridgeSurveillancePanelCard
     this._selectedPlaybackStreamProfile = null;
     this._selectedPlaybackStreamSource = null;
     this._selectedCameraAudioMuted = true;
+    this._overviewCameraAudioMuted = {};
     this._selectedVtoStreamProfile = null;
     this._selectedVtoStreamSource = null;
     this._selectedVtoStreamPlaying = false;
@@ -436,6 +440,10 @@ export class DahuaBridgeSurveillancePanelCard
     }
 
     this.scheduleRemoteStreamStyleSync();
+    window.requestAnimationFrame(() => {
+      this.syncSelectedCameraViewportAudioState(this._selectedCameraAudioMuted);
+      this.syncOverviewCameraViewportAudioState();
+    });
     this.maybeStartSelectedVtoVideo(changedProperties);
   }
 
@@ -680,6 +688,11 @@ export class DahuaBridgeSurveillancePanelCard
                                       this._selectedPlaybackStreamProfile = nextKey;
                                       this._selectedPlaybackStreamSource =
                                         preservePlaybackViewportSourceSelection(
+                                          selectedPlayback.session,
+                                          nextKey,
+                                          this._selectedPlaybackStreamSource,
+                                        ) ??
+                                        resolveInitialPlaybackViewportSource(
                                           selectedPlayback.session,
                                           nextKey,
                                           this._selectedPlaybackStreamSource,
@@ -1246,6 +1259,7 @@ export class DahuaBridgeSurveillancePanelCard
         this.selectCamera(camera);
         this._ptzAdjusting = true;
       },
+      onToggleCameraAudio: (camera) => this.toggleOverviewCameraAudio(camera),
       onVtoUnlock: (vto) =>
         this.triggerVtoButtonAction("vto:unlock", vto.unlockButtonEntityId, vto.unlockActionUrl),
       onVtoAnswer: (vto) =>
@@ -1274,12 +1288,20 @@ export class DahuaBridgeSurveillancePanelCard
       renderCameraViewport: (camera) => {
         const profileKey = defaultOverviewStreamProfileKey(camera.stream);
         const source = resolveOverviewCameraViewportSource(camera, profileKey);
-        return renderSelectedCameraViewport(this.hass, camera, profileKey, source, true, {
+        return renderSelectedCameraViewport(
+          this.hass,
+          camera,
+          profileKey,
+          source,
+          this.isOverviewCameraMuted(camera),
+          {
           controls: false,
           preload: "none",
           fallbackOrder: ["hls", "mjpeg"],
-        });
+          },
+        );
       },
+      isCameraMuted: (camera) => this.isOverviewCameraMuted(camera),
       cameraImageSrc: (cameraEntity, snapshotUrl) =>
         cameraImageSrc(cameraEntity, snapshotUrl),
       renderVtoViewport: (vto, playing) =>
@@ -2003,6 +2025,7 @@ export class DahuaBridgeSurveillancePanelCard
     const controller = new AbortController();
     this._archiveAbort = controller;
     const requestVersion = ++this._archiveRequestVersion;
+    this._archiveRecordings = null;
     this._archiveLoading = true;
     this._archiveError = "";
     const { startTime, endTime } = dateRangeForArchiveDay(this._archiveDate);
@@ -2123,6 +2146,7 @@ export class DahuaBridgeSurveillancePanelCard
     const controller = new AbortController();
     this._mp4Abort = controller;
     const requestVersion = ++this._mp4RequestVersion;
+    this._bridgeRecordings = null;
     this._bridgeRecordingsLoading = true;
     this._bridgeRecordingsError = "";
     const { startTime, endTime } = dateRangeForArchiveDay(this._archiveDate);
@@ -2335,6 +2359,11 @@ export class DahuaBridgeSurveillancePanelCard
     model: PanelModel,
     recording: NvrArchiveRecordingModel,
   ): Promise<void> {
+    if (recording.filePath && recording.exportUrl) {
+      await this.launchArchiveClipPlayback(model, recording);
+      return;
+    }
+
     const archiveSource = this.resolveArchiveSource(model);
     const playbackUrl = archiveSource?.archive?.playbackUrl ?? null;
     const browserBridgeUrl = archiveSource?.bridgeBaseUrl ?? null;
@@ -2422,6 +2451,90 @@ export class DahuaBridgeSurveillancePanelCard
       this.logMedia("card panel playback session failed", {
         ...this.archiveRecordingLogContext(recording),
         device_id: archiveSource.deviceId,
+        error: this._errorMessage,
+      });
+    } finally {
+      const reducedBusy = new Set(this._busyActions);
+      reducedBusy.delete(busyKey);
+      this._busyActions = reducedBusy;
+    }
+  }
+
+  private async launchArchiveClipPlayback(
+    model: PanelModel,
+    recording: NvrArchiveRecordingModel,
+  ): Promise<void> {
+    const archiveSource = this.resolveArchiveSource(model);
+    const browserBridgeUrl = archiveSource?.bridgeBaseUrl ?? null;
+    if (!archiveSource || !recording.exportUrl) {
+      this._errorMessage = "Playback is unavailable for the selected archive source.";
+      return;
+    }
+
+    const busyKey = this.playbackBusyKey(recording);
+    if (this.isBusy(busyKey)) {
+      return;
+    }
+
+    const nextBusy = new Set(this._busyActions);
+    nextBusy.add(busyKey);
+    this._busyActions = nextBusy;
+    this._errorMessage = "";
+
+    try {
+      this.logMedia("card panel archive clip playback export request", {
+        ...this.archiveRecordingLogContext(recording),
+        device_id: archiveSource.deviceId,
+        url: redactUrlForLog(recording.exportUrl),
+      });
+      const startedClip = await exportArchiveRecording(recording.exportUrl, browserBridgeUrl);
+      const completedClip = await waitForArchiveExportCompletion(startedClip, browserBridgeUrl);
+      if (!completedClip.playbackUrl) {
+        throw new Error("Bridge archive export completed without a playback URL.");
+      }
+      this.patchArchiveRecordingExportClip(recording, completedClip);
+      this._selectedPlayback = null;
+      this._selectedPlaybackStreamProfile = null;
+      this._selectedPlaybackStreamSource = null;
+      this._selectedBridgeRecordingPlayback = {
+        sourceDeviceId: archiveSource.deviceId,
+        recording: {
+          id: completedClip.id,
+          streamId: completedClip.id,
+          rootDeviceId: archiveSource.rootDeviceId,
+          sourceDeviceId: archiveSource.deviceId,
+          deviceKind: "nvr_channel",
+          name: displayCameraLabel(archiveSource),
+          channel: recording.channel,
+          profile: "stable",
+          status: completedClip.status,
+          startedAt: recording.startTime,
+          endedAt: null,
+          sourceStartTime: recording.startTime,
+          sourceEndTime: recording.endTime,
+          durationMs: completedClip.durationMs,
+          bytes: null,
+          fileName: null,
+          playbackUrl: completedClip.playbackUrl,
+          downloadUrl: completedClip.downloadUrl,
+          selfUrl: completedClip.selfUrl,
+          stopUrl: null,
+          error: completedClip.error,
+        },
+      };
+      this._selectedCameraAudioMuted = true;
+      this.logMedia("card panel archive clip playback selected", {
+        ...this.archiveRecordingLogContext(recording),
+        device_id: archiveSource.deviceId,
+        clip_id: completedClip.id,
+        playback_url: redactUrlForLog(completedClip.playbackUrl),
+      });
+    } catch (error) {
+      this._errorMessage =
+        error instanceof Error ? error.message : "Bridge archive playback export failed.";
+      this.logMedia("card panel archive clip playback failed", {
+        ...this.archiveRecordingLogContext(recording),
+        device_id: archiveSource?.deviceId,
         error: this._errorMessage,
       });
     } finally {
@@ -2595,7 +2708,7 @@ export class DahuaBridgeSurveillancePanelCard
       if (!completedClip.downloadUrl) {
         throw new Error("Bridge archive export completed without a download URL.");
       }
-      this.patchArchiveRecordingDownloadUrl(recording, completedClip.downloadUrl);
+      this.patchArchiveRecordingExportClip(recording, completedClip);
       this.logMedia("card panel archive export completed", {
         ...this.archiveRecordingLogContext(recording),
         clip_id: completedClip.id,
@@ -2616,9 +2729,9 @@ export class DahuaBridgeSurveillancePanelCard
     }
   }
 
-  private patchArchiveRecordingDownloadUrl(
+  private patchArchiveRecordingExportClip(
     recording: NvrArchiveRecordingModel,
-    downloadUrl: string,
+    clip: NvrArchiveExportClipModel,
   ): void {
     if (!this._archiveRecordings) {
       return;
@@ -2630,7 +2743,7 @@ export class DahuaBridgeSurveillancePanelCard
       item.endTime === recording.endTime
         ? {
             ...item,
-            downloadUrl,
+            downloadUrl: clip.downloadUrl,
           }
         : item,
     );
@@ -2649,7 +2762,7 @@ export class DahuaBridgeSurveillancePanelCard
         ...this._selectedPlayback,
         recording: {
           ...this._selectedPlayback.recording,
-          downloadUrl,
+          downloadUrl: clip.downloadUrl,
         },
       };
     }
@@ -2721,6 +2834,11 @@ export class DahuaBridgeSurveillancePanelCard
           ? this._selectedPlaybackStreamProfile
           : session.recommendedProfile;
       this._selectedPlaybackStreamSource = preservePlaybackViewportSourceSelection(
+        session,
+        this._selectedPlaybackStreamProfile,
+        this._selectedPlaybackStreamSource,
+      ) ??
+      resolveInitialPlaybackViewportSource(
         session,
         this._selectedPlaybackStreamProfile,
         this._selectedPlaybackStreamSource,
@@ -2855,6 +2973,21 @@ export class DahuaBridgeSurveillancePanelCard
     }
   }
 
+  private toggleOverviewCameraAudio(camera: CameraViewModel): void {
+    const nextMuted = !this.isOverviewCameraMuted(camera);
+    this._overviewCameraAudioMuted = {
+      ...this._overviewCameraAudioMuted,
+      [camera.deviceId]: nextMuted,
+    };
+    window.requestAnimationFrame(() => {
+      this.syncOverviewCameraViewportAudioState(camera.deviceId, nextMuted);
+    });
+    this.logMedia("card panel overview camera audio toggled", {
+      device_id: camera.deviceId,
+      muted: nextMuted,
+    });
+  }
+
   private isBusy(key: string): boolean {
     return this._actions.isBusy(key);
   }
@@ -2944,6 +3077,27 @@ export class DahuaBridgeSurveillancePanelCard
       this.renderRoot.querySelector("section.main .viewport"),
       muted,
     );
+  }
+
+  private isOverviewCameraMuted(camera: CameraViewModel): boolean {
+    return this._overviewCameraAudioMuted[camera.deviceId] ?? true;
+  }
+
+  private syncOverviewCameraViewportAudioState(
+    deviceID?: string,
+    muted?: boolean,
+  ): void {
+    const tiles = this.renderRoot.querySelectorAll<HTMLElement>("article.camera-tile[data-device-id]");
+    for (const tile of tiles) {
+      const currentDeviceID = tile.dataset.deviceId ?? "";
+      if (deviceID && currentDeviceID !== deviceID) {
+        continue;
+      }
+      syncViewportAudioState(
+        tile.querySelector(".tile-media"),
+        muted ?? (this._overviewCameraAudioMuted[currentDeviceID] ?? true),
+      );
+    }
   }
 
   private hasAvailableVtoIntercom(vto: VtoViewModel): boolean {

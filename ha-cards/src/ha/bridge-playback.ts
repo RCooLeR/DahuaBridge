@@ -52,6 +52,7 @@ export async function createPlaybackSession(
       start_time: request.startTime,
       end_time: request.endTime,
       ...(request.seekTime ? { seek_time: request.seekTime } : {}),
+      ...(request.filePath ? { file_path: request.filePath } : {}),
     }),
     signal,
   });
@@ -160,6 +161,7 @@ export function createPlaybackSessionFromRecording(
     recording.startTime,
     recording.endTime,
     recording.startTime,
+    recording.filePath,
   );
 }
 

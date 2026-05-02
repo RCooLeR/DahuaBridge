@@ -261,6 +261,9 @@ export class DahuaBridgeSurveillanceTileCard
 
   protected updated(changedProperties: Map<PropertyKey, unknown>): void {
     syncRemoteStreamStyles(this.renderRoot);
+    window.requestAnimationFrame(() => {
+      this.syncCameraViewportAudioState(this._cameraAudioMuted);
+    });
 
     if (
       this._vtoStreamPlaying &&
