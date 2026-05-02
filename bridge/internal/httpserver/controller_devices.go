@@ -2,6 +2,7 @@ package httpserver
 
 import (
 	"context"
+	"crypto/sha1"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -588,7 +589,7 @@ func (c *controller) startDirectNVRRecordingExport(
 	}
 
 	clip, err := c.media.StartDirectClip(ctx, mediaapi.DirectClipStartRequest{
-		StreamID:                      firstNonEmpty(strings.TrimSpace(entry.ID), fmt.Sprintf("nvr_export_%s_%d", deviceID, request.Channel)),
+		StreamID:                      archiveExportStreamID(deviceID, request),
 		RootDeviceID:                  firstNonEmpty(strings.TrimSpace(entry.RootDeviceID), deviceID),
 		SourceDeviceID:                firstNonEmpty(strings.TrimSpace(entry.ID), fmt.Sprintf("%s_channel_%02d", deviceID, request.Channel)),
 		DeviceKind:                    dahua.DeviceKindNVRChannel,
@@ -669,6 +670,22 @@ func (c *controller) downloadOptionalNVRRecordingIFrame(
 		return "", 0, nil
 	}
 	return tempFile.Name(), mediaapi.ArchiveIFramePrefixDuration, nil
+}
+
+func archiveExportStreamID(deviceID string, request dahua.NVRPlaybackSessionRequest) string {
+	base := firstNonEmpty(strings.TrimSpace(deviceID), "nvr")
+	identity := strings.Join([]string{
+		base,
+		fmt.Sprintf("%d", request.Channel),
+		request.StartTime.UTC().Format(time.RFC3339Nano),
+		request.EndTime.UTC().Format(time.RFC3339Nano),
+		strings.TrimSpace(request.FilePath),
+		strings.TrimSpace(request.Source),
+		strings.TrimSpace(request.Type),
+		strings.TrimSpace(request.VideoStream),
+	}, "|")
+	sum := sha1.Sum([]byte(identity))
+	return fmt.Sprintf("nvr_export_%s_%x", base, sum[:8])
 }
 
 func shouldUseOptionalNVRRecordingIFrame(request dahua.NVRPlaybackSessionRequest) bool {

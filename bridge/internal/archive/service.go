@@ -310,6 +310,13 @@ func (s *Service) EnrichRecordings(ctx context.Context, deviceID string, result 
 			}
 			continue
 		}
+		if !clipMatchesRecordingWindow(*item, clip) {
+			clearArchiveAsset(item)
+			if err := s.store.DeleteClipAsset(ctx, item.RecordKind, item.ID, deviceID); err != nil {
+				s.logger.Warn().Err(err).Str("device_id", deviceID).Str("record_id", item.ID).Str("clip_id", clip.ID).Msg("archive asset cleanup failed")
+			}
+			continue
+		}
 		applyClipArchiveAsset(item, clip)
 		if err := s.store.UpsertClipAsset(ctx, item.RecordKind, item.ID, deviceID, item.FilePath, clip); err != nil {
 			s.logger.Warn().Err(err).Str("device_id", deviceID).Str("record_id", item.ID).Str("clip_id", clip.ID).Msg("archive asset upsert failed")
@@ -344,6 +351,9 @@ func (s *Service) EnrichRecordings(ctx context.Context, deviceID string, result 
 
 	for index := range result.Items {
 		item := &result.Items[index]
+		if strings.TrimSpace(item.AssetClipID) != "" {
+			continue
+		}
 		match := matchClipForRecording(*item, clipItems)
 		if match == nil {
 			continue
@@ -510,8 +520,6 @@ func parseArchiveLocalTime(value string) (time.Time, bool) {
 }
 
 func matchClipForRecording(item dahua.NVRRecording, clips []mediaapi.ClipInfo) *mediaapi.ClipInfo {
-	itemStart, okStart := parseArchiveLocalTime(item.StartTime)
-	itemEnd, okEnd := parseArchiveLocalTime(item.EndTime)
 	bestIndex := -1
 	bestScore := -1
 	for index := range clips {
@@ -519,21 +527,7 @@ func matchClipForRecording(item dahua.NVRRecording, clips []mediaapi.ClipInfo) *
 		if item.Channel > 0 && clip.Channel > 0 && clip.Channel != item.Channel {
 			continue
 		}
-		clipStart := clip.SourceStartAt.In(time.Local)
-		if clipStart.IsZero() {
-			clipStart = clip.StartedAt.In(time.Local)
-		}
-		clipEnd := clip.SourceEndAt.In(time.Local)
-		if clipEnd.IsZero() {
-			clipEnd = clip.EndedAt.In(time.Local)
-		}
-		if clipEnd.IsZero() {
-			clipEnd = clipStart
-		}
-		if okStart && clipEnd.Before(itemStart) {
-			continue
-		}
-		if okEnd && clipStart.After(itemEnd) {
+		if !clipMatchesRecordingWindow(item, clip) {
 			continue
 		}
 		score := 0
@@ -542,12 +536,6 @@ func matchClipForRecording(item dahua.NVRRecording, clips []mediaapi.ClipInfo) *
 			score += 100
 		case mediaapi.ClipStatusRecording:
 			score += 50
-		}
-		if okStart && clipStart.Equal(itemStart) {
-			score += 20
-		}
-		if okEnd && clipEnd.Equal(itemEnd) {
-			score += 20
 		}
 		if strings.TrimSpace(item.FilePath) != "" && strings.TrimSpace(clip.FileName) != "" {
 			score += 1
@@ -561,4 +549,37 @@ func matchClipForRecording(item dahua.NVRRecording, clips []mediaapi.ClipInfo) *
 		return nil
 	}
 	return &clips[bestIndex]
+}
+
+func clipMatchesRecordingWindow(item dahua.NVRRecording, clip mediaapi.ClipInfo) bool {
+	itemStart, okStart := parseArchiveLocalTime(item.StartTime)
+	itemEnd, okEnd := parseArchiveLocalTime(item.EndTime)
+	if !okStart || !okEnd || !itemEnd.After(itemStart) {
+		return false
+	}
+
+	clipStart := clip.SourceStartAt.In(time.Local)
+	clipEnd := clip.SourceEndAt.In(time.Local)
+	if clipStart.IsZero() || clipEnd.IsZero() || !clipEnd.After(clipStart) {
+		clipStart = clip.StartedAt.In(time.Local)
+		clipEnd = clip.EndedAt.In(time.Local)
+		if clipStart.IsZero() || clipEnd.IsZero() || !clipEnd.After(clipStart) {
+			return false
+		}
+	}
+
+	const tolerance = 2 * time.Second
+	return timesApproxEqual(clipStart, itemStart, tolerance) &&
+		timesApproxEqual(clipEnd, itemEnd, tolerance)
+}
+
+func timesApproxEqual(left time.Time, right time.Time, tolerance time.Duration) bool {
+	if left.IsZero() || right.IsZero() {
+		return false
+	}
+	delta := left.Sub(right)
+	if delta < 0 {
+		delta = -delta
+	}
+	return delta <= tolerance
 }
