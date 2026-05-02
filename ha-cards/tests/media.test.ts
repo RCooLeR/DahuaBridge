@@ -110,7 +110,7 @@ function buildCamera(overrides: Partial<CameraViewModel> = {}): CameraViewModel 
     audioCodec: "",
     microphoneAvailable: false,
     speakerAvailable: false,
-    audioMuted: false,
+    audioMuted: true,
     audioMuteSupported: false,
     audioMuteActionUrl: null,
     validationNotes: [],

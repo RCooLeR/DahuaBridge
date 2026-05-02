@@ -1287,6 +1287,6 @@ describe("buildPanelModel", () => {
 
     expect(model.cameras[0]?.audioMuteSupported).toBe(true);
     expect(model.cameras[0]?.audioMuteActionUrl).toBeNull();
-    expect(model.cameras[0]?.audioMuted).toBe(false);
+    expect(model.cameras[0]?.audioMuted).toBe(true);
   });
 });

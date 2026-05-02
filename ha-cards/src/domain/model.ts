@@ -585,7 +585,7 @@ function buildCameraViewModel(
     audioCodec: camera.media.audioCodec,
     microphoneAvailable: camera.media.audioCodec.trim().length > 0,
     speakerAvailable: camera.capabilities.audio.playback.supported,
-    audioMuted: false,
+    audioMuted: true,
     audioMuteSupported: camera.media.audioCodec.trim().length > 0,
     audioMuteActionUrl: null,
     validationNotes: [...camera.capabilities.validationNotes],

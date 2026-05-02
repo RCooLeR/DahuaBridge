@@ -690,7 +690,9 @@ class DahuaBridgeRemoteStreamElement extends LitElement {
       return;
     }
     video.dataset.audioMuted = muted ? "true" : "false";
+    video.defaultMuted = muted;
     video.muted = muted;
+    video.toggleAttribute("muted", muted);
     if (playImmediately) {
       void video.play().catch(() => undefined);
     }
