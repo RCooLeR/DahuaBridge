@@ -23,6 +23,10 @@ type archiveClipTracker interface {
 	TrackNVRArchiveClip(context.Context, string, dahua.NVRPlaybackSessionRequest, mediaapi.ClipInfo) error
 }
 
+type nvrArchiveIFrameDownloader interface {
+	NVRDownloadRecordingIFrame(context.Context, string, dahua.NVRRecordingClipRequest) (dahua.NVRRecordingDownload, error)
+}
+
 func (c *controller) registerDeviceRoutes(router chi.Router) {
 	router.Get("/api/v1/devices", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, c.probes.List())
@@ -538,10 +542,15 @@ func (c *controller) startDirectNVRRecordingExport(
 	}
 	tempPath := tempFile.Name()
 	cleanupTemp := true
+	cleanupPaths := []string{tempPath}
 	defer func() {
 		_ = tempFile.Close()
 		if cleanupTemp {
-			_ = os.Remove(tempPath)
+			for _, cleanupPath := range cleanupPaths {
+				if strings.TrimSpace(cleanupPath) != "" {
+					_ = os.Remove(cleanupPath)
+				}
+			}
 		}
 	}()
 
@@ -553,22 +562,52 @@ func (c *controller) startDirectNVRRecordingExport(
 	}
 
 	entry, streamProfile := c.lookupNVRStreamProfile(deviceID, request.Channel, profileName)
+	sourceStartAt := request.StartTime
+	sourceEndAt := request.EndTime
+	inputSeekOffset := time.Duration(0)
+	if fileStart, fileEnd, ok := dahua.ParseRecordingFileTimeRange(request.FilePath, time.Local); ok {
+		if request.StartTime.After(fileStart) {
+			inputSeekOffset = request.StartTime.Sub(fileStart)
+		}
+		if !fileEnd.IsZero() && sourceEndAt.After(fileEnd) {
+			sourceEndAt = fileEnd
+		}
+	}
+	if sourceEndAt.After(sourceStartAt) {
+		if clippedDuration := sourceEndAt.Sub(sourceStartAt); clippedDuration > 0 && (duration <= 0 || clippedDuration < duration) {
+			duration = clippedDuration
+		}
+	}
+
+	prefixSourceURL, prefixDuration, err := c.downloadOptionalNVRRecordingIFrame(ctx, deviceID, request, tempDir)
+	if err != nil {
+		return mediaapi.ClipInfo{}, err
+	}
+	if strings.TrimSpace(prefixSourceURL) != "" {
+		cleanupPaths = append(cleanupPaths, prefixSourceURL)
+	}
+
 	clip, err := c.media.StartDirectClip(ctx, mediaapi.DirectClipStartRequest{
-		StreamID:                     firstNonEmpty(strings.TrimSpace(entry.ID), fmt.Sprintf("nvr_export_%s_%d", deviceID, request.Channel)),
-		RootDeviceID:                 firstNonEmpty(strings.TrimSpace(entry.RootDeviceID), deviceID),
-		SourceDeviceID:               firstNonEmpty(strings.TrimSpace(entry.ID), fmt.Sprintf("%s_channel_%02d", deviceID, request.Channel)),
-		DeviceKind:                   dahua.DeviceKindNVRChannel,
-		Name:                         firstNonEmpty(strings.TrimSpace(entry.Name), fmt.Sprintf("Channel %d", request.Channel)),
-		Channel:                      request.Channel,
-		ProfileName:                  profileName,
-		Duration:                     duration,
-		SourceURL:                    tempPath,
-		VideoCodec:                   streamProfile.VideoCodec,
-		AudioCodec:                   streamProfile.AudioCodec,
-		SourceWidth:                  streamProfile.SourceWidth,
-		SourceHeight:                 streamProfile.SourceHeight,
-		Recommended:                  streamProfile.Recommended,
-		TemporarySourcePathToCleanup: tempPath,
+		StreamID:                      firstNonEmpty(strings.TrimSpace(entry.ID), fmt.Sprintf("nvr_export_%s_%d", deviceID, request.Channel)),
+		RootDeviceID:                  firstNonEmpty(strings.TrimSpace(entry.RootDeviceID), deviceID),
+		SourceDeviceID:                firstNonEmpty(strings.TrimSpace(entry.ID), fmt.Sprintf("%s_channel_%02d", deviceID, request.Channel)),
+		DeviceKind:                    dahua.DeviceKindNVRChannel,
+		Name:                          firstNonEmpty(strings.TrimSpace(entry.Name), fmt.Sprintf("Channel %d", request.Channel)),
+		Channel:                       request.Channel,
+		ProfileName:                   profileName,
+		Duration:                      duration,
+		SourceURL:                     tempPath,
+		VideoCodec:                    streamProfile.VideoCodec,
+		AudioCodec:                    streamProfile.AudioCodec,
+		SourceWidth:                   streamProfile.SourceWidth,
+		SourceHeight:                  streamProfile.SourceHeight,
+		Recommended:                   streamProfile.Recommended,
+		SourceStartAt:                 sourceStartAt,
+		SourceEndAt:                   sourceEndAt,
+		InputSeekOffset:               inputSeekOffset,
+		PrefixSourceURL:               prefixSourceURL,
+		PrefixDuration:                prefixDuration,
+		TemporarySourcePathsToCleanup: cleanupPaths,
 	})
 	if err != nil {
 		return mediaapi.ClipInfo{}, err
@@ -580,6 +619,65 @@ func (c *controller) startDirectNVRRecordingExport(
 	}
 	cleanupTemp = false
 	return clip, nil
+}
+
+func (c *controller) downloadOptionalNVRRecordingIFrame(
+	ctx context.Context,
+	deviceID string,
+	request dahua.NVRPlaybackSessionRequest,
+	tempDir string,
+) (string, time.Duration, error) {
+	if !shouldUseOptionalNVRRecordingIFrame(request) {
+		return "", 0, nil
+	}
+
+	iframeDownloader, ok := c.snapshots.(nvrArchiveIFrameDownloader)
+	if !ok {
+		return "", 0, nil
+	}
+
+	download, err := iframeDownloader.NVRDownloadRecordingIFrame(ctx, deviceID, dahua.NVRRecordingClipRequest{
+		Channel:     request.Channel,
+		StartTime:   request.StartTime,
+		EndTime:     request.EndTime,
+		Source:      request.Source,
+		Type:        request.Type,
+		VideoStream: request.VideoStream,
+	})
+	if err != nil {
+		return "", 0, nil
+	}
+	defer download.Body.Close()
+
+	tempFile, err := os.CreateTemp(tempDir, "dahuabridge-iframe-*.dav")
+	if err != nil {
+		return "", 0, fmt.Errorf("create temporary iframe file: %w", err)
+	}
+	defer tempFile.Close()
+
+	written, err := io.Copy(tempFile, download.Body)
+	if err != nil {
+		_ = os.Remove(tempFile.Name())
+		return "", 0, fmt.Errorf("copy iframe recording to temporary file: %w", err)
+	}
+	if err := tempFile.Close(); err != nil {
+		_ = os.Remove(tempFile.Name())
+		return "", 0, fmt.Errorf("close temporary iframe file: %w", err)
+	}
+	if written <= 0 {
+		_ = os.Remove(tempFile.Name())
+		return "", 0, nil
+	}
+	return tempFile.Name(), mediaapi.ArchiveIFramePrefixDuration, nil
+}
+
+func shouldUseOptionalNVRRecordingIFrame(request dahua.NVRPlaybackSessionRequest) bool {
+	if request.Channel <= 0 || request.StartTime.IsZero() || request.EndTime.IsZero() || !request.EndTime.After(request.StartTime) {
+		return false
+	}
+	source := strings.ToLower(strings.TrimSpace(request.Source))
+	recordingType := strings.ToLower(strings.TrimSpace(request.Type))
+	return source == "nvr_event" || recordingType == "event" || strings.HasPrefix(recordingType, "event.")
 }
 
 func (c *controller) lookupNVRStreamProfile(deviceID string, channel int, profileName string) (streams.Entry, streams.Profile) {

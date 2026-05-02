@@ -351,6 +351,12 @@ func archiveFileRowFromRecording(deviceID string, item dahua.NVRRecording, seenA
 	filePath := strings.TrimSpace(item.FilePath)
 	startTime := strings.TrimSpace(item.StartTime)
 	endTime := strings.TrimSpace(item.EndTime)
+	if shouldTreatAsEvent(item) && filePath != "" {
+		if fileStart, fileEnd, ok := dahua.ParseRecordingFileTimeRange(filePath, time.Local); ok {
+			startTime = fileStart.In(time.Local).Format(archiveTimeLayout)
+			endTime = fileEnd.In(time.Local).Format(archiveTimeLayout)
+		}
+	}
 	if strings.TrimSpace(deviceID) == "" || item.Channel <= 0 || filePath == "" || startTime == "" || endTime == "" {
 		return archiveFileRow{}, false
 	}

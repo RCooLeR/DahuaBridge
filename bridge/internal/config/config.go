@@ -182,6 +182,8 @@ type DeviceConfig struct {
 	BaseURL                    string                            `yaml:"base_url"`
 	Username                   string                            `yaml:"username"`
 	Password                   string                            `yaml:"password"`
+	RPCUsername                string                            `yaml:"rpc_username"`
+	RPCPassword                string                            `yaml:"rpc_password"`
 	OnvifEnabled               *bool                             `yaml:"onvif_enabled"`
 	OnvifUsername              string                            `yaml:"onvif_username"`
 	OnvifPassword              string                            `yaml:"onvif_password"`
@@ -800,6 +802,20 @@ func (d DeviceConfig) ONVIFEnabledValue() bool {
 		return *d.OnvifEnabled
 	}
 	return d.OnvifUsername != "" || d.OnvifPassword != "" || d.OnvifServiceURL != ""
+}
+
+func (d DeviceConfig) RPCUsernameValue() string {
+	if strings.TrimSpace(d.RPCUsername) != "" {
+		return d.RPCUsername
+	}
+	return d.Username
+}
+
+func (d DeviceConfig) RPCPasswordValue() string {
+	if strings.TrimSpace(d.RPCPassword) != "" {
+		return d.RPCPassword
+	}
+	return d.Password
 }
 
 func (d DeviceConfig) ONVIFUsernameValue() string {

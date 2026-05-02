@@ -333,12 +333,30 @@ func buildPlaybackProfiles(cfg config.Config, deviceCfg config.DeviceConfig, ses
 		includeCredentials,
 	)
 	useWallclock := true
+	fileSeekOffset := time.Duration(0)
+	filePlaybackDuration := time.Duration(0)
 	if strings.TrimSpace(session.FilePath) != "" {
 		filePlaybackURL := buildPlaybackRecordingDownloadURL(
 			deviceCfg,
 			session.FilePath,
 			includeCredentials,
 		)
+		if fileStart, fileEnd, ok := dahua.ParseRecordingFileTimeRange(session.FilePath, time.Local); ok {
+			trimStart := session.SeekTime
+			if trimStart.IsZero() || trimStart.Before(fileStart) {
+				trimStart = fileStart
+			}
+			if trimStart.Before(fileStart) {
+				trimStart = fileStart
+			}
+			if trimStart.Before(fileEnd) {
+				fileSeekOffset = trimStart.Sub(fileStart)
+				filePlaybackDuration = session.EndTime.Sub(trimStart)
+				if remaining := fileEnd.Sub(trimStart); remaining > 0 && (filePlaybackDuration <= 0 || filePlaybackDuration > remaining) {
+					filePlaybackDuration = remaining
+				}
+			}
+		}
 		mainPlaybackURL = filePlaybackURL
 		stablePlaybackURL = filePlaybackURL
 		substreamPlaybackURL = filePlaybackURL
@@ -359,6 +377,8 @@ func buildPlaybackProfiles(cfg config.Config, deviceCfg config.DeviceConfig, ses
 			SourceWidth:              mainWidth,
 			SourceHeight:             mainHeight,
 			UseWallclockAsTimestamps: useWallclock,
+			InputSeekOffset:          int64(fileSeekOffset),
+			InputDuration:            int64(filePlaybackDuration),
 			Recommended:              recommended == "default",
 		},
 		"quality": {
@@ -375,6 +395,8 @@ func buildPlaybackProfiles(cfg config.Config, deviceCfg config.DeviceConfig, ses
 			SourceWidth:              mainWidth,
 			SourceHeight:             mainHeight,
 			UseWallclockAsTimestamps: useWallclock,
+			InputSeekOffset:          int64(fileSeekOffset),
+			InputDuration:            int64(filePlaybackDuration),
 			Recommended:              recommended == "quality",
 		},
 		"stable": {
@@ -392,6 +414,8 @@ func buildPlaybackProfiles(cfg config.Config, deviceCfg config.DeviceConfig, ses
 			SourceWidth:              stableWidth,
 			SourceHeight:             stableHeight,
 			UseWallclockAsTimestamps: useWallclock,
+			InputSeekOffset:          int64(fileSeekOffset),
+			InputDuration:            int64(filePlaybackDuration),
 			Recommended:              recommended == "stable",
 		},
 		"substream": {
@@ -409,6 +433,8 @@ func buildPlaybackProfiles(cfg config.Config, deviceCfg config.DeviceConfig, ses
 			SourceWidth:              substreamWidth,
 			SourceHeight:             substreamHeight,
 			UseWallclockAsTimestamps: useWallclock,
+			InputSeekOffset:          int64(fileSeekOffset),
+			InputDuration:            int64(filePlaybackDuration),
 			Recommended:              recommended == "substream",
 		},
 	}

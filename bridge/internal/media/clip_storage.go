@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"RCooLeR/DahuaBridge/internal/streams"
 )
 
 func (m *Manager) removeClipJob(id string, job *clipJob) {
@@ -113,6 +115,26 @@ func clipSourceWindow(streamURL string, duration time.Duration) (time.Time, time
 		}
 	}
 	return startTime.UTC(), endTime.UTC()
+}
+
+func clipSourceWindowForProfile(profile streams.Profile, duration time.Duration) (time.Time, time.Time) {
+	startTime, endTime := clipSourceWindow(profile.StreamURL, duration)
+	if startTime.IsZero() {
+		return time.Time{}, time.Time{}
+	}
+	if seekOffset := time.Duration(profile.InputSeekOffset); seekOffset > 0 {
+		startTime = startTime.Add(seekOffset)
+		if !endTime.IsZero() && endTime.Before(startTime) {
+			endTime = startTime
+		}
+		if duration > 0 {
+			durationEnd := startTime.Add(duration)
+			if endTime.IsZero() || durationEnd.Before(endTime) {
+				endTime = durationEnd
+			}
+		}
+	}
+	return startTime, endTime
 }
 
 func clipFilePath(clipPath string, fileName string) (string, error) {

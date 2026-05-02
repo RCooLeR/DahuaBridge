@@ -264,8 +264,8 @@ func (w *worker) buildFFmpegArgs(attempt ffmpegStartAttempt) []string {
 		"-loglevel", ffmpegLogLevel(w.parent.cfg),
 	}
 	args = appendInputHWAccelArgs(args, w.parent.cfg, attempt.useHWAccel)
-	args = append(args, buildRTSPInputArgs(w.profile, attempt.inputPreset)...)
-	if playbackDuration, ok := playbackDurationFromStreamURL(w.profile.StreamURL); ok {
+	args = append(args, buildInputArgsWithWallclock(w.profile, attempt.inputPreset, w.profile.UseWallclockAsTimestamps)...)
+	if playbackDuration, ok := playbackDurationFromProfile(w.profile); ok {
 		args = append(args, "-t", formatFFmpegSeconds(playbackDuration))
 	}
 	args = append(args, "-an")

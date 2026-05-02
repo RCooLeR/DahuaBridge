@@ -311,6 +311,20 @@ func (r *runtimeServices) NVRDownloadRecordingClip(ctx context.Context, deviceID
 	return downloader.DownloadRecordingClip(ctx, request)
 }
 
+func (r *runtimeServices) NVRDownloadRecordingIFrame(ctx context.Context, deviceID string, request dahua.NVRRecordingClipRequest) (dahua.NVRRecordingDownload, error) {
+	r.mu.RLock()
+	provider, ok := r.nvrSnapshots[deviceID]
+	r.mu.RUnlock()
+	if !ok {
+		return dahua.NVRRecordingDownload{}, fmt.Errorf("%w: %s", dahua.ErrDeviceNotFound, deviceID)
+	}
+	downloader, ok := provider.(dahua.NVRRecordingIFrameDownloader)
+	if !ok {
+		return dahua.NVRRecordingDownload{}, fmt.Errorf("%w: iframe download", dahua.ErrUnsupportedOperation)
+	}
+	return downloader.DownloadRecordingIFrame(ctx, request)
+}
+
 func (r *runtimeServices) TrackNVRArchiveClip(ctx context.Context, deviceID string, request dahua.NVRPlaybackSessionRequest, clip media.ClipInfo) error {
 	r.mu.RLock()
 	archiveReader := r.archive

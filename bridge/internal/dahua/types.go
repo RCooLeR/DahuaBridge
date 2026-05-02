@@ -202,6 +202,10 @@ type NVRRecordingClipDownloader interface {
 	DownloadRecordingClip(context.Context, NVRRecordingClipRequest) (NVRRecordingDownload, error)
 }
 
+type NVRRecordingIFrameDownloader interface {
+	DownloadRecordingIFrame(context.Context, NVRRecordingClipRequest) (NVRRecordingDownload, error)
+}
+
 type NVRPlaybackSessionRequest struct {
 	Channel     int
 	StartTime   time.Time

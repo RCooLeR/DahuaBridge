@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime"
 	"net"
 	"net/url"
 	"path"
@@ -1111,6 +1112,13 @@ func (d *Driver) DownloadRecording(ctx context.Context, filePath string) (dahua.
 }
 
 func (d *Driver) DownloadRecordingClip(ctx context.Context, request dahua.NVRRecordingClipRequest) (dahua.NVRRecordingDownload, error) {
+	if strings.TrimSpace(request.FilePath) != "" &&
+		!request.StartTime.IsZero() &&
+		!request.EndTime.IsZero() &&
+		request.EndTime.After(request.StartTime) {
+		return d.DownloadRecording(ctx, request.FilePath)
+	}
+
 	if shouldUseInlineEventClip(request) {
 		download, err := d.downloadInlineEventClip(ctx, request)
 		if err == nil {
@@ -1124,7 +1132,14 @@ func (d *Driver) DownloadRecordingClip(ctx context.Context, request dahua.NVRRec
 			Msg("inline event clip download failed, falling back to file path")
 	}
 
-	return d.DownloadRecording(ctx, request.FilePath)
+	return dahua.NVRRecordingDownload{}, fmt.Errorf("recording file path is required for direct clip download")
+}
+
+func (d *Driver) DownloadRecordingIFrame(ctx context.Context, request dahua.NVRRecordingClipRequest) (dahua.NVRRecordingDownload, error) {
+	if !shouldUseInlineEventClip(request) {
+		return dahua.NVRRecordingDownload{}, fmt.Errorf("iframe download requires event-backed archive metadata")
+	}
+	return d.downloadInlineEventClip(ctx, request)
 }
 
 func shouldUseInlineEventClip(request dahua.NVRRecordingClipRequest) bool {
@@ -1249,23 +1264,211 @@ func decodeInlineLoadFileBody(body []byte, fallbackContentType string) ([]byte, 
 		return decoded, "", nil
 	}
 
-	var payload any
-	if err := json.Unmarshal(trimmed, &payload); err == nil {
+	payload, payloadEnd, hasJSONPrefix := decodeLeadingJSONObject(trimmed)
+	if hasJSONPrefix {
 		if rpcErr := extractInlineLoadFileError(payload); rpcErr != nil {
 			return nil, "", rpcErr
 		}
 		encoded, contentType, ok := extractInlineLoadFilePayload(payload)
-		if !ok {
-			return nil, "", fmt.Errorf("inline recording response did not contain file payload")
+		if ok {
+			decoded, ok := tryDecodeBase64Payload([]byte(encoded))
+			if !ok {
+				return nil, "", fmt.Errorf("inline recording response payload is not valid base64")
+			}
+			return decoded, firstNonEmpty(strings.TrimSpace(contentType), fallbackContentType), nil
 		}
-		decoded, ok := tryDecodeBase64Payload([]byte(encoded))
-		if !ok {
-			return nil, "", fmt.Errorf("inline recording response payload is not valid base64")
-		}
-		return decoded, firstNonEmpty(strings.TrimSpace(contentType), fallbackContentType), nil
 	}
 
+	if decoded, contentType, ok, err := decodeInlineLoadFileMultipartBody(
+		inlineLoadFileMultipartSection(trimmed, payloadEnd, hasJSONPrefix),
+		fallbackContentType,
+	); ok {
+		return decoded, contentType, err
+	}
+
+	if hasJSONPrefix {
+		return nil, "", fmt.Errorf("inline recording response did not contain file payload")
+	}
 	return body, fallbackContentType, nil
+}
+
+func decodeLeadingJSONObject(body []byte) (any, int, bool) {
+	decoder := json.NewDecoder(bytes.NewReader(body))
+	var payload any
+	if err := decoder.Decode(&payload); err != nil {
+		return nil, 0, false
+	}
+	return payload, int(decoder.InputOffset()), true
+}
+
+func inlineLoadFileMultipartSection(body []byte, jsonPrefixEnd int, hasJSONPrefix bool) []byte {
+	if !hasJSONPrefix {
+		return body
+	}
+	if jsonPrefixEnd < 0 || jsonPrefixEnd >= len(body) {
+		return nil
+	}
+	return bytes.TrimSpace(body[jsonPrefixEnd:])
+}
+
+func decodeInlineLoadFileMultipartBody(body []byte, fallbackContentType string) ([]byte, string, bool, error) {
+	boundary, section, ok := detectInlineLoadFileBoundary(body, fallbackContentType)
+	if !ok {
+		return nil, "", false, nil
+	}
+
+	for _, part := range splitInlineLoadFileMultipartParts(section, boundary) {
+		partContentType, partBody := parseInlineLoadFilePart(part)
+		trimmed := bytes.TrimSpace(partBody)
+		if len(trimmed) == 0 {
+			continue
+		}
+		if decoded, contentType, ok, err := decodeInlineLoadFilePart(trimmed, partContentType, fallbackContentType); ok {
+			return decoded, contentType, true, err
+		}
+	}
+
+	return nil, "", true, fmt.Errorf("inline recording multipart body did not contain file payload")
+}
+
+func detectInlineLoadFileBoundary(body []byte, fallbackContentType string) (string, []byte, bool) {
+	trimmed := bytes.TrimSpace(body)
+	if len(trimmed) == 0 {
+		return "", nil, false
+	}
+
+	if mediaType, params, err := mime.ParseMediaType(strings.TrimSpace(fallbackContentType)); err == nil {
+		if strings.HasPrefix(strings.ToLower(strings.TrimSpace(mediaType)), "multipart/") {
+			if boundary := strings.TrimSpace(params["boundary"]); boundary != "" {
+				if marker := []byte("--" + boundary); bytes.Contains(trimmed, marker) {
+					if index := bytes.Index(trimmed, marker); index >= 0 {
+						return boundary, trimmed[index:], true
+					}
+				}
+			}
+		}
+	}
+
+	lineStart := 0
+	for lineStart < len(trimmed) {
+		lineEnd := bytes.IndexByte(trimmed[lineStart:], '\n')
+		nextStart := len(trimmed)
+		if lineEnd >= 0 {
+			lineEnd += lineStart
+			nextStart = lineEnd + 1
+		} else {
+			lineEnd = len(trimmed)
+		}
+		line := strings.TrimSpace(strings.TrimRight(string(trimmed[lineStart:lineEnd]), "\r"))
+		if strings.HasPrefix(line, "--") && len(strings.TrimSpace(strings.TrimSuffix(line[2:], "--"))) > 0 {
+			return strings.TrimSpace(strings.TrimSuffix(line[2:], "--")), trimmed[lineStart:], true
+		}
+		lineStart = nextStart
+	}
+
+	return "", nil, false
+}
+
+func decodeInlineLoadFilePart(body []byte, partContentType string, fallbackContentType string) ([]byte, string, bool, error) {
+	if decoded, ok := tryDecodeBase64Payload(body); ok {
+		return decoded, firstNonEmpty(strings.TrimSpace(partContentType), fallbackContentType), true, nil
+	}
+
+	payload, payloadEnd, hasJSONPrefix := decodeLeadingJSONObject(body)
+	if hasJSONPrefix {
+		if rpcErr := extractInlineLoadFileError(payload); rpcErr != nil {
+			return nil, "", true, rpcErr
+		}
+		if encoded, contentType, ok := extractInlineLoadFilePayload(payload); ok {
+			decoded, ok := tryDecodeBase64Payload([]byte(encoded))
+			if !ok {
+				return nil, "", true, fmt.Errorf("inline recording response payload is not valid base64")
+			}
+			return decoded, firstNonEmpty(strings.TrimSpace(contentType), strings.TrimSpace(partContentType), fallbackContentType), true, nil
+		}
+		if trailing := bytes.TrimSpace(body[payloadEnd:]); len(trailing) > 0 {
+			if decoded, ok := tryDecodeBase64Payload(trailing); ok {
+				return decoded, firstNonEmpty(strings.TrimSpace(partContentType), fallbackContentType), true, nil
+			}
+		}
+	}
+
+	if payloadStart := indexAfterHTTPHeaders(body); payloadStart >= 0 {
+		if decoded, ok := tryDecodeBase64Payload(bytes.TrimSpace(body[payloadStart:])); ok {
+			return decoded, firstNonEmpty(strings.TrimSpace(partContentType), fallbackContentType), true, nil
+		}
+	}
+
+	return nil, "", false, nil
+}
+
+func splitInlineLoadFileMultipartParts(section []byte, boundary string) [][]byte {
+	marker := []byte("--" + boundary)
+	parts := make([][]byte, 0, 2)
+	cursor := 0
+	for {
+		start := bytes.Index(section[cursor:], marker)
+		if start < 0 {
+			break
+		}
+		start += cursor + len(marker)
+		if start+2 <= len(section) && bytes.Equal(section[start:start+2], []byte("--")) {
+			break
+		}
+
+		partStart := start
+		for partStart < len(section) && (section[partStart] == '\r' || section[partStart] == '\n') {
+			partStart++
+		}
+
+		partEnd := len(section)
+		if index := bytes.Index(section[partStart:], marker); index >= 0 {
+			partEnd = partStart + index
+		}
+
+		if part := bytes.TrimSpace(section[partStart:partEnd]); len(part) > 0 {
+			parts = append(parts, part)
+		}
+		if partEnd >= len(section) {
+			break
+		}
+		cursor = partEnd
+	}
+	return parts
+}
+
+func parseInlineLoadFilePart(part []byte) (string, []byte) {
+	if index := bytes.Index(part, []byte("\r\n\r\n")); index >= 0 {
+		return contentTypeFromHeaderBlock(part[:index]), part[index+4:]
+	}
+	if index := bytes.Index(part, []byte("\n\n")); index >= 0 {
+		return contentTypeFromHeaderBlock(part[:index]), part[index+2:]
+	}
+	return "", part
+}
+
+func contentTypeFromHeaderBlock(headerBlock []byte) string {
+	lines := strings.Split(strings.ReplaceAll(string(headerBlock), "\r\n", "\n"), "\n")
+	for _, line := range lines {
+		key, value, ok := strings.Cut(line, ":")
+		if !ok {
+			continue
+		}
+		if strings.EqualFold(strings.TrimSpace(key), "Content-Type") {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
+}
+
+func indexAfterHTTPHeaders(body []byte) int {
+	if index := bytes.Index(body, []byte("\r\n\r\n")); index >= 0 {
+		return index + 4
+	}
+	if index := bytes.Index(body, []byte("\n\n")); index >= 0 {
+		return index + 2
+	}
+	return -1
 }
 
 func extractInlineLoadFileError(payload any) error {
