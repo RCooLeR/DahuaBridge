@@ -10,9 +10,9 @@ import {
   renderSelectedVtoViewport,
   resolveOverviewCameraViewportSource,
   resolveStreamViewportSource,
+  syncViewportAudioState,
 } from "./surveillance-panel-media";
 import { renderIconButton } from "./surveillance-panel-primitives";
-import type { RemoteStreamAudioHost } from "./surveillance-remote-stream";
 import {
   buildPanelModel,
   displayCameraLabel,
@@ -460,7 +460,12 @@ export class DahuaBridgeSurveillanceTileCard
 
   private renderVtoTile(vto: VtoViewModel): TemplateResult {
     const selectedProfileKey = defaultSelectedStreamProfileKey(vto.stream);
-    const selectedSource = resolveStreamViewportSource(vto.stream, null, selectedProfileKey);
+    const selectedSource = resolveStreamViewportSource(
+      vto.stream,
+      null,
+      selectedProfileKey,
+      Boolean(vto.cameraEntity),
+    );
     const title = this._config?.title ?? vto.label;
     const showCallActions = vto.callState === "ringing" || vto.callState === "active";
 
@@ -710,32 +715,21 @@ export class DahuaBridgeSurveillanceTileCard
   private hasPlayableVtoStream(vto: VtoViewModel): boolean {
     return (
       vto.streamAvailable &&
-      vto.stream.profiles.some(
-        (profile) =>
-          Boolean(profile.localHlsUrl) ||
-          Boolean(profile.localMjpegUrl),
-      )
+      (Boolean(vto.cameraEntity) ||
+        vto.stream.profiles.some(
+          (profile) =>
+            Boolean(profile.localDashUrl) ||
+            Boolean(profile.localHlsUrl) ||
+            Boolean(profile.localMjpegUrl),
+        ))
     );
   }
 
   private syncCameraViewportAudioState(muted: boolean): void {
-    const remoteStream = this.renderRoot.querySelector<RemoteStreamAudioHost>(
-      ".tile-media dahuabridge-remote-stream",
+    syncViewportAudioState(
+      this.renderRoot.querySelector(".tile-media"),
+      muted,
     );
-    if (remoteStream) {
-      remoteStream.syncAudioState(muted);
-      return;
-    }
-
-    const video = this.renderRoot.querySelector<HTMLVideoElement>(
-      "video#remote-stream.remote-stream, video#remote-stream, video.remote-stream",
-    );
-    if (!video) {
-      return;
-    }
-    video.dataset.audioMuted = muted ? "true" : "false";
-    video.muted = muted;
-    void video.play().catch(() => undefined);
   }
 
   private hasAvailableVtoIntercom(vto: VtoViewModel): boolean {

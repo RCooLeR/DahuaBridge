@@ -12,6 +12,7 @@ import { rewriteBridgeUrl } from "./bridge-url";
 
 const playbackProfileSchema = z.object({
   name: z.string().min(1),
+  dash_url: z.string().optional().nullable(),
   hls_url: z.string().optional().nullable(),
   mjpeg_url: z.string().optional().nullable(),
   webrtc_offer_url: z.string().optional().nullable(),
@@ -79,6 +80,7 @@ export async function createPlaybackSession(
         key,
         {
           name: profile.name,
+          dashUrl: rewriteBridgeUrl(profile.dash_url ?? null, browserBridgeUrl),
           hlsUrl: rewriteBridgeUrl(profile.hls_url ?? null, browserBridgeUrl),
           mjpegUrl: rewriteBridgeUrl(profile.mjpeg_url ?? null, browserBridgeUrl),
           webrtcOfferUrl: rewriteBridgeUrl(profile.webrtc_offer_url ?? null, browserBridgeUrl),
@@ -131,6 +133,7 @@ export async function seekPlaybackSession(
         key,
         {
           name: profile.name,
+          dashUrl: rewriteBridgeUrl(profile.dash_url ?? null, browserBridgeUrl),
           hlsUrl: rewriteBridgeUrl(profile.hls_url ?? null, browserBridgeUrl),
           mjpegUrl: rewriteBridgeUrl(profile.mjpeg_url ?? null, browserBridgeUrl),
           webrtcOfferUrl: rewriteBridgeUrl(profile.webrtc_offer_url ?? null, browserBridgeUrl),
@@ -173,5 +176,5 @@ export function resolvePlaybackLaunchUrl(session: NvrPlaybackSessionModel): stri
     return null;
   }
 
-  return preferredProfile.hlsUrl ?? preferredProfile.mjpegUrl ?? null;
+  return preferredProfile.dashUrl ?? preferredProfile.hlsUrl ?? preferredProfile.mjpegUrl ?? null;
 }

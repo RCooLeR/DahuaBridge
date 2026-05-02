@@ -188,6 +188,7 @@ type NVRPlaybackSessionRequest struct {
 
 type NVRPlaybackProfile struct {
 	Name           string `json:"name"`
+	DASHURL        string `json:"dash_url,omitempty"`
 	HLSURL         string `json:"hls_url,omitempty"`
 	MJPEGURL       string `json:"mjpeg_url,omitempty"`
 	WebRTCOfferURL string `json:"webrtc_offer_url,omitempty"`

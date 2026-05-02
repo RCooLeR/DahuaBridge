@@ -152,20 +152,20 @@ func TestReadMJPEGTreatsIncompleteFrameEOFAsUnexpected(t *testing.T) {
 }
 
 func TestBuildFilterChain(t *testing.T) {
-	filters := buildFilterChain(5, 960, 640, 480)
+	filters := buildFilterChain(5, 960, 1920, 1080)
 	if len(filters) != 2 {
 		t.Fatalf("expected 2 filters, got %d", len(filters))
 	}
 	if filters[0] != "fps=5" {
 		t.Fatalf("unexpected fps filter %q", filters[0])
 	}
-	if filters[1] != "scale=960:720" {
+	if filters[1] != "scale=960:540" {
 		t.Fatalf("unexpected scale filter %q", filters[1])
 	}
 }
 
 func TestBuildQSVFilterChain(t *testing.T) {
-	filters := buildQSVFilterChain(5, 960, 640, 480)
+	filters := buildQSVFilterChain(5, 960, 1920, 1080)
 	if len(filters) != 1 {
 		t.Fatalf("expected 1 qsv filter, got %d", len(filters))
 	}
@@ -175,7 +175,7 @@ func TestBuildQSVFilterChain(t *testing.T) {
 	if !strings.Contains(filters[0], "framerate=5") {
 		t.Fatalf("unexpected qsv framerate filter %q", filters[0])
 	}
-	if !strings.Contains(filters[0], "w=960") || !strings.Contains(filters[0], "h=720") {
+	if !strings.Contains(filters[0], "w=960") || !strings.Contains(filters[0], "h=540") {
 		t.Fatalf("unexpected qsv scale filter %q", filters[0])
 	}
 	if !strings.Contains(filters[0], "format=nv12") {
@@ -183,13 +183,49 @@ func TestBuildQSVFilterChain(t *testing.T) {
 	}
 }
 
-func TestComputeScaledDimensions(t *testing.T) {
-	width, height, ok := computeScaledDimensions(640, 480, 961)
+func TestComputeScaledDimensionsDownscalesToEvenWidth(t *testing.T) {
+	width, height, ok := computeScaledDimensions(1920, 1080, 961)
 	if !ok {
 		t.Fatal("expected scaled dimensions")
 	}
-	if width != 960 || height != 720 {
+	if width != 960 || height != 540 {
 		t.Fatalf("unexpected scaled dimensions %dx%d", width, height)
+	}
+}
+
+func TestComputeScaledDimensionsDoesNotUpscaleSmallerSources(t *testing.T) {
+	if width, height, ok := computeScaledDimensions(768, 432, 960); ok || width != 0 || height != 0 {
+		t.Fatalf("expected no upscale, got %dx%d ok=%v", width, height, ok)
+	}
+}
+
+func TestBuildFilterChainSkipsScaleForSmallerSources(t *testing.T) {
+	filters := buildFilterChain(5, 960, 768, 432)
+	if len(filters) != 1 {
+		t.Fatalf("expected only fps filter, got %v", filters)
+	}
+	if filters[0] != "fps=5" {
+		t.Fatalf("unexpected fps filter %q", filters[0])
+	}
+}
+
+func TestBuildFilterChainUsesMaxWidthExpressionWhenSourceSizeUnknown(t *testing.T) {
+	filters := buildFilterChain(5, 961, 0, 0)
+	if len(filters) != 2 {
+		t.Fatalf("expected fps and scale filters, got %v", filters)
+	}
+	if filters[1] != "scale='min(960,iw)':-2" {
+		t.Fatalf("unexpected unknown-size scale filter %q", filters[1])
+	}
+}
+
+func TestBuildQSVFilterChainSkipsScaleForSmallerSources(t *testing.T) {
+	filters := buildQSVFilterChain(5, 960, 768, 432)
+	if len(filters) != 1 {
+		t.Fatalf("expected single qsv filter, got %v", filters)
+	}
+	if strings.Contains(filters[0], "w=") || strings.Contains(filters[0], "h=") {
+		t.Fatalf("expected qsv filter to skip upscale, got %q", filters[0])
 	}
 }
 
@@ -363,6 +399,140 @@ func TestListWorkersDisabled(t *testing.T) {
 	}
 }
 
+func TestListWorkersIncludesActiveClipJobs(t *testing.T) {
+	manager := New(config.MediaConfig{
+		Enabled:        true,
+		InputPreset:    "stable",
+		IdleTimeout:    time.Second,
+		MaxWorkers:     14,
+		FrameRate:      5,
+		JPEGQuality:    7,
+		Threads:        1,
+		ScaleWidth:     960,
+		FFmpegPath:     "ffmpeg",
+		HLSSegmentTime: 2 * time.Second,
+		HLSListSize:    6,
+	}, testResolver{}, zerolog.Nop(), nil)
+
+	startedAt := time.Date(2026, 5, 2, 13, 0, 0, 0, time.UTC)
+	manager.clipJobs["clip_test"] = &clipJob{
+		info: ClipInfo{
+			ID:        "clip_test",
+			StreamID:  "west20_nvr_channel_01",
+			Channel:   1,
+			Profile:   "quality",
+			Status:    ClipStatusRecording,
+			StartedAt: startedAt,
+		},
+		profile: streams.Profile{
+			Name:          "quality",
+			StreamURL:     "rtsp://example.local/stream?channel=1&subtype=0",
+			RTSPTransport: "tcp",
+			VideoCodec:    "h264",
+			AudioCodec:    "aac",
+			SourceWidth:   1920,
+			SourceHeight:  1080,
+		},
+		parent:       manager,
+		includeAudio: true,
+		done:         make(chan struct{}),
+	}
+
+	statuses := manager.ListWorkers()
+	if len(statuses) != 1 {
+		t.Fatalf("expected 1 status entry, got %d", len(statuses))
+	}
+	if statuses[0].Format != "clip" || statuses[0].Key != "clip_test" {
+		t.Fatalf("expected clip worker status, got %+v", statuses[0])
+	}
+	if statuses[0].StreamID != "west20_nvr_channel_01" || statuses[0].Profile != "quality" {
+		t.Fatalf("unexpected clip worker routing fields: %+v", statuses[0])
+	}
+	if !statuses[0].StartedAt.Equal(startedAt) {
+		t.Fatalf("unexpected clip worker start time: %+v", statuses[0])
+	}
+	if statuses[0].SourceVideoCodec != "h264" || statuses[0].SourceAudioCodec != "aac" {
+		t.Fatalf("unexpected clip worker source codecs: %+v", statuses[0])
+	}
+	if statuses[0].OutputVideoCodec != "H.264" || statuses[0].OutputAudioCodec != "AAC" {
+		t.Fatalf("unexpected clip worker output codecs: %+v", statuses[0])
+	}
+	if statuses[0].InputPreset != "stable" || statuses[0].RTSPTransport != "tcp" {
+		t.Fatalf("unexpected clip worker transport metadata: %+v", statuses[0])
+	}
+	if statuses[0].HWAccelActive {
+		t.Fatalf("expected clip worker hardware acceleration to be disabled: %+v", statuses[0])
+	}
+}
+
+func TestWorkerStatusSummaryLine(t *testing.T) {
+	tests := []struct {
+		name   string
+		status WorkerStatus
+		want   string
+	}{
+		{
+			name: "live hls substream",
+			status: WorkerStatus{
+				Format:   "hls",
+				StreamID: "west20_nvr_channel_01",
+				Channel:  1,
+				Profile:  "stable",
+			},
+			want: "Live HLS channel 1 stream substream",
+		},
+		{
+			name: "archive mjpeg main",
+			status: WorkerStatus{
+				Format:   "mjpeg",
+				StreamID: "nvrpb_test",
+				Channel:  5,
+				Profile:  "quality",
+			},
+			want: "Archive MJPEG channel 5 stream main",
+		},
+		{
+			name: "archive export",
+			status: WorkerStatus{
+				Format:   "clip",
+				StreamID: "nvrpb_clip",
+				Channel:  8,
+				Profile:  "quality",
+			},
+			want: "MP4 export channel 8 stream main",
+		},
+		{
+			name: "live hls with debug details",
+			status: WorkerStatus{
+				Format:             "hls",
+				StreamID:           "west20_nvr_channel_01",
+				Channel:            1,
+				Profile:            "stable",
+				SourceVideoCodec:   "h264",
+				SourceAudioCodec:   "aac",
+				SourceWidth:        1280,
+				SourceHeight:       720,
+				OutputVideoCodec:   "H.264",
+				OutputAudioCodec:   "AAC",
+				OutputWidth:        960,
+				OutputHeight:       540,
+				InputPreset:        "stable",
+				HWAccelActive:      true,
+				OutputVideoEncoder: "h264_qsv",
+			},
+			want: "Live HLS channel 1 stream substream [in H.264 1280x720/AAC | out H.264 960x540/AAC | stable | hw]",
+		},
+	}
+
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			if got := workerStatusSummaryLine(testCase.status); got != testCase.want {
+				t.Fatalf("workerStatusSummaryLine() = %q, want %q", got, testCase.want)
+			}
+		})
+	}
+}
+
 func TestGetOrCreateWorkerRejectsWhenLimitReached(t *testing.T) {
 	manager := New(config.MediaConfig{
 		Enabled:        true,
@@ -414,8 +584,8 @@ func TestBuildHLSArgs(t *testing.T) {
 			Name:         "stable",
 			StreamURL:    "rtsp://example.local/stream",
 			FrameRate:    5,
-			SourceWidth:  640,
-			SourceHeight: 480,
+			SourceWidth:  1920,
+			SourceHeight: 1080,
 		},
 		parent:       manager,
 		ctx:          ctx,
@@ -435,7 +605,7 @@ func TestBuildHLSArgs(t *testing.T) {
 	if !strings.Contains(joined, "-map 0:v:0") {
 		t.Fatalf("expected explicit video mapping args, got %q", joined)
 	}
-	if !strings.Contains(joined, "-vf fps=5,scale=960:720") {
+	if !strings.Contains(joined, "-vf fps=5,scale=960:540") {
 		t.Fatalf("expected software filter chain, got %q", joined)
 	}
 	if !strings.Contains(joined, "-map 0:a:0?") {
@@ -540,8 +710,8 @@ func TestBuildHLSArgsWithoutHWAccel(t *testing.T) {
 			Name:         "stable",
 			StreamURL:    "rtsp://example.local/stream",
 			FrameRate:    5,
-			SourceWidth:  640,
-			SourceHeight: 480,
+			SourceWidth:  1920,
+			SourceHeight: 1080,
 		},
 		parent:       manager,
 		ctx:          ctx,
@@ -586,8 +756,8 @@ func TestBuildHLSArgsWithQSVEncoder(t *testing.T) {
 			Name:         "stable",
 			StreamURL:    "rtsp://example.local/stream",
 			FrameRate:    5,
-			SourceWidth:  640,
-			SourceHeight: 480,
+			SourceWidth:  1920,
+			SourceHeight: 1080,
 		},
 		parent:       manager,
 		ctx:          ctx,
@@ -607,7 +777,7 @@ func TestBuildHLSArgsWithQSVEncoder(t *testing.T) {
 	if !strings.Contains(joined, "-pix_fmt nv12") {
 		t.Fatalf("expected qsv pixel format args, got %q", joined)
 	}
-	if !strings.Contains(joined, "-vf vpp_qsv=framerate=5:w=960:h=720:format=nv12") {
+	if !strings.Contains(joined, "-vf vpp_qsv=framerate=5:w=960:h=540:format=nv12") {
 		t.Fatalf("expected qsv filter chain, got %q", joined)
 	}
 	if strings.Contains(joined, "-preset veryfast") {
@@ -639,8 +809,8 @@ func TestBuildWebRTCArgs(t *testing.T) {
 			Name:         "stable",
 			StreamURL:    "rtsp://example.local/stream",
 			FrameRate:    5,
-			SourceWidth:  640,
-			SourceHeight: 480,
+			SourceWidth:  1920,
+			SourceHeight: 1080,
 		},
 		parent: manager,
 		ctx:    ctx,
@@ -661,7 +831,7 @@ func TestBuildWebRTCArgs(t *testing.T) {
 	if !strings.Contains(joined, "-c:v libx264") {
 		t.Fatalf("expected h264 transcode args, got %q", joined)
 	}
-	if !strings.Contains(joined, "-vf fps=5,scale=960:720") {
+	if !strings.Contains(joined, "-vf fps=5,scale=960:540") {
 		t.Fatalf("expected software filter chain, got %q", joined)
 	}
 	if !strings.Contains(joined, "-map 0:a:0?") || !strings.Contains(joined, "-c:a libopus") {
@@ -696,8 +866,8 @@ func TestBuildWebRTCArgsWithoutAudio(t *testing.T) {
 			Name:         "stable",
 			StreamURL:    "rtsp://example.local/stream",
 			FrameRate:    5,
-			SourceWidth:  640,
-			SourceHeight: 480,
+			SourceWidth:  1920,
+			SourceHeight: 1080,
 		},
 		parent: manager,
 		ctx:    ctx,
@@ -750,8 +920,8 @@ func TestBuildWebRTCArgsWithQSVEncoder(t *testing.T) {
 			Name:         "stable",
 			StreamURL:    "rtsp://example.local/stream",
 			FrameRate:    5,
-			SourceWidth:  640,
-			SourceHeight: 480,
+			SourceWidth:  1920,
+			SourceHeight: 1080,
 		},
 		parent: manager,
 		ctx:    ctx,
@@ -766,7 +936,7 @@ func TestBuildWebRTCArgsWithQSVEncoder(t *testing.T) {
 	if !strings.Contains(joined, "-hwaccel_output_format qsv") {
 		t.Fatalf("expected explicit qsv hwaccel output format, got %q", joined)
 	}
-	if !strings.Contains(joined, "-vf vpp_qsv=framerate=5:w=960:h=720:format=nv12") {
+	if !strings.Contains(joined, "-vf vpp_qsv=framerate=5:w=960:h=540:format=nv12") {
 		t.Fatalf("expected qsv filter chain, got %q", joined)
 	}
 	if strings.Contains(joined, "-preset ultrafast") {
@@ -801,8 +971,8 @@ func TestBuildMJPEGArgsWithQSVEncoder(t *testing.T) {
 			Name:         "stable",
 			StreamURL:    "rtsp://example.local/stream",
 			FrameRate:    5,
-			SourceWidth:  640,
-			SourceHeight: 480,
+			SourceWidth:  1920,
+			SourceHeight: 1080,
 		},
 		scaleWidth:  manager.cfg.ScaleWidth,
 		parent:      manager,
@@ -824,7 +994,7 @@ func TestBuildMJPEGArgsWithQSVEncoder(t *testing.T) {
 	if !strings.Contains(joined, "-global_quality 70") {
 		t.Fatalf("expected mapped qsv quality args, got %q", joined)
 	}
-	if !strings.Contains(joined, "-vf vpp_qsv=framerate=5:w=960:h=720:format=nv12") {
+	if !strings.Contains(joined, "-vf vpp_qsv=framerate=5:w=960:h=540:format=nv12") {
 		t.Fatalf("expected qsv mjpeg filter chain, got %q", joined)
 	}
 }
@@ -924,6 +1094,17 @@ func TestBuildRTSPInputArgsAddsWallclockTimestampsWhenRequested(t *testing.T) {
 	joined := strings.Join(args, " ")
 	if !strings.Contains(joined, "-use_wallclock_as_timestamps 1") {
 		t.Fatalf("expected wallclock timestamp arg, got %q", joined)
+	}
+}
+
+func TestBuildRTSPInputArgsWithWallclockCanDisableWallclockTimestamps(t *testing.T) {
+	args := buildRTSPInputArgsWithWallclock(streams.Profile{
+		StreamURL:                "rtsp://example.local/stream",
+		UseWallclockAsTimestamps: true,
+	}, "stable", false)
+	joined := strings.Join(args, " ")
+	if strings.Contains(joined, "-use_wallclock_as_timestamps 1") {
+		t.Fatalf("did not expect wallclock timestamp arg, got %q", joined)
 	}
 }
 

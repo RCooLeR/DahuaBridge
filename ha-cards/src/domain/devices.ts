@@ -201,6 +201,7 @@ export interface BridgeMediaModel {
   onvifStreamUrl: string | null;
   onvifSnapshotUrl: string | null;
   recommendedProfile: string | null;
+  recommendedHaIntegration: string | null;
   preferredVideoProfile: string | null;
   preferredVideoSource: string | null;
   resolution: string;
@@ -217,6 +218,7 @@ export interface BridgeStreamProfileModel {
   streamUrl: string | null;
   localMjpegUrl: string | null;
   localHlsUrl: string | null;
+  localDashUrl: string | null;
   localWebRtcUrl: string | null;
   subtype: number | null;
   rtspTransport: string | null;
@@ -561,6 +563,7 @@ interface BridgeProfileShape {
   stream_url?: unknown;
   local_mjpeg_url?: unknown;
   local_hls_url?: unknown;
+  local_dash_url?: unknown;
   local_webrtc_url?: unknown;
   subtype?: unknown;
   rtsp_transport?: unknown;
@@ -881,6 +884,13 @@ function buildCameraDeviceBase(
       onvifStreamUrl: stringValue(cameraEntity?.attributes.bridge_onvif_stream_url),
       onvifSnapshotUrl: stringValue(cameraEntity?.attributes.bridge_onvif_snapshot_url),
       recommendedProfile: stringValue(cameraEntity?.attributes.recommended_profile),
+      recommendedHaIntegration:
+        sensorStateForDevice(
+          hass,
+          registrySnapshot,
+          descriptor.deviceId,
+          "recommended_ha_integration",
+        ) ?? null,
       preferredVideoProfile: stringValue(cameraEntity?.attributes.preferred_video_profile),
       preferredVideoSource: stringValue(cameraEntity?.attributes.preferred_video_source),
       resolution:
@@ -1776,6 +1786,7 @@ function bridgeProfilesForEntity(
       streamUrl: stringValue(typed.stream_url),
       localMjpegUrl: stringValue(typed.local_mjpeg_url),
       localHlsUrl: stringValue(typed.local_hls_url),
+      localDashUrl: stringValue(typed.local_dash_url),
       localWebRtcUrl: stringValue(typed.local_webrtc_url),
       subtype: numberValue(typed.subtype),
       rtspTransport: stringValue(typed.rtsp_transport),

@@ -63,7 +63,7 @@ export interface NvrPlaybackSessionCapabilityModel {
   channel: number | null;
   requestFields: ArchiveRequestFieldModel[];
   seekRequestFields: ArchiveRequestFieldModel[];
-  responseProfiles: Array<"hls" | "mjpeg" | "webrtc">;
+  responseProfiles: Array<"dash" | "hls" | "mjpeg" | "webrtc">;
 }
 
 export interface CameraArchiveCapabilities {
@@ -140,6 +140,7 @@ export interface BridgeRecordingClipListModel {
 
 export interface NvrPlaybackProfileModel {
   name: string;
+  dashUrl: string | null;
   hlsUrl: string | null;
   mjpegUrl: string | null;
   webrtcOfferUrl: string | null;
@@ -200,7 +201,7 @@ export function buildCameraArchiveCapabilities(
         buildRequestField("seek_time", false, "datetime"),
       ],
       seekRequestFields: [buildRequestField("seek_time", true, "datetime")],
-      responseProfiles: ["hls", "mjpeg", "webrtc"],
+      responseProfiles: ["dash", "hls", "mjpeg", "webrtc"],
     },
   };
 }

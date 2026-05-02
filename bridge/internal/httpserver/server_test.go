@@ -121,6 +121,8 @@ type stubMediaReader struct {
 	captureFrame             func(context.Context, string, string, int) ([]byte, string, error)
 	hlsPlaylist              func(context.Context, string, string) ([]byte, error)
 	hlsSegment               func(context.Context, string, string, string) ([]byte, string, error)
+	dashManifest             func(context.Context, string, string) ([]byte, error)
+	dashAsset                func(context.Context, string, string, string) ([]byte, string, error)
 	startClip                func(context.Context, mediaapi.ClipStartRequest) (mediaapi.ClipInfo, error)
 	stopClip                 func(context.Context, string) (mediaapi.ClipInfo, error)
 	getClip                  func(string) (mediaapi.ClipInfo, error)
@@ -246,6 +248,20 @@ func (s stubMediaReader) HLSSegment(ctx context.Context, streamID string, profil
 		return s.hlsSegment(ctx, streamID, profile, segmentName)
 	}
 	return []byte("segment"), "video/mp2t", nil
+}
+
+func (s stubMediaReader) DASHManifest(ctx context.Context, streamID string, profile string) ([]byte, error) {
+	if s.dashManifest != nil {
+		return s.dashManifest(ctx, streamID, profile)
+	}
+	return []byte("<MPD></MPD>"), nil
+}
+
+func (s stubMediaReader) DASHAsset(ctx context.Context, streamID string, profile string, assetName string) ([]byte, string, error) {
+	if s.dashAsset != nil {
+		return s.dashAsset(ctx, streamID, profile, assetName)
+	}
+	return []byte("segment"), "video/iso.segment", nil
 }
 
 func (s stubMediaReader) StartClip(ctx context.Context, request mediaapi.ClipStartRequest) (mediaapi.ClipInfo, error) {
@@ -2501,6 +2517,18 @@ func TestParseClipStartRequestUsesQueryDefaults(t *testing.T) {
 	}
 }
 
+func TestParseClipStartRequestDefaultsProfileToQuality(t *testing.T) {
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/media/streams/west20_nvr_channel_05/recordings?duration_seconds=30", nil)
+
+	got, err := parseClipStartRequest(req)
+	if err != nil {
+		t.Fatalf("parseClipStartRequest returned error: %v", err)
+	}
+	if got.ProfileName != "quality" {
+		t.Fatalf("unexpected default profile %q", got.ProfileName)
+	}
+}
+
 func TestParseClipStartRequestBodyOverridesQueryDefaults(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/media/streams/west20_nvr_channel_05/recordings?profile=quality&duration_seconds=30", strings.NewReader(`{"profile":"default","duration_ms":1500}`))
 	req.Header.Set("Content-Type", "application/json")
@@ -3233,7 +3261,7 @@ func TestNVRPlaybackSessionCreateEndpoint(t *testing.T) {
 				StartTime:          "2026-04-28T00:00:00Z",
 				EndTime:            "2026-04-28T01:00:00Z",
 				SeekTime:           "2026-04-28T00:20:00Z",
-				RecommendedProfile: "quality",
+				RecommendedProfile: "stable",
 				Profiles: map[string]dahua.NVRPlaybackProfile{
 					"quality": {
 						Name:           "quality",

@@ -49,7 +49,7 @@ func TestMatchesClipQueryUsesSourceWindowWhenPresent(t *testing.T) {
 
 func TestBuildClipFFmpegArgsDisablesStdinForFiniteClips(t *testing.T) {
 	args := buildClipFFmpegArgs(
-		config.MediaConfig{InputPreset: "stable"},
+		config.MediaConfig{InputPreset: "stable", ScaleWidth: 960},
 		streams.Profile{StreamURL: "rtsp://example.local/live"},
 		10*time.Second,
 		"clip.mp4",
@@ -63,6 +63,9 @@ func TestBuildClipFFmpegArgsDisablesStdinForFiniteClips(t *testing.T) {
 	}
 	if !strings.Contains(joined, "-t 10") {
 		t.Fatalf("expected finite clip args to include duration, got %q", joined)
+	}
+	if strings.Contains(joined, "scale=") || strings.Contains(joined, "vpp_qsv=") {
+		t.Fatalf("expected clip args to ignore live max-width scaling, got %q", joined)
 	}
 }
 

@@ -5,6 +5,9 @@ import {
   availablePlaybackViewportSources,
   cameraImageSrc,
   defaultOverviewStreamProfileKey,
+  preserveCameraViewportSourceSelection,
+  preserveCameraViewportSourceSelectionOnProfileChange,
+  preservePlaybackViewportSourceSelection,
   resolveInitialPlaybackViewportSource,
   resolveOverviewCameraViewportSource,
   resolvePlaybackViewportSource,
@@ -40,6 +43,7 @@ function buildCamera(overrides: Partial<CameraViewModel> = {}): CameraViewModel 
       onvifStreamUrl: null,
       onvifSnapshotUrl: null,
       recommendedProfile: "quality",
+      recommendedHaIntegration: "bridge_media",
       preferredVideoProfile: "quality",
       preferredVideoSource: null,
       resolution: "",
@@ -55,6 +59,7 @@ function buildCamera(overrides: Partial<CameraViewModel> = {}): CameraViewModel 
           streamUrl: null,
           localMjpegUrl: "http://bridge.local:9205/api/v1/media/mjpeg/west20_nvr_channel_01/quality",
           localHlsUrl: "http://bridge.local:9205/api/v1/media/hls/west20_nvr_channel_01/quality",
+          localDashUrl: null,
           localWebRtcUrl: null,
           subtype: 0,
           rtspTransport: "tcp",
@@ -68,6 +73,7 @@ function buildCamera(overrides: Partial<CameraViewModel> = {}): CameraViewModel 
           streamUrl: null,
           localMjpegUrl: "http://bridge.local:9205/api/v1/media/mjpeg/west20_nvr_channel_01/stable",
           localHlsUrl: null,
+          localDashUrl: null,
           localWebRtcUrl: null,
           subtype: 1,
           rtspTransport: "tcp",
@@ -140,10 +146,12 @@ describe("camera media helpers", () => {
     });
 
     expect(availableCameraViewportSources(camera, "quality")).toEqual([
+      "native",
       "hls",
       "mjpeg",
     ] satisfies CameraViewportSource[]);
     expect(availableCameraViewportSources(camera, "stable")).toEqual([
+      "native",
       "mjpeg",
     ] satisfies CameraViewportSource[]);
     expect(resolveSelectedCameraViewportSource(camera, "hls", "stable")).toBe("mjpeg");
@@ -154,6 +162,8 @@ describe("camera media helpers", () => {
     const camera = buildCamera({
       stream: {
         ...buildCamera().stream,
+        recommendedProfile: "stable",
+        preferredVideoProfile: null,
         preferredVideoSource: "webrtc",
         profiles: [
           {
@@ -177,6 +187,8 @@ describe("camera media helpers", () => {
     const camera = buildCamera({
       stream: {
         ...buildCamera().stream,
+        recommendedProfile: "stable",
+        preferredVideoProfile: null,
         preferredVideoSource: "webrtc",
         profiles: [
           {
@@ -214,6 +226,7 @@ describe("camera media helpers", () => {
       profiles: {
         quality: {
           name: "quality",
+          dashUrl: null,
           hlsUrl: "http://bridge.local:9205/api/v1/media/hls/nvrpb_test/quality/index.m3u8",
           mjpegUrl: null,
           webrtcOfferUrl: "http://bridge.local:9205/api/v1/media/webrtc/nvrpb_test/quality/offer",
@@ -245,6 +258,7 @@ describe("camera media helpers", () => {
       profiles: {
         quality: {
           name: "quality",
+          dashUrl: null,
           hlsUrl: "http://bridge.local:9205/api/v1/media/hls/nvrpb_test/quality/index.m3u8",
           mjpegUrl: "http://bridge.local:9205/api/v1/media/mjpeg/nvrpb_test/quality",
           webrtcOfferUrl: "http://bridge.local:9205/api/v1/media/webrtc/nvrpb_test/quality/offer",
@@ -254,6 +268,58 @@ describe("camera media helpers", () => {
 
     expect(resolveInitialPlaybackViewportSource(session, "quality", "mjpeg")).toBe("hls");
     expect(resolveInitialPlaybackViewportSource(session, "quality", null)).toBe("hls");
+  });
+
+  it("preserves an explicit source selection only while it stays valid", () => {
+    const camera = buildCamera({
+      cameraEntity: {
+        entity_id: "camera.west20_nvr_channel_01_camera",
+        state: "streaming",
+        attributes: {},
+        last_changed: "",
+        last_updated: "",
+      },
+    });
+    expect(preserveCameraViewportSourceSelection(camera, "quality", "mjpeg")).toBe("mjpeg");
+    expect(preserveCameraViewportSourceSelection(camera, "stable", "hls")).toBeNull();
+    expect(preserveCameraViewportSourceSelectionOnProfileChange(camera, "stable", "native")).toBe(
+      "mjpeg",
+    );
+
+    const session: NvrPlaybackSessionModel = {
+      id: "nvrpb_test",
+      streamId: "nvrpb_test",
+      deviceId: "west20_nvr",
+      sourceStreamId: "west20_nvr_channel_01",
+      name: "Entrance",
+      channel: 1,
+      startTime: "2026-05-01T10:00:00Z",
+      endTime: "2026-05-01T10:10:00Z",
+      seekTime: "2026-05-01T10:00:00Z",
+      recommendedProfile: "quality",
+      snapshotUrl: null,
+      createdAt: "2026-05-01T10:00:00Z",
+      expiresAt: "2026-05-01T10:10:00Z",
+      profiles: {
+        quality: {
+          name: "quality",
+          dashUrl: null,
+          hlsUrl: "http://bridge.local:9205/api/v1/media/hls/nvrpb_test/quality/index.m3u8",
+          mjpegUrl: "http://bridge.local:9205/api/v1/media/mjpeg/nvrpb_test?profile=quality",
+          webrtcOfferUrl: null,
+        },
+        stable: {
+          name: "stable",
+          dashUrl: null,
+          hlsUrl: null,
+          mjpegUrl: "http://bridge.local:9205/api/v1/media/mjpeg/nvrpb_test?profile=stable",
+          webrtcOfferUrl: null,
+        },
+      },
+    };
+
+    expect(preservePlaybackViewportSourceSelection(session, "quality", "mjpeg")).toBe("mjpeg");
+    expect(preservePlaybackViewportSourceSelection(session, "stable", "hls")).toBeNull();
   });
 
   it("prefers the bridge snapshot URL over the entity picture fallback", () => {

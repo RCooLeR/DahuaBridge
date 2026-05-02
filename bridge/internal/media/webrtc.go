@@ -34,6 +34,7 @@ type webrtcSession struct {
 	startedAt              time.Time
 	lastAccessAt           time.Time
 	lastError              error
+	activeAttempt          ffmpegStartAttempt
 	cmd                    *exec.Cmd
 	peer                   *webrtc.PeerConnection
 	hasAudio               bool
@@ -90,7 +91,7 @@ func (m *Manager) WebRTCAnswer(ctx context.Context, streamID string, profileName
 	}
 	m.webrtcPeers[key] = session
 	m.setMediaWorkerCountLocked()
-	session.logger.Info().Str("session_key", key).Msg("created webrtc session")
+	m.logWorkerInventoryLocked("added", session.status())
 	if m.metrics != nil {
 		m.metrics.SetMediaViewers(entry.ID, resolvedProfileName, 1)
 	}
@@ -134,7 +135,7 @@ func (s *webrtcSession) start(ctx context.Context, offer WebRTCSessionDescriptio
 		}
 		audioPort = udpPort(audioConn.LocalAddr())
 	}
-	s.logger.Info().
+	s.logger.Debug().
 		Bool("include_audio", includeAudio).
 		Int("video_port", videoPort).
 		Int("audio_port", audioPort).
@@ -156,7 +157,7 @@ func (s *webrtcSession) start(ctx context.Context, offer WebRTCSessionDescriptio
 
 	peerConnection.OnConnectionStateChange(func(state webrtc.PeerConnectionState) {
 		s.touch()
-		s.logger.Info().Str("state", state.String()).Msg("webrtc peer state changed")
+		s.logger.Debug().Str("state", state.String()).Msg("webrtc peer state changed")
 		switch state {
 		case webrtc.PeerConnectionStateFailed, webrtc.PeerConnectionStateDisconnected, webrtc.PeerConnectionStateClosed:
 			s.cancel()
@@ -237,7 +238,7 @@ func (s *webrtcSession) start(ctx context.Context, offer WebRTCSessionDescriptio
 	s.mu.Unlock()
 
 	go s.closePeerOnCancel()
-	s.logger.Info().Bool("include_audio", includeAudio).Msg("webrtc session started")
+	s.logger.Debug().Bool("include_audio", includeAudio).Msg("webrtc session started")
 
 	localDescription := peerConnection.LocalDescription()
 	if localDescription == nil {
@@ -341,17 +342,28 @@ func (s *webrtcSession) startFFmpeg(videoPort int, audioPort int, includeAudio b
 
 	for index, attempt := range attempts {
 		if index > 0 {
-			s.logger.Info().
+			s.logger.Debug().
 				Bool("hwaccel", attempt.useHWAccel).
 				Str("input_preset", attempt.inputPreset).
 				Msg("starting webrtc fallback attempt")
 		}
 
 		args := s.buildFFmpegArgs(videoPort, audioPort, attempt.ffmpegStartAttempt, attempt.includeAudio)
+		outputWidth, outputHeight := resolvedOutputDimensions(s.profile.SourceWidth, s.profile.SourceHeight, s.parent.cfg.ScaleWidth)
 		s.logger.Debug().
 			Bool("hwaccel", attempt.useHWAccel).
 			Bool("include_audio", attempt.includeAudio).
 			Str("input_preset", attempt.inputPreset).
+			Str("source_video_codec", s.profile.VideoCodec).
+			Str("source_audio_codec", s.profile.AudioCodec).
+			Int("source_width", s.profile.SourceWidth).
+			Int("source_height", s.profile.SourceHeight).
+			Str("output_video_codec", "H.264").
+			Str("output_video_encoder", workerH264EncoderLabel(s.parent.cfg, attempt.useHWAccel)).
+			Str("output_audio_codec", conditionalCodec(attempt.includeAudio, "Opus")).
+			Int("output_width", outputWidth).
+			Int("output_height", outputHeight).
+			Str("rtsp_transport", firstNonEmpty(s.profile.RTSPTransport, "tcp")).
 			Strs("ffmpeg_args", redactFFmpegArgs(args)).
 			Msg("starting webrtc ffmpeg")
 		cmd := exec.CommandContext(s.ctx, s.parent.cfg.FFmpegPath, args...)
@@ -371,10 +383,19 @@ func (s *webrtcSession) startFFmpeg(videoPort int, audioPort int, includeAudio b
 			}
 			return nil, fmt.Errorf("start ffmpeg: %w", err)
 		}
-		s.logger.Info().
+		s.logger.Debug().
 			Bool("hwaccel", attempt.useHWAccel).
 			Bool("include_audio", attempt.includeAudio).
 			Str("input_preset", attempt.inputPreset).
+			Str("source_video_codec", s.profile.VideoCodec).
+			Str("source_audio_codec", s.profile.AudioCodec).
+			Int("source_width", s.profile.SourceWidth).
+			Int("source_height", s.profile.SourceHeight).
+			Str("output_video_codec", "H.264").
+			Str("output_video_encoder", workerH264EncoderLabel(s.parent.cfg, attempt.useHWAccel)).
+			Str("output_audio_codec", conditionalCodec(attempt.includeAudio, "Opus")).
+			Int("output_width", outputWidth).
+			Int("output_height", outputHeight).
 			Msg("webrtc ffmpeg started")
 
 		waitDone := make(chan error, 1)
@@ -408,7 +429,7 @@ func (s *webrtcSession) startFFmpeg(videoPort int, audioPort int, includeAudio b
 					includeAudio:       false,
 				}
 				attempts = append(attempts[:index+1], append([]webrtcFFmpegAttempt{retryAttempt}, attempts[index+1:]...)...)
-				s.logger.Info().
+				s.logger.Debug().
 					Bool("hwaccel", attempt.useHWAccel).
 					Str("input_preset", attempt.inputPreset).
 					Msg("retrying webrtc ffmpeg without audio output")
@@ -441,11 +462,15 @@ func (s *webrtcSession) startFFmpeg(videoPort int, audioPort int, includeAudio b
 			}
 			return nil, errors.New("webrtc ffmpeg exited before producing media")
 		case <-timer.C:
-			s.logger.Info().
+			s.logger.Debug().
 				Bool("hwaccel", attempt.useHWAccel).
 				Bool("include_audio", attempt.includeAudio).
 				Str("input_preset", attempt.inputPreset).
 				Msg("webrtc ffmpeg startup probe passed")
+			s.mu.Lock()
+			s.activeAttempt = attempt.ffmpegStartAttempt
+			s.hasAudio = attempt.includeAudio
+			s.mu.Unlock()
 			go s.waitForFFmpeg(cmd, waitDone, stderrDone, attempt.ffmpegStartAttempt, conns...)
 			return cmd, nil
 		}
@@ -664,7 +689,7 @@ func (s *webrtcSession) waitForFFmpeg(cmd *exec.Cmd, waitDone <-chan error, stde
 		s.setError(errors.New(stderrText))
 		return
 	}
-	s.logger.Info().
+	s.logger.Debug().
 		Bool("hwaccel", attempt.useHWAccel).
 		Str("input_preset", attempt.inputPreset).
 		Msg("webrtc ffmpeg exited cleanly")
@@ -693,22 +718,36 @@ func (s *webrtcSession) status() WorkerStatus {
 	defer s.mu.Unlock()
 
 	status := WorkerStatus{
-		Key:          s.key,
-		Format:       "webrtc",
-		StreamID:     s.streamID,
-		Profile:      s.profileName,
-		Viewers:      1,
-		LastAccessAt: s.lastAccessAt,
-		StartedAt:    s.startedAt,
-		SourceURL:    redactURLUserinfo(s.profile.StreamURL),
-		Recommended:  s.profile.Recommended,
-		FrameRate:    maxInt(s.profile.FrameRate, s.parent.cfg.FrameRate),
-		Threads:      s.parent.cfg.Threads,
-		ScaleWidth:   s.parent.cfg.ScaleWidth,
-		MaxWorkers:   s.parent.cfg.MaxWorkers,
-		IdleTimeout:  s.parent.cfg.IdleTimeout.String(),
-		FFmpegPath:   s.parent.cfg.FFmpegPath,
+		Key:              s.key,
+		Format:           "webrtc",
+		StreamID:         s.streamID,
+		Channel:          detectWorkerChannel(s.streamID, s.profile.StreamURL),
+		Profile:          s.profileName,
+		SourceSubtype:    s.profile.Subtype,
+		SourceVideoCodec: s.profile.VideoCodec,
+		SourceAudioCodec: s.profile.AudioCodec,
+		SourceWidth:      s.profile.SourceWidth,
+		SourceHeight:     s.profile.SourceHeight,
+		Viewers:          1,
+		LastAccessAt:     s.lastAccessAt,
+		StartedAt:        s.startedAt,
+		SourceURL:        redactURLUserinfo(s.profile.StreamURL),
+		Recommended:      s.profile.Recommended,
+		FrameRate:        maxInt(s.profile.FrameRate, s.parent.cfg.FrameRate),
+		Threads:          s.parent.cfg.Threads,
+		ScaleWidth:       s.parent.cfg.ScaleWidth,
+		MaxWorkers:       s.parent.cfg.MaxWorkers,
+		IdleTimeout:      s.parent.cfg.IdleTimeout.String(),
+		FFmpegPath:       s.parent.cfg.FFmpegPath,
+		RTSPTransport:    firstNonEmpty(s.profile.RTSPTransport, "tcp"),
+		InputPreset:      s.activeAttempt.inputPreset,
+		HWAccelActive:    s.activeAttempt.useHWAccel,
+		AudioEnabled:     s.hasAudio,
 	}
+	status.OutputVideoCodec = "H.264"
+	status.OutputVideoEncoder = workerH264EncoderLabel(s.parent.cfg, s.activeAttempt.useHWAccel)
+	status.OutputAudioCodec = conditionalCodec(s.hasAudio, "Opus")
+	status.OutputWidth, status.OutputHeight = resolvedOutputDimensions(s.profile.SourceWidth, s.profile.SourceHeight, s.parent.cfg.ScaleWidth)
 	if s.lastError != nil {
 		status.LastError = s.lastError.Error()
 	}

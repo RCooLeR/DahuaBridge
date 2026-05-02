@@ -1,16 +1,11 @@
 package media
 
 import (
-	"bufio"
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"net/url"
-	"os"
 	"os/exec"
-	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -67,6 +62,7 @@ type Manager struct {
 	audioProbeMu          sync.Mutex
 	mjpegWorkers          map[string]*worker
 	hlsWorkers            map[string]*hlsWorker
+	dashWorkers           map[string]*dashWorker
 	clipJobs              map[string]*clipJob
 	webrtcPeers           map[string]*webrtcSession
 	intercomUplinkEnabled map[string]bool
@@ -77,7 +73,22 @@ type WorkerStatus struct {
 	Key                    string    `json:"key"`
 	Format                 string    `json:"format,omitempty"`
 	StreamID               string    `json:"stream_id"`
+	Channel                int       `json:"channel,omitempty"`
 	Profile                string    `json:"profile"`
+	SourceSubtype          int       `json:"source_subtype,omitempty"`
+	SourceVideoCodec       string    `json:"source_video_codec,omitempty"`
+	SourceAudioCodec       string    `json:"source_audio_codec,omitempty"`
+	SourceWidth            int       `json:"source_width,omitempty"`
+	SourceHeight           int       `json:"source_height,omitempty"`
+	OutputVideoCodec       string    `json:"output_video_codec,omitempty"`
+	OutputVideoEncoder     string    `json:"output_video_encoder,omitempty"`
+	OutputAudioCodec       string    `json:"output_audio_codec,omitempty"`
+	OutputWidth            int       `json:"output_width,omitempty"`
+	OutputHeight           int       `json:"output_height,omitempty"`
+	RTSPTransport          string    `json:"rtsp_transport,omitempty"`
+	InputPreset            string    `json:"input_preset,omitempty"`
+	HWAccelActive          bool      `json:"hwaccel_active,omitempty"`
+	AudioEnabled           bool      `json:"audio_enabled,omitempty"`
 	Viewers                int       `json:"viewers"`
 	LastFrameAt            time.Time `json:"last_frame_at,omitempty"`
 	LastAccessAt           time.Time `json:"last_access_at,omitempty"`
@@ -120,6 +131,8 @@ type worker struct {
 	lastFrameAt    time.Time
 	lastError      error
 	startedAt      time.Time
+	activeAttempt  ffmpegStartAttempt
+	includeAudio   bool
 	cmd            *exec.Cmd
 	ready          chan struct{}
 	startErr       chan error
@@ -142,6 +155,8 @@ type hlsWorker struct {
 	lastError           error
 	startedAt           time.Time
 	outputDir           string
+	activeAttempt       ffmpegStartAttempt
+	includeAudio        bool
 	cmd                 *exec.Cmd
 	startErr            chan error
 	playlistReadyLogged bool
@@ -160,6 +175,7 @@ func New(cfg config.MediaConfig, resolver StreamResolver, logger zerolog.Logger,
 		logger:                logger.With().Str("component", "media").Logger(),
 		mjpegWorkers:          make(map[string]*worker),
 		hlsWorkers:            make(map[string]*hlsWorker),
+		dashWorkers:           make(map[string]*dashWorker),
 		clipJobs:              make(map[string]*clipJob),
 		webrtcPeers:           make(map[string]*webrtcSession),
 		intercomUplinkEnabled: make(map[string]bool),
@@ -410,30 +426,8 @@ func (m *Manager) ListWorkers() []WorkerStatus {
 	}
 
 	m.mu.Lock()
-	mjpegWorkers := make([]*worker, 0, len(m.mjpegWorkers))
-	for _, w := range m.mjpegWorkers {
-		mjpegWorkers = append(mjpegWorkers, w)
-	}
-	hlsWorkers := make([]*hlsWorker, 0, len(m.hlsWorkers))
-	for _, w := range m.hlsWorkers {
-		hlsWorkers = append(hlsWorkers, w)
-	}
-	webrtcPeers := make([]*webrtcSession, 0, len(m.webrtcPeers))
-	for _, session := range m.webrtcPeers {
-		webrtcPeers = append(webrtcPeers, session)
-	}
+	statuses := m.workerStatusesLocked()
 	m.mu.Unlock()
-
-	statuses := make([]WorkerStatus, 0, len(mjpegWorkers)+len(hlsWorkers)+len(webrtcPeers))
-	for _, w := range mjpegWorkers {
-		statuses = append(statuses, w.status())
-	}
-	for _, w := range hlsWorkers {
-		statuses = append(statuses, w.status())
-	}
-	for _, session := range webrtcPeers {
-		statuses = append(statuses, session.status())
-	}
 	return statuses
 }
 
@@ -449,130 +443,13 @@ func (m *Manager) resolveStream(streamID string, profileName string) (streams.En
 	return entry, profile, profileName, nil
 }
 
-func (m *Manager) getOrCreateMJPEGWorker(entry streams.Entry, profileName string, profile streams.Profile, scaleWidth int) (*worker, error) {
-	effectiveScaleWidth := resolvedScaleWidth(scaleWidth, m.cfg.ScaleWidth)
-	key := fmt.Sprintf("%s:%s:w%d", entry.ID, profileName, effectiveScaleWidth)
-
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if existing, ok := m.mjpegWorkers[key]; ok {
-		return existing, nil
-	}
-	if m.cfg.MaxWorkers > 0 && m.activeWorkerCountLocked() >= m.cfg.MaxWorkers {
-		err := fmt.Errorf("%w: %d active, max %d", ErrWorkerLimitReached, m.activeWorkerCountLocked(), m.cfg.MaxWorkers)
-		if m.metrics != nil {
-			m.metrics.ObserveMediaStart(entry.ID, profileName, err)
-		}
-		return nil, err
-	}
-
-	ctx, cancel := context.WithCancel(context.Background())
-	w := &worker{
-		key:         key,
-		streamID:    entry.ID,
-		profileName: profileName,
-		profile:     profile,
-		scaleWidth:  effectiveScaleWidth,
-		parent:      m,
-		logger: m.logger.With().
-			Str("stream_id", entry.ID).
-			Str("profile", profileName).
-			Str("format", "mjpeg").
-			Int("scale_width", effectiveScaleWidth).
-			Logger(),
-		ctx:         ctx,
-		cancel:      cancel,
-		subscribers: make(map[chan []byte]struct{}),
-		ready:       make(chan struct{}),
-		startErr:    make(chan error, 1),
-	}
-	m.mjpegWorkers[key] = w
-	m.setMediaWorkerCountLocked()
-	w.logger.Info().Str("worker_key", key).Msg("created mjpeg worker")
-	if m.metrics != nil {
-		m.metrics.ObserveMediaStart(entry.ID, profileName, nil)
-	}
-	go w.run()
-	return w, nil
-}
-
-func (m *Manager) getOrCreateHLSWorker(entry streams.Entry, profileName string, profile streams.Profile) (*hlsWorker, error) {
-	key := entry.ID + ":" + profileName
-
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if existing, ok := m.hlsWorkers[key]; ok {
-		existing.touch()
-		return existing, nil
-	}
-	if m.cfg.MaxWorkers > 0 && m.activeWorkerCountLocked() >= m.cfg.MaxWorkers {
-		err := fmt.Errorf("%w: %d active, max %d", ErrWorkerLimitReached, m.activeWorkerCountLocked(), m.cfg.MaxWorkers)
-		if m.metrics != nil {
-			m.metrics.ObserveMediaStart(entry.ID, profileName, err)
-		}
-		return nil, err
-	}
-
-	ctx, cancel := context.WithCancel(context.Background())
-	w := &hlsWorker{
-		key:         key,
-		streamID:    entry.ID,
-		profileName: profileName,
-		profile:     profile,
-		parent:      m,
-		logger: m.logger.With().
-			Str("stream_id", entry.ID).
-			Str("profile", profileName).
-			Str("format", "hls").
-			Logger(),
-		ctx:          ctx,
-		cancel:       cancel,
-		lastAccessAt: time.Now(),
-		startErr:     make(chan error, 1),
-	}
-	m.hlsWorkers[key] = w
-	m.setMediaWorkerCountLocked()
-	w.logger.Info().Str("worker_key", key).Msg("created hls worker")
-	if m.metrics != nil {
-		m.metrics.ObserveMediaStart(entry.ID, profileName, nil)
-	}
-	go w.run()
-	return w, nil
-}
-
-func (m *Manager) removeMJPEGWorker(key string, w *worker) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if existing, ok := m.mjpegWorkers[key]; ok && existing == w {
-		delete(m.mjpegWorkers, key)
-		m.setMediaWorkerCountLocked()
-		w.logger.Info().Str("worker_key", key).Msg("removed mjpeg worker")
-		if m.metrics != nil {
-			m.metrics.SetMediaViewers(w.streamID, w.profileName, 0)
-		}
-	}
-}
-
-func (m *Manager) removeHLSWorker(key string, w *hlsWorker) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if existing, ok := m.hlsWorkers[key]; ok && existing == w {
-		delete(m.hlsWorkers, key)
-		m.setMediaWorkerCountLocked()
-		w.logger.Info().Str("worker_key", key).Msg("removed hls worker")
-		if m.metrics != nil {
-			m.metrics.SetMediaViewers(w.streamID, w.profileName, 0)
-		}
-	}
-}
-
 func (m *Manager) removeWebRTCSession(key string, session *webrtcSession) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if existing, ok := m.webrtcPeers[key]; ok && existing == session {
 		delete(m.webrtcPeers, key)
 		m.setMediaWorkerCountLocked()
-		session.logger.Info().Str("session_key", key).Msg("removed webrtc session")
+		m.logWorkerInventoryLocked("removed", session.status())
 		if m.metrics != nil {
 			m.metrics.SetMediaViewers(session.streamID, session.profileName, 0)
 		}
@@ -580,7 +457,7 @@ func (m *Manager) removeWebRTCSession(key string, session *webrtcSession) {
 }
 
 func (m *Manager) activeWorkerCountLocked() int {
-	return len(m.mjpegWorkers) + len(m.hlsWorkers) + len(m.clipJobs) + len(m.webrtcPeers)
+	return len(m.mjpegWorkers) + len(m.hlsWorkers) + len(m.dashWorkers) + len(m.clipJobs) + len(m.webrtcPeers)
 }
 
 func (m *Manager) setMediaWorkerCountLocked() {
@@ -589,1052 +466,272 @@ func (m *Manager) setMediaWorkerCountLocked() {
 	}
 }
 
-func (w *worker) addSubscriber(ch chan []byte) {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	w.subscribers[ch] = struct{}{}
-	w.idleGeneration++
-	if w.parent.metrics != nil {
-		w.parent.metrics.SetMediaViewers(w.streamID, w.profileName, len(w.subscribers))
-	}
-	w.logger.Info().Int("viewers", len(w.subscribers)).Msg("mjpeg subscriber added")
-	if len(w.lastFrame) > 0 {
-		frame := append([]byte(nil), w.lastFrame...)
-		select {
-		case ch <- frame:
-		default:
-		}
-	}
-}
-
-func (w *worker) removeSubscriber(ch chan []byte) {
-	w.mu.Lock()
-	_, ok := w.subscribers[ch]
-	if ok {
-		delete(w.subscribers, ch)
-	}
-	empty := len(w.subscribers) == 0
-	idleGeneration := w.idleGeneration
-	if empty {
-		w.idleGeneration++
-		idleGeneration = w.idleGeneration
-	}
-	viewers := len(w.subscribers)
-	w.mu.Unlock()
-
-	if ok {
-		close(ch)
-	}
-	if w.parent.metrics != nil {
-		w.parent.metrics.SetMediaViewers(w.streamID, w.profileName, viewers)
-	}
-	if ok {
-		w.logger.Info().Int("viewers", viewers).Msg("mjpeg subscriber removed")
-	}
-	if empty {
-		go w.stopWhenIdle(idleGeneration)
-	}
-}
-
-func (w *worker) stopWhenIdle(idleGeneration uint64) {
-	timer := time.NewTimer(w.parent.cfg.IdleTimeout)
-	defer timer.Stop()
-
-	select {
-	case <-timer.C:
-	case <-w.ctx.Done():
-		return
-	}
-
-	w.mu.Lock()
-	empty := len(w.subscribers) == 0
-	sameIdleWindow := w.idleGeneration == idleGeneration
-	w.mu.Unlock()
-	if empty && sameIdleWindow {
-		w.logger.Info().Msg("stopping idle media worker")
-		w.cancel()
-	}
-}
-
-func (w *worker) run() {
-	defer w.parent.removeMJPEGWorker(w.key, w)
-	defer w.closeSubscribers()
-
-	attempts := buildFFmpegStartAttempts(w.parent.cfg)
-	for index, attempt := range attempts {
-		if index > 0 {
-			w.logger.Info().
-				Bool("hwaccel", attempt.useHWAccel).
-				Str("input_preset", attempt.inputPreset).
-				Msg("starting mjpeg fallback attempt")
-		}
-
-		args := w.buildFFmpegArgs(attempt)
-		w.logger.Debug().
-			Bool("hwaccel", attempt.useHWAccel).
-			Str("input_preset", attempt.inputPreset).
-			Strs("ffmpeg_args", redactFFmpegArgs(args)).
-			Msg("starting mjpeg worker")
-		cmd := exec.CommandContext(w.ctx, w.parent.cfg.FFmpegPath, args...)
-		stdout, err := cmd.StdoutPipe()
-		if err != nil {
-			w.setError(fmt.Errorf("ffmpeg stdout pipe: %w", err))
-			return
-		}
-		stderr, err := cmd.StderrPipe()
-		if err != nil {
-			w.setError(fmt.Errorf("ffmpeg stderr pipe: %w", err))
-			return
-		}
-
-		w.mu.Lock()
-		w.cmd = cmd
-		if w.startedAt.IsZero() {
-			w.startedAt = time.Now()
-		}
-		w.mu.Unlock()
-
-		if err := cmd.Start(); err != nil {
-			w.setError(fmt.Errorf("start ffmpeg: %w", err))
-			return
-		}
-		w.logger.Info().
-			Bool("hwaccel", attempt.useHWAccel).
-			Str("input_preset", attempt.inputPreset).
-			Msg("mjpeg ffmpeg started")
-
-		stderrDone := drainFFmpegStderr(stderr, 64*1024)
-
-		readErr := w.readMJPEG(stdout)
-		waitErr := cmd.Wait()
-		stderrText := <-stderrDone
-
-		switch {
-		case errors.Is(w.ctx.Err(), context.Canceled):
-			return
-		case readErr != nil:
-			if stderrText != "" {
-				w.logger.Debug().
-					Bool("hwaccel", attempt.useHWAccel).
-					Str("input_preset", attempt.inputPreset).
-					Str("ffmpeg_stderr", stderrText).
-					Msg("mjpeg worker stderr")
-				readErr = fmt.Errorf("%w: %s", readErr, stderrText)
-			}
-			if index < len(attempts)-1 {
-				w.logger.Warn().
-					Bool("hwaccel", attempt.useHWAccel).
-					Str("input_preset", attempt.inputPreset).
-					Err(readErr).
-					Msg("mjpeg worker attempt failed")
-				continue
-			}
-			w.setError(readErr)
-			return
-		case waitErr != nil:
-			if stderrText != "" {
-				w.logger.Debug().
-					Bool("hwaccel", attempt.useHWAccel).
-					Str("input_preset", attempt.inputPreset).
-					Str("ffmpeg_stderr", stderrText).
-					Msg("mjpeg worker stderr")
-				waitErr = fmt.Errorf("%w: %s", waitErr, stderrText)
-			}
-			if index < len(attempts)-1 {
-				w.logger.Warn().
-					Bool("hwaccel", attempt.useHWAccel).
-					Str("input_preset", attempt.inputPreset).
-					Err(waitErr).
-					Msg("mjpeg worker attempt failed")
-				continue
-			}
-			w.setError(waitErr)
-			return
-		default:
-			w.logger.Info().Msg("mjpeg worker exited cleanly")
-			return
-		}
-	}
-}
-
-func (w *worker) buildFFmpegArgs(attempt ffmpegStartAttempt) []string {
-	frameRate := w.parent.cfg.FrameRate
-	if w.profile.FrameRate > 0 {
-		frameRate = w.profile.FrameRate
-	}
-
-	args := []string{
-		"-hide_banner",
-		"-loglevel", ffmpegLogLevel(w.parent.cfg),
-	}
-	args = appendInputHWAccelArgs(args, w.parent.cfg, attempt.useHWAccel)
-	args = append(args, buildRTSPInputArgs(w.profile, attempt.inputPreset)...)
-	if playbackDuration, ok := playbackDurationFromStreamURL(w.profile.StreamURL); ok {
-		args = append(args, "-t", formatFFmpegSeconds(playbackDuration))
-	}
-	args = append(args, "-an")
-	if w.parent.cfg.Threads > 0 {
-		args = append(args, "-threads", strconv.Itoa(w.parent.cfg.Threads))
-	}
-	args = appendVideoFilterArgs(args, w.parent.cfg, w.scaleWidth, w.profile, attempt.useHWAccel, frameRate)
-	args = appendMJPEGEncoderArgs(args, w.parent.cfg, attempt.useHWAccel)
-	args = append(args, "-f", "mjpeg", "pipe:1")
-	return args
-}
-
-func (w *worker) readMJPEG(r io.Reader) error {
-	reader := bufio.NewReaderSize(r, w.parent.cfg.ReadBufferSize)
-	buffer := make([]byte, 0, 256*1024)
-	frameCount := 0
-
-	for {
-		select {
-		case <-w.ctx.Done():
-			return w.ctx.Err()
-		default:
-		}
-
-		chunk := make([]byte, 64*1024)
-		n, err := reader.Read(chunk)
-		if n > 0 {
-			buffer = append(buffer, chunk[:n]...)
-			var published int
-			buffer, published = w.extractFramesWithCount(buffer)
-			frameCount += published
-		}
-		if err != nil {
-			if errors.Is(err, io.EOF) {
-				if frameCount > 0 && !hasIncompleteMJPEGFrame(buffer) {
-					return nil
-				}
-				return fmt.Errorf("read mjpeg stdout: %w", io.ErrUnexpectedEOF)
-			}
-			return fmt.Errorf("read mjpeg stdout: %w", err)
-		}
-	}
-}
-
-func (w *worker) extractFrames(buffer []byte) []byte {
-	buffer, _ = w.extractFramesWithCount(buffer)
-	return buffer
-}
-
-func (w *worker) extractFramesWithCount(buffer []byte) ([]byte, int) {
-	published := 0
-	for {
-		start := bytes.Index(buffer, []byte{0xFF, 0xD8})
-		if start < 0 {
-			if len(buffer) > 1024*1024 {
-				return nil, published
-			}
-			return buffer, published
-		}
-		end := bytes.Index(buffer[start+2:], []byte{0xFF, 0xD9})
-		if end < 0 {
-			if start > 0 {
-				return append([]byte(nil), buffer[start:]...), published
-			}
-			return buffer, published
-		}
-
-		end += start + 4
-		frame := append([]byte(nil), buffer[start:end]...)
-		w.publishFrame(frame)
-		published++
-		buffer = buffer[end:]
-	}
-}
-
-func (w *worker) publishFrame(frame []byte) {
-	w.mu.Lock()
-	w.lastFrame = append(w.lastFrame[:0], frame...)
-	w.lastFrameAt = time.Now()
-	subs := make([]chan []byte, 0, len(w.subscribers))
-	for ch := range w.subscribers {
-		subs = append(subs, ch)
-	}
-	w.mu.Unlock()
-
-	for _, ch := range subs {
-		select {
-		case ch <- frame:
-		default:
-			if w.parent.metrics != nil {
-				w.parent.metrics.ObserveMediaFrameDrop(w.streamID, w.profileName)
-			}
-		}
-	}
-	if w.parent.metrics != nil {
-		w.parent.metrics.ObserveMediaFrame(w.streamID, w.profileName)
-	}
-	w.readyOnce.Do(func() {
-		w.logger.Info().Msg("mjpeg worker ready")
-		close(w.ready)
-	})
-}
-
-func (w *worker) setError(err error) {
-	w.mu.Lock()
-	w.lastError = err
-	w.mu.Unlock()
-	select {
-	case w.startErr <- err:
-	default:
-	}
-	w.readyOnce.Do(func() {
-		close(w.ready)
-	})
-	w.logger.Error().Err(err).Msg("media worker stopped")
-}
-
-func (w *worker) closeSubscribers() {
-	w.mu.Lock()
-	subs := make([]chan []byte, 0, len(w.subscribers))
-	for ch := range w.subscribers {
-		subs = append(subs, ch)
-		delete(w.subscribers, ch)
-	}
-	w.mu.Unlock()
-
-	for _, ch := range subs {
-		close(ch)
-	}
-}
-
-func (w *worker) waitUntilReady(ctx context.Context) error {
-	w.mu.Lock()
-	hasFrame := len(w.lastFrame) > 0
-	lastErr := w.lastError
-	ready := w.ready
-	startErr := w.startErr
-	w.mu.Unlock()
-
-	if hasFrame {
-		return nil
-	}
-	if lastErr != nil {
-		return lastErr
-	}
-
-	timeout := time.NewTimer(w.parent.cfg.StartTimeout)
-	defer timeout.Stop()
-
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-timeout.C:
-		return fmt.Errorf("timed out waiting for first media frame")
-	case err := <-startErr:
-		return err
-	case <-ready:
-		w.mu.Lock()
-		defer w.mu.Unlock()
-		return w.lastError
-	}
-}
-
-func (w *worker) status() WorkerStatus {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	status := WorkerStatus{
-		Key:         w.key,
-		Format:      "mjpeg",
-		StreamID:    w.streamID,
-		Profile:     w.profileName,
-		Viewers:     len(w.subscribers),
-		LastFrameAt: w.lastFrameAt,
-		StartedAt:   w.startedAt,
-		SourceURL:   redactURLUserinfo(w.profile.StreamURL),
-		Recommended: w.profile.Recommended,
-		FrameRate:   maxInt(w.profile.FrameRate, w.parent.cfg.FrameRate),
-		Threads:     w.parent.cfg.Threads,
-		ScaleWidth:  w.scaleWidth,
-		MaxWorkers:  w.parent.cfg.MaxWorkers,
-		IdleTimeout: w.parent.cfg.IdleTimeout.String(),
-		FFmpegPath:  w.parent.cfg.FFmpegPath,
-	}
-	if w.lastError != nil {
-		status.LastError = w.lastError.Error()
-	}
-	return status
-}
-
-func (w *hlsWorker) run() {
-	outputDir := ""
-	retainOutput := false
-	includeAudio := w.parent.shouldIncludeSourceAudio(w.profile, w.logger)
-
-	defer func() {
-		if retainOutput && outputDir != "" && w.parent.cfg.HLSKeepAfterExit > 0 {
-			keepFor := w.parent.cfg.HLSKeepAfterExit
-			w.logger.Info().Str("hls_output_dir", outputDir).Dur("keep_after_exit", keepFor).Msg("retaining completed hls output")
-			time.AfterFunc(keepFor, func() {
-				w.parent.removeHLSWorker(w.key, w)
-				if err := os.RemoveAll(outputDir); err != nil {
-					w.logger.Warn().Err(err).Str("hls_output_dir", outputDir).Msg("failed to cleanup retained hls output")
-				}
-			})
-			return
-		}
-
-		w.parent.removeHLSWorker(w.key, w)
-		if outputDir != "" {
-			if err := os.RemoveAll(outputDir); err != nil {
-				w.logger.Warn().Err(err).Str("hls_output_dir", outputDir).Msg("failed to cleanup hls output")
-			}
-		}
-	}()
-
-	outputRoot := strings.TrimSpace(w.parent.cfg.HLSTmpDir)
-	if outputRoot == "" {
-		outputRoot = "/data/tmp/dahuabridge/hls"
-	}
-	if err := os.MkdirAll(outputRoot, 0o755); err != nil {
-		w.setError(fmt.Errorf("create hls temp root: %w", err))
-		return
-	}
-
-	var err error
-	outputDir, err = os.MkdirTemp(outputRoot, safeHLSDirectoryPrefix(w.key)+"-*")
-	if err != nil {
-		w.setError(fmt.Errorf("create hls temp dir: %w", err))
-		return
-	}
-	w.logger.Info().
-		Str("worker_key", w.key).
-		Str("hls_output_dir", outputDir).
-		Bool("include_audio", includeAudio).
-		Msg("prepared hls worker output")
-
-	w.mu.Lock()
-	w.outputDir = outputDir
-	if w.startedAt.IsZero() {
-		w.startedAt = time.Now()
-	}
-	w.mu.Unlock()
-
-	go w.stopWhenIdle()
-
-	attempts := buildFFmpegStartAttempts(w.parent.cfg)
-	for index, attempt := range attempts {
-		if index > 0 {
-			w.logger.Info().Bool("hwaccel", attempt.useHWAccel).Str("input_preset", attempt.inputPreset).Msg("starting hls fallback attempt")
-		}
-
-		args := w.buildFFmpegArgs(attempt, includeAudio)
-		w.logger.Debug().Bool("hwaccel", attempt.useHWAccel).Str("input_preset", attempt.inputPreset).Str("hls_output_dir", outputDir).Strs("ffmpeg_args", redactFFmpegArgs(args)).Msg("starting hls worker")
-
-		cmd := exec.CommandContext(w.ctx, w.parent.cfg.FFmpegPath, args...)
-		cmd.Dir = outputDir
-
-		stderr, err := cmd.StderrPipe()
-		if err != nil {
-			w.setError(fmt.Errorf("ffmpeg stderr pipe: %w", err))
-			return
-		}
-
-		w.mu.Lock()
-		w.cmd = cmd
-		w.mu.Unlock()
-
-		if err := cmd.Start(); err != nil {
-			w.setError(fmt.Errorf("start ffmpeg: %w", err))
-			return
-		}
-		w.logger.Info().
-			Bool("hwaccel", attempt.useHWAccel).
-			Str("input_preset", attempt.inputPreset).
-			Bool("include_audio", includeAudio).
-			Str("hls_output_dir", outputDir).
-			Msg("hls ffmpeg started")
-
-		stderrDone := drainFFmpegStderr(stderr, 128*1024)
-
-		waitErr := cmd.Wait()
-		stderrText := <-stderrDone
-
-		if errors.Is(w.ctx.Err(), context.Canceled) {
-			return
-		}
-
-		if stderrText != "" {
-			w.logger.Debug().Bool("hwaccel", attempt.useHWAccel).Str("input_preset", attempt.inputPreset).Str("ffmpeg_stderr", stderrText).Msg("hls worker stderr")
-		}
-
-		if waitErr != nil {
-			if stderrText != "" {
-				waitErr = fmt.Errorf("%w: %s", waitErr, stderrText)
-			}
-			if index < len(attempts)-1 {
-				w.logger.Warn().
-					Bool("hwaccel", attempt.useHWAccel).
-					Str("input_preset", attempt.inputPreset).
-					Err(waitErr).
-					Msg("hls worker attempt failed")
-				continue
-			}
-			w.setError(waitErr)
-			return
-		}
-
-		// A clean FFmpeg exit is normal for finite NVR playback and SMB/IVS/event clips.
-		// Keep the generated playlist and segments addressable through the existing worker
-		// instead of removing the worker/output directory immediately.
-		if w.isPlaybackStream() || w.parent.cfg.HLSKeepAfterExit > 0 {
-			retainOutput = true
-		}
-		w.logger.Info().Bool("retain_output", retainOutput).Msg("hls worker exited cleanly")
-		return
-	}
-}
-
-func (w *hlsWorker) buildFFmpegArgs(attempt ffmpegStartAttempt, includeAudio bool) []string {
-	frameRate := w.parent.cfg.FrameRate
-	if w.profile.FrameRate > 0 {
-		frameRate = w.profile.FrameRate
-	}
-	segmentDuration := formatFFmpegSeconds(w.parent.cfg.HLSSegmentTime)
-	segmentSeconds := int(maxInt(int(w.parent.cfg.HLSSegmentTime/time.Second), 1))
-	gopSize := maxInt(frameRate*segmentSeconds, frameRate)
-	hlsListSize := strconv.Itoa(w.parent.cfg.HLSListSize)
-	hlsFlags := "append_list+delete_segments+independent_segments+omit_endlist+temp_file"
-	if w.isPlaybackStream() {
-		hlsListSize = "0"
-		hlsFlags = "independent_segments+temp_file"
-	}
-
-	args := []string{
-		"-hide_banner",
-		"-loglevel", ffmpegLogLevel(w.parent.cfg),
-	}
-	args = appendInputHWAccelArgs(args, w.parent.cfg, attempt.useHWAccel)
-	args = append(args, buildRTSPInputArgs(w.profile, attempt.inputPreset)...)
-	if playbackDuration, ok := playbackDurationFromStreamURL(w.profile.StreamURL); ok {
-		args = append(args, "-t", formatFFmpegSeconds(playbackDuration))
-	}
-	if w.parent.cfg.Threads > 0 {
-		args = append(args, "-threads", strconv.Itoa(w.parent.cfg.Threads))
-	}
-	args = appendVideoFilterArgs(args, w.parent.cfg, w.parent.cfg.ScaleWidth, w.profile, attempt.useHWAccel, frameRate)
-	args = append(args, "-map", "0:v:0")
-	args = appendVideoEncoderArgs(args, w.parent.cfg, attempt.useHWAccel, gopSize, "veryfast")
-	args = append(args,
-		"-fps_mode", "cfr",
-		"-force_key_frames", fmt.Sprintf("expr:gte(t,n_forced*%s)", segmentDuration),
-	)
-	if includeAudio {
-		args = append(args,
-			"-map", "0:a:0?",
-			"-c:a", "aac",
-			"-b:a", "96k",
-			"-ac", "2",
-			"-ar", "48000",
-		)
-	} else {
-		args = append(args, "-an")
-	}
-	args = append(args,
-		"-hls_allow_cache", "0",
-		"-muxpreload", "0",
-		"-muxdelay", "0",
-		"-f", "hls",
-		"-hls_time", segmentDuration,
-		"-hls_list_size", hlsListSize,
-		"-hls_flags", hlsFlags,
-		"-hls_segment_filename", "segment_%03d.ts",
-		"index.m3u8",
-	)
-	return args
-}
-
-func (w *hlsWorker) isPlaybackStream() bool {
-	return strings.HasPrefix(strings.TrimSpace(w.streamID), "nvrpb_")
-}
-
-func (w *hlsWorker) stopWhenIdle() {
-	interval := w.parent.cfg.IdleTimeout / 4
-	if interval < 100*time.Millisecond {
-		interval = 100 * time.Millisecond
-	}
-
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-w.ctx.Done():
-			return
-		case <-ticker.C:
-			w.mu.Lock()
-			lastAccessAt := w.lastAccessAt
-			w.mu.Unlock()
-			if time.Since(lastAccessAt) >= w.parent.cfg.IdleTimeout {
-				w.logger.Info().Msg("stopping idle media worker")
-				w.cancel()
-				return
-			}
-		}
-	}
-}
-
-func (w *hlsWorker) touch() {
-	w.mu.Lock()
-	w.lastAccessAt = time.Now()
-	w.mu.Unlock()
-	if w.parent.metrics != nil {
-		w.parent.metrics.SetMediaViewers(w.streamID, w.profileName, 1)
-	}
-}
-
-func (w *hlsWorker) readFileWhenReady(ctx context.Context, fileName string) ([]byte, error) {
-	w.touch()
-	timeout := time.NewTimer(w.parent.cfg.StartTimeout)
-	defer timeout.Stop()
-
-	ticker := time.NewTicker(100 * time.Millisecond)
-	defer ticker.Stop()
-
-	for {
-		w.mu.Lock()
-		outputDir := w.outputDir
-		lastError := w.lastError
-		w.mu.Unlock()
-
-		if lastError != nil {
-			return nil, lastError
-		}
-		if outputDir != "" {
-			body, err := os.ReadFile(filepath.Join(outputDir, fileName))
-			if err == nil && len(body) > 0 {
-				w.touch()
-				if fileName == "index.m3u8" {
-					w.mu.Lock()
-					if !w.playlistReadyLogged {
-						w.playlistReadyLogged = true
-						w.logger.Info().Str("file_name", fileName).Msg("hls playlist ready")
-					}
-					w.mu.Unlock()
-				}
-				return body, nil
-			}
-			if err != nil && !errors.Is(err, os.ErrNotExist) {
-				return nil, err
-			}
-		}
-
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		case <-w.ctx.Done():
-			w.mu.Lock()
-			defer w.mu.Unlock()
-			if w.lastError != nil {
-				return nil, w.lastError
-			}
-			return nil, context.Canceled
-		case err := <-w.startErr:
-			return nil, err
-		case <-timeout.C:
-			return nil, fmt.Errorf("timed out waiting for hls asset %q", fileName)
-		case <-ticker.C:
-		}
-	}
-}
-
-func (w *hlsWorker) setError(err error) {
-	w.mu.Lock()
-	w.lastError = err
-	w.mu.Unlock()
-	select {
-	case w.startErr <- err:
-	default:
-	}
-	w.logger.Error().Err(err).Msg("media worker stopped")
-}
-
-func (w *hlsWorker) status() WorkerStatus {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	status := WorkerStatus{
-		Key:          w.key,
-		Format:       "hls",
-		StreamID:     w.streamID,
-		Profile:      w.profileName,
-		Viewers:      1,
-		LastAccessAt: w.lastAccessAt,
-		StartedAt:    w.startedAt,
-		SourceURL:    redactURLUserinfo(w.profile.StreamURL),
-		Recommended:  w.profile.Recommended,
-		FrameRate:    maxInt(w.profile.FrameRate, w.parent.cfg.FrameRate),
-		Threads:      w.parent.cfg.Threads,
-		ScaleWidth:   w.parent.cfg.ScaleWidth,
-		MaxWorkers:   w.parent.cfg.MaxWorkers,
-		IdleTimeout:  w.parent.cfg.IdleTimeout.String(),
-		FFmpegPath:   w.parent.cfg.FFmpegPath,
-	}
-	if w.lastError != nil {
-		status.LastError = w.lastError.Error()
-	}
-	return status
-}
-
-func safeHLSDirectoryPrefix(value string) string {
-	trimmed := strings.TrimSpace(value)
-	if trimmed == "" {
-		return "stream"
-	}
-	replacer := strings.NewReplacer(":", "_", "/", "_", "\\", "_", " ", "_")
-	safe := replacer.Replace(trimmed)
-	if len(safe) > 96 {
-		safe = safe[:96]
-	}
-	return safe
-}
-
-func hasIncompleteMJPEGFrame(buffer []byte) bool {
-	start := bytes.Index(buffer, []byte{0xFF, 0xD8})
-	if start < 0 {
-		return false
-	}
-	end := bytes.Index(buffer[start+2:], []byte{0xFF, 0xD9})
-	return end < 0
-}
-func removeDirectoryAfter(logger zerolog.Logger, dir string, delay time.Duration) {
-	if strings.TrimSpace(dir) == "" {
-		return
-	}
-	timer := time.NewTimer(delay)
-	defer timer.Stop()
-	<-timer.C
-	if err := os.RemoveAll(dir); err != nil {
-		logger.Warn().Err(err).Str("dir", dir).Msg("failed to remove expired hls cache directory")
-	}
-}
-
-func redactURLUserinfo(raw string) string {
-	parsed, err := url.Parse(raw)
-	if err != nil {
-		return raw
-	}
-	parsed.User = nil
-	return parsed.String()
-}
-
-func firstNonEmpty(values ...string) string {
-	for _, value := range values {
-		if strings.TrimSpace(value) != "" {
-			return value
-		}
-	}
-	return ""
-}
-
-func maxInt(left int, right int) int {
-	if left > right {
-		return left
-	}
-	return right
-}
-
-func resolvedScaleWidth(requested int, configured int) int {
-	if configured <= 0 {
-		return 0
-	}
-	if requested > 0 {
-		return requested
-	}
-	return configured
-}
-
-func buildFFmpegStartAttempts(cfg config.MediaConfig) []ffmpegStartAttempt {
-	attempts := make([]ffmpegStartAttempt, 0, 3)
-	if hardwareAccelEnabled(cfg.HWAccelArgs) {
-		attempts = append(attempts, ffmpegStartAttempt{
-			useHWAccel:  true,
-			inputPreset: cfg.InputPreset,
-		})
-	}
-	attempts = append(attempts, ffmpegStartAttempt{
-		useHWAccel:  false,
-		inputPreset: cfg.InputPreset,
-	})
-	if !strings.EqualFold(strings.TrimSpace(cfg.InputPreset), "stable") {
-		attempts = append(attempts, ffmpegStartAttempt{
-			useHWAccel:  false,
-			inputPreset: "stable",
-		})
-	}
-	return attempts
-}
-
-func buildRTSPInputArgs(profile streams.Profile, inputPreset string) []string {
-	args := []string{
-		"-rtsp_transport", firstNonEmpty(profile.RTSPTransport, "tcp"),
-	}
-	fflags := []string{"discardcorrupt", "genpts"}
-	switch strings.ToLower(strings.TrimSpace(inputPreset)) {
-	case "stable":
-	default:
-		fflags = append(fflags, "nobuffer")
-		args = append(args, "-flags", "low_delay")
-	}
-	args = append(args, "-fflags", "+"+strings.Join(fflags, "+"))
-	if profile.UseWallclockAsTimestamps {
-		args = append(args, "-use_wallclock_as_timestamps", "1")
-	}
-	args = append(args, "-i", profile.StreamURL)
-	return args
-}
-
-func buildFilterChain(frameRate int, scaleWidth int, sourceWidth int, sourceHeight int) []string {
-	filters := []string{"fps=" + strconv.Itoa(frameRate)}
-	if scaleWidth > 0 {
-		targetWidth, targetHeight, ok := computeScaledDimensions(sourceWidth, sourceHeight, scaleWidth)
-		if ok {
-			filters = append(filters, fmt.Sprintf("scale=%d:%d", targetWidth, targetHeight))
-		} else {
-			filters = append(filters, fmt.Sprintf("scale=%d:-2", scaleWidth))
-		}
-	}
-	return filters
-}
-
-func buildQSVFilterChain(frameRate int, scaleWidth int, sourceWidth int, sourceHeight int) []string {
-	options := []string{fmt.Sprintf("framerate=%d", frameRate)}
-	if scaleWidth > 0 {
-		targetWidth, targetHeight, ok := computeScaledDimensions(sourceWidth, sourceHeight, scaleWidth)
-		if ok {
-			options = append(options,
-				fmt.Sprintf("w=%d", targetWidth),
-				fmt.Sprintf("h=%d", targetHeight),
-			)
-		}
-	}
-	options = append(options, "format=nv12")
-	return []string{"vpp_qsv=" + strings.Join(options, ":")}
-}
-
-func computeScaledDimensions(sourceWidth int, sourceHeight int, targetWidth int) (int, int, bool) {
-	if sourceWidth <= 0 || sourceHeight <= 0 || targetWidth <= 0 {
-		return 0, 0, false
-	}
-
-	targetHeight := (sourceHeight * targetWidth) / sourceWidth
-	if targetHeight <= 0 {
-		return 0, 0, false
-	}
-	if targetHeight%2 != 0 {
-		targetHeight--
-	}
-	if targetHeight <= 0 {
-		return 0, 0, false
-	}
-	if targetWidth%2 != 0 {
-		targetWidth--
-	}
-	if targetWidth <= 0 {
-		return 0, 0, false
-	}
-	return targetWidth, targetHeight, true
-}
-
-func validateHLSFileName(name string) error {
-	if strings.TrimSpace(name) == "" {
-		return errors.New("invalid hls asset name")
-	}
-	if name != filepath.Base(name) || strings.Contains(name, "..") || strings.ContainsAny(name, `/\`) {
-		return errors.New("invalid hls asset name")
-	}
-	return nil
-}
-
-func contentTypeForHLSFile(name string) string {
-	switch strings.ToLower(filepath.Ext(name)) {
-	case ".m3u8":
-		return "application/vnd.apple.mpegurl"
-	case ".ts":
-		return "video/mp2t"
-	default:
-		return "application/octet-stream"
-	}
-}
-
-func formatFFmpegSeconds(duration time.Duration) string {
-	seconds := duration.Seconds()
-	formatted := strconv.FormatFloat(seconds, 'f', 3, 64)
-	formatted = strings.TrimRight(formatted, "0")
-	formatted = strings.TrimRight(formatted, ".")
-	if formatted == "" {
-		return "1"
-	}
-	return formatted
-}
-
-func playbackDurationFromStreamURL(raw string) (time.Duration, bool) {
-	parsed, err := url.Parse(strings.TrimSpace(raw))
-	if err != nil {
-		return 0, false
-	}
-
-	query := parsed.Query()
-	startRaw := strings.TrimSpace(query.Get("starttime"))
-	endRaw := strings.TrimSpace(query.Get("endtime"))
-	if startRaw == "" || endRaw == "" {
-		return 0, false
-	}
-
-	startTime, err := time.Parse("2006_01_02_15_04_05", startRaw)
-	if err != nil {
-		return 0, false
-	}
-	endTime, err := time.Parse("2006_01_02_15_04_05", endRaw)
-	if err != nil || !endTime.After(startTime) {
-		return 0, false
-	}
-	return endTime.Sub(startTime), true
-}
-
-func ffmpegLogLevel(cfg config.MediaConfig) string {
-	level := strings.ToLower(strings.TrimSpace(cfg.FFmpegLogLevel))
-	switch level {
-	case "quiet", "panic", "fatal", "error", "warning", "info", "verbose", "debug", "trace":
-		return level
-	default:
-		return "error"
-	}
-}
-
-func hardwareAccelEnabled(args []string) bool {
-	return len(args) > 0
-}
-
-func appendInputHWAccelArgs(args []string, cfg config.MediaConfig, useHWAccel bool) []string {
-	if !useHWAccel {
-		return args
-	}
-
-	args = append(args, cfg.HWAccelArgs...)
-	if qsvHWAccelConfigured(cfg.HWAccelArgs) && !containsArg(cfg.HWAccelArgs, "-hwaccel_output_format") {
-		args = append(args, "-hwaccel_output_format", "qsv")
-	}
-	return args
-}
-
-func qsvHWAccelConfigured(args []string) bool {
-	for _, arg := range args {
-		if strings.Contains(strings.ToLower(strings.TrimSpace(arg)), "qsv") {
-			return true
-		}
-	}
-	return false
-}
-
-func containsArg(args []string, target string) bool {
-	for _, arg := range args {
-		if strings.EqualFold(strings.TrimSpace(arg), target) {
-			return true
-		}
-	}
-	return false
-}
-
-func useQSVVideoEncoder(cfg config.MediaConfig, useHWAccel bool) bool {
-	return useHWAccel &&
-		hardwareAccelEnabled(cfg.HWAccelArgs) &&
-		strings.EqualFold(strings.TrimSpace(cfg.VideoEncoder), "qsv")
-}
-
-func appendVideoFilterArgs(args []string, cfg config.MediaConfig, scaleWidth int, profile streams.Profile, useHWAccel bool, frameRate int) []string {
-	var filterChain []string
-	if useQSVVideoEncoder(cfg, useHWAccel) {
-		filterChain = buildQSVFilterChain(frameRate, scaleWidth, profile.SourceWidth, profile.SourceHeight)
-	} else {
-		filterChain = buildFilterChain(frameRate, scaleWidth, profile.SourceWidth, profile.SourceHeight)
-	}
-	if len(filterChain) == 0 {
-		return args
-	}
-	return append(args, "-vf", strings.Join(filterChain, ","))
-}
-
-func appendVideoEncoderArgs(args []string, cfg config.MediaConfig, useHWAccel bool, gopSize int, softwarePreset string) []string {
-	if useQSVVideoEncoder(cfg, useHWAccel) {
-		return append(args,
-			"-c:v", "h264_qsv",
-			"-pix_fmt", "nv12",
-			"-profile:v", "baseline",
-			"-g", strconv.Itoa(gopSize),
-			"-keyint_min", strconv.Itoa(gopSize),
-			"-sc_threshold", "0",
-			"-bf", "0",
-		)
-	}
-
-	return append(args,
-		"-c:v", "libx264",
-		"-preset", softwarePreset,
-		"-tune", "zerolatency",
-		"-pix_fmt", "yuv420p",
-		"-profile:v", "baseline",
-		"-g", strconv.Itoa(gopSize),
-		"-keyint_min", strconv.Itoa(gopSize),
-		"-sc_threshold", "0",
-		"-bf", "0",
-	)
-}
-
-func appendMJPEGEncoderArgs(args []string, cfg config.MediaConfig, useHWAccel bool) []string {
-	if useQSVVideoEncoder(cfg, useHWAccel) {
-		return append(args,
-			"-c:v", "mjpeg_qsv",
-			"-global_quality", strconv.Itoa(mapSoftwareJPEGQualityToQSV(cfg.JPEGQuality)),
-		)
-	}
-
-	return append(args,
-		"-q:v", strconv.Itoa(cfg.JPEGQuality),
-	)
-}
-
-func mapSoftwareJPEGQualityToQSV(jpegQuality int) int {
-	if jpegQuality <= 0 {
-		return 80
-	}
-	quality := 100 - ((jpegQuality - 1) * 5)
-	if quality < 1 {
-		return 1
-	}
-	if quality > 100 {
-		return 100
-	}
-	return quality
-}
-
-func isHardwareAccelFailure(stderrText string) bool {
-	text := strings.ToLower(strings.TrimSpace(stderrText))
-	if text == "" {
-		return false
-	}
-	return strings.Contains(text, "device creation failed") ||
-		strings.Contains(text, "hardware device setup failed") ||
-		strings.Contains(text, "no device available for decoder") ||
-		strings.Contains(text, "hevc_qsv") ||
-		strings.Contains(text, "h264_qsv")
-}
-
-func isOptionalAudioOutputFailure(stderrText string) bool {
-	text := strings.ToLower(strings.TrimSpace(stderrText))
-	if text == "" {
-		return false
-	}
-	return strings.Contains(text, "stream map '?' matches no streams; ignoring") &&
-		strings.Contains(text, "output file does not contain any stream")
-}
-
 func redactFFmpegArgs(args []string) []string {
 	redacted := make([]string, 0, len(args))
 	for _, arg := range args {
 		redacted = append(redacted, redactURLUserinfo(arg))
 	}
 	return redacted
+}
+
+func (m *Manager) workerStatusesLocked() []WorkerStatus {
+	statuses := make([]WorkerStatus, 0, len(m.mjpegWorkers)+len(m.hlsWorkers)+len(m.dashWorkers)+len(m.clipJobs)+len(m.webrtcPeers))
+	for _, w := range m.mjpegWorkers {
+		statuses = append(statuses, w.status())
+	}
+	for _, w := range m.hlsWorkers {
+		statuses = append(statuses, w.status())
+	}
+	for _, w := range m.dashWorkers {
+		statuses = append(statuses, w.status())
+	}
+	for _, job := range m.clipJobs {
+		statuses = append(statuses, job.status())
+	}
+	for _, session := range m.webrtcPeers {
+		statuses = append(statuses, session.status())
+	}
+	return statuses
+}
+
+func (m *Manager) logWorkerInventoryLocked(action string, focus WorkerStatus) {
+	running := m.workerStatusesLocked()
+	sort.Slice(running, func(i int, j int) bool {
+		return workerStatusSortKey(running[i]) < workerStatusSortKey(running[j])
+	})
+
+	lines := make([]string, 0, len(running)+2)
+	lines = append(lines, "workers:")
+	lines = append(lines, action+": "+workerStatusSummaryLine(focus))
+	if len(running) == 0 {
+		lines = append(lines, "running: none")
+	} else {
+		for _, status := range running {
+			lines = append(lines, "running: "+workerStatusSummaryLine(status))
+		}
+	}
+
+	runningLabels := make([]string, 0, len(running))
+	for _, status := range running {
+		runningLabels = append(runningLabels, workerStatusSummaryLine(status))
+	}
+
+	m.logger.Info().
+		Str("worker_action", action).
+		Str("worker", workerStatusSummaryLine(focus)).
+		Strs("running_workers", runningLabels).
+		Interface("worker_status", focus).
+		Interface("running_statuses", running).
+		Msg(strings.Join(lines, "\n"))
+}
+
+func workerStatusSortKey(status WorkerStatus) string {
+	return fmt.Sprintf("%04d:%s:%s:%s:%s", status.Channel, workerStatusScope(status), strings.ToLower(status.Format), workerProfileStreamLabel(status.Profile), status.Key)
+}
+
+func workerStatusSummaryLine(status WorkerStatus) string {
+	label := workerStatusTypeLabel(status)
+	stream := workerProfileStreamLabel(status.Profile)
+	details := workerStatusDebugDetails(status)
+	if status.Channel > 0 {
+		return fmt.Sprintf("%s channel %d stream %s%s", label, status.Channel, stream, details)
+	}
+	return fmt.Sprintf("%s %s stream %s%s", label, status.StreamID, stream, details)
+}
+
+func workerStatusDebugDetails(status WorkerStatus) string {
+	parts := make([]string, 0, 4)
+
+	inputVideo := workerCodecLabel(status.SourceVideoCodec)
+	if inputVideo != "" {
+		if resolution := workerResolutionLabel(status.SourceWidth, status.SourceHeight); resolution != "" {
+			inputVideo += " " + resolution
+		}
+	}
+	inputAudio := workerCodecLabel(status.SourceAudioCodec)
+	if inputVideo != "" || inputAudio != "" {
+		input := inputVideo
+		if inputAudio != "" {
+			if input != "" {
+				input += "/"
+			}
+			input += inputAudio
+		}
+		if input != "" {
+			parts = append(parts, "in "+input)
+		}
+	}
+
+	outputVideo := workerCodecLabel(status.OutputVideoCodec)
+	if outputVideo != "" {
+		if resolution := workerResolutionLabel(status.OutputWidth, status.OutputHeight); resolution != "" {
+			outputVideo += " " + resolution
+		}
+	}
+	outputAudio := workerCodecLabel(status.OutputAudioCodec)
+	if outputVideo != "" || outputAudio != "" {
+		output := outputVideo
+		if outputAudio != "" {
+			if output != "" {
+				output += "/"
+			}
+			output += outputAudio
+		}
+		if output != "" {
+			parts = append(parts, "out "+output)
+		}
+	}
+
+	if status.InputPreset != "" {
+		parts = append(parts, status.InputPreset)
+	}
+	if status.HWAccelActive {
+		parts = append(parts, "hw")
+	} else if status.OutputVideoEncoder != "" {
+		parts = append(parts, "sw")
+	}
+
+	if len(parts) == 0 {
+		return ""
+	}
+	return " [" + strings.Join(parts, " | ") + "]"
+}
+
+func workerStatusTypeLabel(status WorkerStatus) string {
+	if strings.EqualFold(strings.TrimSpace(status.Format), "clip") {
+		if workerStatusScope(status) == "archive" {
+			return "MP4 export"
+		}
+		return "MP4 clip"
+	}
+	scopePrefix := "Live"
+	if workerStatusScope(status) == "archive" {
+		scopePrefix = "Archive"
+	}
+	return scopePrefix + " " + workerFormatLabel(status.Format)
+}
+
+func workerStatusScope(status WorkerStatus) string {
+	if strings.HasPrefix(strings.TrimSpace(status.StreamID), "nvrpb_") {
+		return "archive"
+	}
+	return "live"
+}
+
+func workerFormatLabel(format string) string {
+	switch strings.ToLower(strings.TrimSpace(format)) {
+	case "hls":
+		return "HLS"
+	case "dash":
+		return "DASH"
+	case "mjpeg":
+		return "MJPEG"
+	case "webrtc":
+		return "WebRTC"
+	case "clip":
+		return "MP4"
+	default:
+		normalized := strings.TrimSpace(format)
+		if normalized == "" {
+			return "Worker"
+		}
+		return strings.ToUpper(normalized)
+	}
+}
+
+func workerProfileStreamLabel(profile string) string {
+	switch strings.ToLower(strings.TrimSpace(profile)) {
+	case "quality", "default", "main":
+		return "main"
+	case "stable", "substream", "sub":
+		return "substream"
+	case "":
+		return "default"
+	default:
+		return strings.TrimSpace(profile)
+	}
+}
+
+func workerCodecLabel(codec string) string {
+	switch strings.ToLower(strings.TrimSpace(codec)) {
+	case "", "unknown":
+		return ""
+	case "h264", "h.264", "smart h.264+", "h.264b", "h.264h", "h.264m":
+		return "H.264"
+	case "h265", "h.265", "hevc", "smart h.265+", "h.265h":
+		return "H.265"
+	case "aac":
+		return "AAC"
+	case "mjpeg", "mjpg":
+		return "MJPEG"
+	case "opus", "audio/opus":
+		return "Opus"
+	case "g.711a":
+		return "G.711A"
+	case "g.711u":
+		return "G.711U"
+	default:
+		return strings.TrimSpace(codec)
+	}
+}
+
+func workerResolutionLabel(width int, height int) string {
+	if width <= 0 || height <= 0 {
+		return ""
+	}
+	return fmt.Sprintf("%dx%d", width, height)
+}
+
+func resolvedOutputDimensions(sourceWidth int, sourceHeight int, requestedScaleWidth int) (int, int) {
+	if sourceWidth <= 0 || sourceHeight <= 0 {
+		return 0, 0
+	}
+	if targetWidth, targetHeight, ok := computeScaledDimensions(sourceWidth, sourceHeight, requestedScaleWidth); ok {
+		return targetWidth, targetHeight
+	}
+	return sourceWidth, sourceHeight
+}
+
+func workerH264EncoderLabel(cfg config.MediaConfig, useHWAccel bool) string {
+	if useQSVVideoEncoder(cfg, useHWAccel) {
+		return "h264_qsv"
+	}
+	return "libx264"
+}
+
+func workerMJPEGEncoderLabel(cfg config.MediaConfig, useHWAccel bool) string {
+	if useQSVVideoEncoder(cfg, useHWAccel) {
+		return "mjpeg_qsv"
+	}
+	return "mjpeg"
+}
+
+func conditionalCodec(enabled bool, codec string) string {
+	if !enabled {
+		return ""
+	}
+	return codec
+}
+
+func detectWorkerChannel(streamID string, sourceURL string) int {
+	streamID = strings.TrimSpace(streamID)
+	if marker := strings.LastIndex(streamID, "_channel_"); marker >= 0 {
+		channel, err := strconv.Atoi(strings.TrimLeft(streamID[marker+len("_channel_"):], "0"))
+		if err == nil && channel > 0 {
+			return channel
+		}
+		if strings.HasSuffix(streamID, "_channel_00") {
+			return 0
+		}
+	}
+
+	parsed, err := url.Parse(strings.TrimSpace(sourceURL))
+	if err != nil {
+		return 0
+	}
+	channel, err := strconv.Atoi(strings.TrimSpace(parsed.Query().Get("channel")))
+	if err != nil || channel <= 0 {
+		return 0
+	}
+	return channel
 }

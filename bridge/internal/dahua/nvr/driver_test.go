@@ -744,6 +744,59 @@ func TestDriverFindRecordingsEventFilterUsesEventFlagAndDropsTimingResults(t *te
 	}
 }
 
+func TestDriverFindRecordingsCGIUsesLocalWallClock(t *testing.T) {
+	previousLocal := time.Local
+	time.Local = time.FixedZone("EEST", 3*60*60)
+	t.Cleanup(func() {
+		time.Local = previousLocal
+	})
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Query().Get("action") {
+		case "factory.create":
+			_, _ = w.Write([]byte("result=handle1\n"))
+		case "findFile":
+			query := r.URL.Query()
+			if query.Get("condition.StartTime") != "2026-04-30 00:00:00" {
+				t.Fatalf("unexpected local start time %+v", query)
+			}
+			if query.Get("condition.EndTime") != "2026-04-30 01:00:00" {
+				t.Fatalf("unexpected local end time %+v", query)
+			}
+			_, _ = w.Write([]byte("OK"))
+		case "findNextFile":
+			_, _ = w.Write([]byte("found=0\n"))
+		case "close":
+			_, _ = w.Write([]byte("OK"))
+		default:
+			http.Error(w, "unexpected action", http.StatusBadRequest)
+		}
+	}))
+	defer server.Close()
+
+	cfg := config.DeviceConfig{
+		ID:               "west20_nvr",
+		BaseURL:          server.URL,
+		Username:         "assistant",
+		Password:         "secret",
+		ChannelAllowlist: []int{1},
+		RequestTimeout:   5 * time.Second,
+	}
+	metricsRegistry := metrics.New(buildinfo.Info())
+	driver := New(cfg, config.ImouConfig{}, nil, nil, zerolog.Nop(), metricsRegistry, cgi.New(cfg, metricsRegistry))
+	driver.rpc = nil
+
+	_, err := driver.FindRecordings(context.Background(), dahua.NVRRecordingQuery{
+		Channel:   1,
+		StartTime: time.Date(2026, 4, 29, 21, 0, 0, 0, time.UTC),
+		EndTime:   time.Date(2026, 4, 29, 22, 0, 0, 0, time.UTC),
+		Limit:     10,
+	})
+	if err != nil {
+		t.Fatalf("FindRecordings returned error: %v", err)
+	}
+}
+
 func TestRecordingEventConditionSupportsArchiveAliases(t *testing.T) {
 	testCases := map[string]string{
 		"com.All":                  "*",

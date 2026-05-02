@@ -36,6 +36,7 @@ type playbackSession struct {
 	MainResolution     string
 	SubCodec           string
 	SubResolution      string
+	AudioCodec         string
 	RecommendedProfile string
 	CreatedAt          time.Time
 	ExpiresAt          time.Time
@@ -49,6 +50,7 @@ type playbackSourceMetadata struct {
 	MainResolution     string
 	SubCodec           string
 	SubResolution      string
+	AudioCodec         string
 	RecommendedProfile string
 }
 
@@ -157,6 +159,7 @@ func (r *runtimeServices) newPlaybackSession(deviceID string, request dahua.NVRP
 		MainResolution:     metadata.MainResolution,
 		SubCodec:           metadata.SubCodec,
 		SubResolution:      metadata.SubResolution,
+		AudioCodec:         metadata.AudioCodec,
 		RecommendedProfile: firstNonEmptyPlayback(metadata.RecommendedProfile, "stable"),
 		CreatedAt:          now,
 		ExpiresAt:          now.Add(playbackSessionTTL),
@@ -185,6 +188,7 @@ func (r *runtimeServices) lookupPlaybackSourceMetadata(deviceID string, channel 
 			MainResolution:     entry.MainResolution,
 			SubCodec:           entry.SubCodec,
 			SubResolution:      entry.SubResolution,
+			AudioCodec:         entry.AudioCodec,
 			RecommendedProfile: entry.RecommendedProfile,
 		}
 	}
@@ -236,6 +240,7 @@ func (r *runtimeServices) playbackSessionResponse(session playbackSession) dahua
 	for _, profileName := range []string{"quality", "default", "stable", "substream"} {
 		profiles[profileName] = dahua.NVRPlaybackProfile{
 			Name:           profileName,
+			DASHURL:        playbackDASHURL(r.cfg.HomeAssistant.PublicBaseURL, session.ID, profileName),
 			HLSURL:         playbackHLSURL(r.cfg.HomeAssistant.PublicBaseURL, session.ID, profileName),
 			MJPEGURL:       playbackMJPEGURL(r.cfg.HomeAssistant.PublicBaseURL, session.ID, profileName),
 			WebRTCOfferURL: playbackWebRTCOfferURL(r.cfg.HomeAssistant.PublicBaseURL, session.ID, profileName),
@@ -274,6 +279,7 @@ func buildPlaybackEntry(cfg config.Config, deviceCfg config.DeviceConfig, sessio
 		MainResolution:     session.MainResolution,
 		SubCodec:           session.SubCodec,
 		SubResolution:      session.SubResolution,
+		AudioCodec:         session.AudioCodec,
 		RecommendedProfile: recommended,
 		Profiles:           buildPlaybackProfiles(cfg, deviceCfg, session, includeCredentials, recommended),
 	}
@@ -289,11 +295,13 @@ func buildPlaybackProfiles(cfg config.Config, deviceCfg config.DeviceConfig, ses
 		subWidth, subHeight = 0, 0
 	}
 	mainSubtype := 0
-	stableSubtype := 0
+	stableSubtype := 1
 	substreamSubtype := 1
-	stableWidth, stableHeight := mainWidth, mainHeight
+	stableWidth, stableHeight := subWidth, subHeight
 	substreamWidth, substreamHeight := subWidth, subHeight
 	if strings.TrimSpace(session.SubResolution) == "" {
+		stableSubtype = mainSubtype
+		stableWidth, stableHeight = mainWidth, mainHeight
 		substreamSubtype = mainSubtype
 		substreamWidth, substreamHeight = mainWidth, mainHeight
 	}
@@ -304,8 +312,11 @@ func buildPlaybackProfiles(cfg config.Config, deviceCfg config.DeviceConfig, ses
 			StreamURL:                buildPlaybackRTSPURL(deviceCfg, session.Channel, mainSubtype, session.SeekTime, session.EndTime, includeCredentials),
 			LocalMJPEGURL:            playbackMJPEGURL(cfg.HomeAssistant.PublicBaseURL, session.ID, "default"),
 			LocalHLSURL:              playbackHLSURL(cfg.HomeAssistant.PublicBaseURL, session.ID, "default"),
+			LocalDASHURL:             playbackDASHURL(cfg.HomeAssistant.PublicBaseURL, session.ID, "default"),
 			LocalWebRTCURL:           playbackWebRTCPageURL(cfg.HomeAssistant.PublicBaseURL, session.ID, "default"),
 			Subtype:                  mainSubtype,
+			VideoCodec:               session.MainCodec,
+			AudioCodec:               session.AudioCodec,
 			SourceWidth:              mainWidth,
 			SourceHeight:             mainHeight,
 			UseWallclockAsTimestamps: true,
@@ -316,9 +327,12 @@ func buildPlaybackProfiles(cfg config.Config, deviceCfg config.DeviceConfig, ses
 			StreamURL:                buildPlaybackRTSPURL(deviceCfg, session.Channel, mainSubtype, session.SeekTime, session.EndTime, includeCredentials),
 			LocalMJPEGURL:            playbackMJPEGURL(cfg.HomeAssistant.PublicBaseURL, session.ID, "quality"),
 			LocalHLSURL:              playbackHLSURL(cfg.HomeAssistant.PublicBaseURL, session.ID, "quality"),
+			LocalDASHURL:             playbackDASHURL(cfg.HomeAssistant.PublicBaseURL, session.ID, "quality"),
 			LocalWebRTCURL:           playbackWebRTCPageURL(cfg.HomeAssistant.PublicBaseURL, session.ID, "quality"),
 			Subtype:                  mainSubtype,
 			RTSPTransport:            "tcp",
+			VideoCodec:               session.MainCodec,
+			AudioCodec:               session.AudioCodec,
 			SourceWidth:              mainWidth,
 			SourceHeight:             mainHeight,
 			UseWallclockAsTimestamps: true,
@@ -329,10 +343,13 @@ func buildPlaybackProfiles(cfg config.Config, deviceCfg config.DeviceConfig, ses
 			StreamURL:                buildPlaybackRTSPURL(deviceCfg, session.Channel, stableSubtype, session.SeekTime, session.EndTime, includeCredentials),
 			LocalMJPEGURL:            playbackMJPEGURL(cfg.HomeAssistant.PublicBaseURL, session.ID, "stable"),
 			LocalHLSURL:              playbackHLSURL(cfg.HomeAssistant.PublicBaseURL, session.ID, "stable"),
+			LocalDASHURL:             playbackDASHURL(cfg.HomeAssistant.PublicBaseURL, session.ID, "stable"),
 			LocalWebRTCURL:           playbackWebRTCPageURL(cfg.HomeAssistant.PublicBaseURL, session.ID, "stable"),
 			Subtype:                  stableSubtype,
 			RTSPTransport:            "tcp",
 			FrameRate:                cfg.Media.StableFrameRate,
+			VideoCodec:               firstNonEmptyPlayback(session.SubCodec, session.MainCodec),
+			AudioCodec:               session.AudioCodec,
 			SourceWidth:              stableWidth,
 			SourceHeight:             stableHeight,
 			UseWallclockAsTimestamps: true,
@@ -343,10 +360,13 @@ func buildPlaybackProfiles(cfg config.Config, deviceCfg config.DeviceConfig, ses
 			StreamURL:                buildPlaybackRTSPURL(deviceCfg, session.Channel, substreamSubtype, session.SeekTime, session.EndTime, includeCredentials),
 			LocalMJPEGURL:            playbackMJPEGURL(cfg.HomeAssistant.PublicBaseURL, session.ID, "substream"),
 			LocalHLSURL:              playbackHLSURL(cfg.HomeAssistant.PublicBaseURL, session.ID, "substream"),
+			LocalDASHURL:             playbackDASHURL(cfg.HomeAssistant.PublicBaseURL, session.ID, "substream"),
 			LocalWebRTCURL:           playbackWebRTCPageURL(cfg.HomeAssistant.PublicBaseURL, session.ID, "substream"),
 			Subtype:                  substreamSubtype,
 			RTSPTransport:            "tcp",
 			FrameRate:                cfg.Media.SubstreamFrameRate,
+			VideoCodec:               firstNonEmptyPlayback(session.SubCodec, session.MainCodec),
+			AudioCodec:               session.AudioCodec,
 			SourceWidth:              substreamWidth,
 			SourceHeight:             substreamHeight,
 			UseWallclockAsTimestamps: true,
@@ -360,6 +380,9 @@ func buildPlaybackRTSPURL(deviceCfg config.DeviceConfig, channel int, subtype in
 	if err != nil || base.Hostname() == "" {
 		return ""
 	}
+
+	startTime = startTime.In(time.Local)
+	endTime = endTime.In(time.Local)
 
 	host := base.Hostname()
 	if port := base.Port(); port != "" && port != "80" && port != "443" {
@@ -406,6 +429,15 @@ func playbackMJPEGURL(publicBaseURL string, streamID string, profile string) str
 func playbackHLSURL(publicBaseURL string, streamID string, profile string) string {
 	publicBaseURL = strings.TrimRight(strings.TrimSpace(publicBaseURL), "/")
 	path := "/api/v1/media/hls/" + url.PathEscape(streamID) + "/" + url.PathEscape(profile) + "/index.m3u8"
+	if publicBaseURL == "" {
+		return path
+	}
+	return publicBaseURL + path
+}
+
+func playbackDASHURL(publicBaseURL string, streamID string, profile string) string {
+	publicBaseURL = strings.TrimRight(strings.TrimSpace(publicBaseURL), "/")
+	path := "/api/v1/media/dash/" + url.PathEscape(streamID) + "/" + url.PathEscape(profile) + "/manifest.mpd"
 	if publicBaseURL == "" {
 		return path
 	}
