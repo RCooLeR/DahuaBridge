@@ -50,6 +50,8 @@ export {
 
 const STREAM_STYLE_ELEMENT_ID = "dahuabridge-remote-stream-style";
 const streamShadowObservers = new WeakMap<Node, MutationObserver>();
+const viewportAudioObservers = new WeakMap<Node, MutationObserver>();
+const viewportAudioState = new WeakMap<ParentNode, boolean>();
 const STREAM_HOST_SELECTOR = "ha-camera-stream, dahuabridge-remote-stream";
 
 export function renderLiveViewport(
@@ -267,22 +269,10 @@ export function syncViewportAudioState(
     return false;
   }
 
-  const remoteStream = container.querySelector<RemoteStreamAudioHost>(
-    "dahuabridge-remote-stream",
-  );
-  if (remoteStream) {
-    remoteStream.syncAudioState(muted);
-    return true;
-  }
-
-  const video = findVideoElementInTree(container);
-  if (!video) {
-    return false;
-  }
-  video.dataset.audioMuted = muted ? "true" : "false";
-  video.muted = muted;
-  void video.play().catch(() => undefined);
-  return true;
+  viewportAudioState.set(container, muted);
+  const applied = applyViewportAudioState(container, muted);
+  observeViewportAudioState(container, container);
+  return applied;
 }
 
 export function cameraImageSrc(
@@ -341,7 +331,87 @@ function uniqueSourceOrder(
   return ordered;
 }
 
-function findVideoElementInTree(root: ParentNode): HTMLVideoElement | null {
+function applyViewportAudioState(
+  container: ParentNode,
+  muted: boolean,
+): boolean {
+  const remoteStreams = new Set<RemoteStreamAudioHost>();
+  const videos = new Set<HTMLVideoElement>();
+  const pending: ParentNode[] = [container];
+  const visited = new Set<ParentNode>();
+
+  while (pending.length > 0) {
+    const current = pending.pop();
+    if (!current || visited.has(current)) {
+      continue;
+    }
+    visited.add(current);
+
+    if (current instanceof HTMLVideoElement) {
+      videos.add(current);
+    }
+    if (
+      current instanceof HTMLElement &&
+      current.tagName.toLowerCase() === "dahuabridge-remote-stream"
+    ) {
+      remoteStreams.add(current as RemoteStreamAudioHost);
+    }
+
+    for (const remoteStream of current.querySelectorAll("dahuabridge-remote-stream")) {
+      if (remoteStream instanceof HTMLElement) {
+        remoteStreams.add(remoteStream as RemoteStreamAudioHost);
+      }
+    }
+    for (const video of current.querySelectorAll("video")) {
+      if (video instanceof HTMLVideoElement) {
+        videos.add(video);
+      }
+    }
+    for (const element of current.querySelectorAll("*")) {
+      if (element.shadowRoot) {
+        pending.push(element.shadowRoot);
+      }
+    }
+  }
+
+  for (const remoteStream of remoteStreams) {
+    remoteStream.syncAudioState(muted);
+  }
+  for (const video of videos) {
+    applyVideoAudioState(video, muted);
+  }
+
+  return remoteStreams.size > 0 || videos.size > 0;
+}
+
+function observeViewportAudioState(
+  root: ParentNode,
+  container: ParentNode,
+): void {
+  if (viewportAudioObservers.has(root)) {
+    return;
+  }
+
+  const observer = new MutationObserver(() => {
+    const muted = viewportAudioState.get(container);
+    if (muted === undefined) {
+      return;
+    }
+    applyViewportAudioState(container, muted);
+    observeViewportAudioShadowRoots(container, container);
+  });
+  observer.observe(root, {
+    childList: true,
+    subtree: true,
+  });
+  viewportAudioObservers.set(root, observer);
+  observeViewportAudioShadowRoots(root, container);
+}
+
+function observeViewportAudioShadowRoots(
+  root: ParentNode,
+  container: ParentNode,
+): void {
   const pending: ParentNode[] = [root];
   const visited = new Set<ParentNode>();
 
@@ -352,19 +422,29 @@ function findVideoElementInTree(root: ParentNode): HTMLVideoElement | null {
     }
     visited.add(current);
 
-    const directVideo = current.querySelector("video");
-    if (directVideo instanceof HTMLVideoElement) {
-      return directVideo;
+    if (current instanceof Element && current.shadowRoot) {
+      observeViewportAudioState(current.shadowRoot, container);
+      pending.push(current.shadowRoot);
     }
 
     for (const element of current.querySelectorAll("*")) {
       if (element.shadowRoot) {
+        observeViewportAudioState(element.shadowRoot, container);
         pending.push(element.shadowRoot);
       }
     }
   }
+}
 
-  return null;
+function applyVideoAudioState(
+  video: HTMLVideoElement,
+  muted: boolean,
+): void {
+  video.dataset.audioMuted = muted ? "true" : "false";
+  video.defaultMuted = muted;
+  video.muted = muted;
+  video.toggleAttribute("muted", muted);
+  void video.play().catch(() => undefined);
 }
 
 function applyHostStreamStyles(streamHost: Element): void {
