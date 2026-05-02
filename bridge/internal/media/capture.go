@@ -27,9 +27,10 @@ var (
 type ClipStatus string
 
 const (
-	ClipStatusRecording ClipStatus = "recording"
-	ClipStatusCompleted ClipStatus = "completed"
-	ClipStatusFailed    ClipStatus = "failed"
+	ClipStatusRecording         ClipStatus = "recording"
+	ClipStatusCompleted         ClipStatus = "completed"
+	ClipStatusFailed            ClipStatus = "failed"
+	ArchiveIFramePrefixDuration            = 500 * time.Millisecond
 )
 
 type ClipInfo struct {
@@ -59,23 +60,28 @@ type ClipStartRequest struct {
 }
 
 type DirectClipStartRequest struct {
-	StreamID                     string
-	RootDeviceID                 string
-	SourceDeviceID               string
-	DeviceKind                   dahua.DeviceKind
-	Name                         string
-	Channel                      int
-	ProfileName                  string
-	Duration                     time.Duration
-	SourceURL                    string
-	VideoCodec                   string
-	AudioCodec                   string
-	SourceWidth                  int
-	SourceHeight                 int
-	RTSPTransport                string
-	UseWallclockAsTimestamps     bool
-	Recommended                  bool
-	TemporarySourcePathToCleanup string
+	StreamID                      string
+	RootDeviceID                  string
+	SourceDeviceID                string
+	DeviceKind                    dahua.DeviceKind
+	Name                          string
+	Channel                       int
+	ProfileName                   string
+	Duration                      time.Duration
+	SourceURL                     string
+	VideoCodec                    string
+	AudioCodec                    string
+	SourceWidth                   int
+	SourceHeight                  int
+	RTSPTransport                 string
+	UseWallclockAsTimestamps      bool
+	Recommended                   bool
+	SourceStartAt                 time.Time
+	SourceEndAt                   time.Time
+	InputSeekOffset               time.Duration
+	PrefixSourceURL               string
+	PrefixDuration                time.Duration
+	TemporarySourcePathsToCleanup []string
 }
 
 type ClipQuery struct {
@@ -88,16 +94,16 @@ type ClipQuery struct {
 }
 
 type clipJob struct {
-	info                ClipInfo
-	outputPath          string
-	metaPath            string
-	profile             streams.Profile
-	parent              *Manager
-	includeAudio        bool
-	temporarySourcePath string
-	stdin               io.WriteCloser
-	cmd                 *exec.Cmd
-	logger              zerolog.Logger
+	info                 ClipInfo
+	outputPath           string
+	metaPath             string
+	profile              streams.Profile
+	parent               *Manager
+	includeAudio         bool
+	temporarySourcePaths []string
+	stdin                io.WriteCloser
+	cmd                  *exec.Cmd
+	logger               zerolog.Logger
 
 	mu      sync.Mutex
 	done    chan struct{}
@@ -162,7 +168,7 @@ func (m *Manager) StartClip(ctx context.Context, request ClipStartRequest) (Clip
 	if duration < 0 {
 		duration = 0
 	}
-	return m.startClipJob(ctx, entry, profile, resolvedProfileName, duration, "")
+	return m.startClipJob(ctx, entry, profile, resolvedProfileName, duration, time.Time{}, time.Time{}, nil)
 }
 
 func (m *Manager) StartDirectClip(ctx context.Context, request DirectClipStartRequest) (ClipInfo, error) {
@@ -192,11 +198,14 @@ func (m *Manager) StartDirectClip(ctx context.Context, request DirectClipStartRe
 		SourceHeight:             request.SourceHeight,
 		UseWallclockAsTimestamps: request.UseWallclockAsTimestamps,
 		Recommended:              request.Recommended,
+		InputSeekOffset:          int64(request.InputSeekOffset),
+		InputPrefixURL:           strings.TrimSpace(request.PrefixSourceURL),
+		InputPrefixDuration:      int64(request.PrefixDuration),
 	}
-	return m.startClipJob(ctx, entry, profile, profileName, request.Duration, request.TemporarySourcePathToCleanup)
+	return m.startClipJob(ctx, entry, profile, profileName, request.Duration, request.SourceStartAt, request.SourceEndAt, request.TemporarySourcePathsToCleanup)
 }
 
-func (m *Manager) startClipJob(ctx context.Context, entry streams.Entry, profile streams.Profile, resolvedProfileName string, duration time.Duration, temporarySourcePath string) (ClipInfo, error) {
+func (m *Manager) startClipJob(ctx context.Context, entry streams.Entry, profile streams.Profile, resolvedProfileName string, duration time.Duration, explicitSourceStartAt time.Time, explicitSourceEndAt time.Time, temporarySourcePaths []string) (ClipInfo, error) {
 	clipDir := strings.TrimSpace(m.cfg.ClipPath)
 	if clipDir == "" {
 		return ClipInfo{}, errClipStorageMissing
@@ -205,7 +214,12 @@ func (m *Manager) startClipJob(ctx context.Context, entry streams.Entry, profile
 		return ClipInfo{}, fmt.Errorf("create clip directory: %w", err)
 	}
 
-	sourceStartAt, sourceEndAt := clipSourceWindow(profile.StreamURL, duration)
+	sourceStartAt, sourceEndAt := explicitSourceStartAt, explicitSourceEndAt
+	if sourceStartAt.IsZero() && sourceEndAt.IsZero() {
+		sourceStartAt, sourceEndAt = clipSourceWindowForProfile(profile, duration)
+	} else if sourceEndAt.IsZero() && !sourceStartAt.IsZero() && duration > 0 {
+		sourceEndAt = sourceStartAt.Add(duration)
+	}
 
 	job := &clipJob{
 		info: ClipInfo{
@@ -224,10 +238,10 @@ func (m *Manager) startClipJob(ctx context.Context, entry streams.Entry, profile
 			Duration:       duration,
 			FileName:       "",
 		},
-		profile:             profile,
-		parent:              m,
-		done:                make(chan struct{}),
-		temporarySourcePath: temporarySourcePath,
+		profile:              profile,
+		parent:               m,
+		done:                 make(chan struct{}),
+		temporarySourcePaths: append([]string(nil), temporarySourcePaths...),
 		logger: m.logger.With().
 			Str("stream_id", entry.ID).
 			Str("profile", resolvedProfileName).

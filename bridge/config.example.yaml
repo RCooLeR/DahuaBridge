@@ -195,6 +195,11 @@ devices:
       username: admin
       # Primary device login password.
       password: change-me
+      # Optional separate credentials for Dahua RPC2/RPC3 calls. Use this when the regular device user can read
+      # status/video but privileged RPC archive calls such as StorageAssistant.getIFrameData require the real NVR admin.
+      # Leave these commented to reuse username/password above.
+      # rpc_username: admin
+      # rpc_password: change-me-rpc
       # Whether to use ONVIF discovery/probing for this device when supported.
       onvif_enabled: true
       # Optional ONVIF username. Often same as username, but can differ if ONVIF has separate credentials.

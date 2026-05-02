@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/cookiejar"
 	"strings"
 	"sync"
 	"time"
@@ -22,6 +23,7 @@ const (
 	loginPath        = "/RPC2_Login"
 	rpcPath          = "/RPC2"
 	rpc3LoadfilePath = "/RPC3_Loadfile"
+	webUserAgent     = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36"
 )
 
 type Client struct {
@@ -76,8 +78,8 @@ func New(cfg config.DeviceConfig, loggers ...zerolog.Logger) *Client {
 	}
 	return &Client{
 		baseURL:    cfg.BaseURL,
-		username:   cfg.Username,
-		password:   cfg.Password,
+		username:   cfg.RPCUsernameValue(),
+		password:   cfg.RPCPasswordValue(),
 		clientType: "Web3.0",
 		loginType:  "Direct",
 		http:       newHTTPClient(cfg),
@@ -90,8 +92,8 @@ func (c *Client) UpdateConfig(cfg config.DeviceConfig) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.baseURL = cfg.BaseURL
-	c.username = cfg.Username
-	c.password = cfg.Password
+	c.username = cfg.RPCUsernameValue()
+	c.password = cfg.RPCPasswordValue()
 	c.http = newHTTPClient(cfg)
 	c.session = nil
 }
@@ -209,6 +211,7 @@ func (c *Client) ensureLogin(ctx context.Context) error {
 			"clientType":    c.clientType,
 			"loginType":     c.loginType,
 			"authorityType": firstNonEmpty(challenge.Encryption, "Default"),
+			"passwordType":  "Default",
 		},
 		ID:      c.nextRequestID(),
 		Session: firstResp.Session,
@@ -283,6 +286,7 @@ func (c *Client) post(ctx context.Context, path string, req Request, target *Res
 		return err
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
+	c.applyBrowserHeaders(httpReq, req.Session)
 
 	started := time.Now()
 	resp, err := client.Do(httpReq)
@@ -325,9 +329,7 @@ func (c *Client) postRaw(ctx context.Context, path string, req Request) (*http.R
 		return nil, err
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
-	if session := strings.TrimSpace(sessionHeaderValue(req.Session)); session != "" {
-		httpReq.Header.Set("X-Api-Session", session)
-	}
+	c.applyBrowserHeaders(httpReq, req.Session)
 
 	started := time.Now()
 	resp, err := client.Do(httpReq)
@@ -402,10 +404,15 @@ func (c *Client) currentPassword() string {
 }
 
 func newHTTPClient(cfg config.DeviceConfig) *http.Client {
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		jar = nil
+	}
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.TLSClientConfig = dahuatransport.LegacyTLSConfig(cfg.InsecureSkipTLS)
 	return &http.Client{
 		Transport: transport,
+		Jar:       jar,
 		Timeout:   cfg.RequestTimeout,
 	}
 }
@@ -449,6 +456,32 @@ func sessionHeaderValue(session any) string {
 	default:
 		return fmt.Sprint(session)
 	}
+}
+
+func (c *Client) applyBrowserHeaders(req *http.Request, session any) {
+	req.Header.Set("Accept", "application/json, text/plain, */*")
+	req.Header.Set("Accept-Language", "uk,en-US;q=0.9,en;q=0.8,ru;q=0.7,fr;q=0.6")
+	req.Header.Set("Cache-Control", "no-cache")
+	req.Header.Set("Pragma", "no-cache")
+	req.Header.Set("User-Agent", webUserAgent)
+
+	baseURL, _ := c.currentHTTPState()
+	origin := strings.TrimRight(baseURL, "/")
+	if origin != "" {
+		req.Header.Set("Origin", origin)
+		req.Header.Set("Referer", origin+"/")
+	}
+
+	sessionValue := strings.TrimSpace(sessionHeaderValue(session))
+	if sessionValue == "" {
+		return
+	}
+	req.Header.Set("X-Api-Session", sessionValue)
+	req.AddCookie(&http.Cookie{
+		Name:  "WebClientHttpSessionID",
+		Value: sessionValue,
+		Path:  "/",
+	})
 }
 
 func isAuthError(code int) bool {

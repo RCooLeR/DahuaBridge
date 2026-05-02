@@ -96,7 +96,10 @@ func (s *SQLiteStore) searchFileRows(ctx context.Context, deviceID string, query
 		}
 		items = append(items, item)
 	}
-	return items, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return dedupeArchiveFileRows(items), nil
 }
 
 func (s *SQLiteStore) searchEventRows(ctx context.Context, deviceID string, query dahua.NVRRecordingQuery) ([]dahua.NVRRecording, error) {
@@ -304,6 +307,47 @@ func ensureArchiveRecordIdentity(deviceID string, item *dahua.NVRRecording) {
 	if strings.TrimSpace(item.Source) == "" && kind == "file" {
 		item.Source = "nvr"
 	}
+}
+
+func dedupeArchiveFileRows(items []dahua.NVRRecording) []dahua.NVRRecording {
+	if len(items) < 2 {
+		return items
+	}
+	bestByPath := make(map[string]dahua.NVRRecording, len(items))
+	order := make([]string, 0, len(items))
+	for _, item := range items {
+		key := strings.TrimSpace(item.FilePath)
+		if key == "" {
+			key = strings.TrimSpace(item.ID)
+		}
+		existing, ok := bestByPath[key]
+		if !ok {
+			bestByPath[key] = item
+			order = append(order, key)
+			continue
+		}
+		if archiveFileRowRank(item) > archiveFileRowRank(existing) {
+			bestByPath[key] = item
+		}
+	}
+	result := make([]dahua.NVRRecording, 0, len(order))
+	for _, key := range order {
+		result = append(result, bestByPath[key])
+	}
+	return result
+}
+
+func archiveFileRowRank(item dahua.NVRRecording) int64 {
+	rank := item.LengthBytes
+	if rank <= 0 {
+		rank = item.CutLengthBytes
+	}
+	if startTime, okStart := parseArchiveLocalTime(item.StartTime); okStart {
+		if endTime, okEnd := parseArchiveLocalTime(item.EndTime); okEnd && endTime.After(startTime) {
+			rank += int64(endTime.Sub(startTime) / time.Second)
+		}
+	}
+	return rank
 }
 
 func summarizeScope(scope string) string {

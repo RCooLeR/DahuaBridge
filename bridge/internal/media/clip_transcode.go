@@ -28,6 +28,9 @@ func (job *clipJob) run(parent *Manager, profile streams.Profile, duration time.
 	}
 	disableStdin := duration > 0
 	includeAudio := parent.shouldIncludeSourceAudio(profile, job.logger)
+	if strings.TrimSpace(profile.InputPrefixURL) != "" {
+		includeAudio = false
+	}
 	job.mu.Lock()
 	job.includeAudio = includeAudio
 	job.mu.Unlock()
@@ -114,12 +117,16 @@ func (job *clipJob) complete(parent *Manager, waitErr error) {
 	job.mu.Lock()
 	defer job.mu.Unlock()
 	defer func() {
-		if path := strings.TrimSpace(job.temporarySourcePath); path != "" {
+		for _, path := range job.temporarySourcePaths {
+			path = strings.TrimSpace(path)
+			if path == "" {
+				continue
+			}
 			if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
 				job.logger.Warn().Err(err).Str("path", path).Msg("failed to cleanup temporary clip source")
 			}
-			job.temporarySourcePath = ""
 		}
+		job.temporarySourcePaths = nil
 	}()
 
 	job.waitErr = waitErr
@@ -237,6 +244,10 @@ func (job *clipJob) status() WorkerStatus {
 }
 
 func buildClipFFmpegArgs(cfg config.MediaConfig, profile streams.Profile, duration time.Duration, outputPath string, includeAudio bool, disableStdin bool) []string {
+	if strings.TrimSpace(profile.InputPrefixURL) != "" {
+		return buildPrefixedClipFFmpegArgs(cfg, profile, duration, outputPath, disableStdin)
+	}
+
 	args := []string{
 		"-hide_banner",
 		"-loglevel", ffmpegLogLevel(cfg),
@@ -244,7 +255,7 @@ func buildClipFFmpegArgs(cfg config.MediaConfig, profile streams.Profile, durati
 	if disableStdin {
 		args = append(args, "-nostdin")
 	}
-	args = append(args, buildRTSPInputArgs(profile, cfg.InputPreset)...)
+	args = append(args, buildInputArgsWithWallclock(profile, cfg.InputPreset, profile.UseWallclockAsTimestamps)...)
 	if duration > 0 {
 		args = append(args, "-t", formatFFmpegSeconds(duration))
 	}
@@ -272,6 +283,54 @@ func buildClipFFmpegArgs(cfg config.MediaConfig, profile streams.Profile, durati
 		args = append(args, "-an")
 	}
 	args = append(args, outputPath)
+	return args
+}
+
+func buildPrefixedClipFFmpegArgs(cfg config.MediaConfig, profile streams.Profile, duration time.Duration, outputPath string, disableStdin bool) []string {
+	args := []string{
+		"-hide_banner",
+		"-loglevel", ffmpegLogLevel(cfg),
+	}
+	if disableStdin {
+		args = append(args, "-nostdin")
+	}
+
+	prefixDuration := time.Duration(profile.InputPrefixDuration)
+	if prefixDuration <= 0 {
+		prefixDuration = ArchiveIFramePrefixDuration
+	}
+	if duration > 0 && prefixDuration > duration {
+		prefixDuration = duration
+	}
+	args = append(args,
+		"-i", strings.TrimSpace(profile.InputPrefixURL),
+		"-i", profile.StreamURL,
+	)
+
+	fullSourceStartFilter := "setpts=PTS-STARTPTS"
+	if seekOffset := time.Duration(profile.InputSeekOffset) + prefixDuration; seekOffset > 0 {
+		fullSourceStartFilter = "trim=start=" + formatFFmpegSeconds(seekOffset) + ",setpts=PTS-STARTPTS"
+	}
+	args = append(args,
+		"-filter_complex",
+		"[0:v:0]setpts=PTS-STARTPTS[v0];[1:v:0]"+fullSourceStartFilter+"[v1];[v0][v1]concat=n=2:v=1:a=0[v]",
+		"-map", "[v]",
+	)
+	if duration > 0 {
+		args = append(args, "-t", formatFFmpegSeconds(duration))
+	}
+
+	args = append(args,
+		"-c:v", "libx264",
+		"-preset", "veryfast",
+		"-pix_fmt", "yuv420p",
+		"-profile:v", "high",
+		"-tag:v", "avc1",
+		"-movflags", "+faststart",
+		"-an",
+		"-y",
+		outputPath,
+	)
 	return args
 }
 

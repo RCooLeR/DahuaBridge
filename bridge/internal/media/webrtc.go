@@ -491,8 +491,8 @@ func (s *webrtcSession) buildFFmpegArgs(videoPort int, audioPort int, attempt ff
 		"-loglevel", ffmpegLogLevel(s.parent.cfg),
 	}
 	args = appendInputHWAccelArgs(args, s.parent.cfg, attempt.useHWAccel)
-	args = append(args, buildRTSPInputArgs(s.profile, attempt.inputPreset)...)
-	if playbackDuration, ok := playbackDurationFromStreamURL(s.profile.StreamURL); ok {
+	args = append(args, buildInputArgsWithWallclock(s.profile, attempt.inputPreset, s.profile.UseWallclockAsTimestamps)...)
+	if playbackDuration, ok := playbackDurationFromProfile(s.profile); ok {
 		args = append(args, "-t", formatFFmpegSeconds(playbackDuration))
 	}
 	if s.parent.cfg.Threads > 0 {

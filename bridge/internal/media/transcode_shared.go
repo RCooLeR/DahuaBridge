@@ -108,13 +108,28 @@ func buildFFmpegStartAttempts(cfg config.MediaConfig) []ffmpegStartAttempt {
 }
 
 func buildRTSPInputArgs(profile streams.Profile, inputPreset string) []string {
-	return buildRTSPInputArgsWithWallclock(profile, inputPreset, profile.UseWallclockAsTimestamps)
+	return buildInputArgsWithWallclock(profile, inputPreset, profile.UseWallclockAsTimestamps)
+}
+
+func buildInputArgsWithWallclock(profile streams.Profile, inputPreset string, useWallclockTimestamps bool) []string {
+	if !isRTSPScheme(profile.StreamURL) {
+		args := []string{"-i", profile.StreamURL}
+		if seekOffset := time.Duration(profile.InputSeekOffset); seekOffset > 0 {
+			args = append(args, "-ss", formatFFmpegSeconds(seekOffset))
+		}
+		return args
+	}
+	return buildRTSPInputArgsWithWallclock(profile, inputPreset, useWallclockTimestamps)
+}
+
+func playbackDurationFromProfile(profile streams.Profile) (time.Duration, bool) {
+	if duration := time.Duration(profile.InputDuration); duration > 0 {
+		return duration, true
+	}
+	return playbackDurationFromStreamURL(profile.StreamURL)
 }
 
 func buildRTSPInputArgsWithWallclock(profile streams.Profile, inputPreset string, useWallclockTimestamps bool) []string {
-	if !isRTSPScheme(profile.StreamURL) {
-		return []string{"-i", profile.StreamURL}
-	}
 	args := []string{
 		"-rtsp_transport", firstNonEmpty(profile.RTSPTransport, "tcp"),
 	}

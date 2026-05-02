@@ -222,6 +222,10 @@ type Profile struct {
 	SourceHeight             int    `json:"source_height,omitempty"`
 	UseWallclockAsTimestamps bool   `json:"use_wallclock_as_timestamps,omitempty"`
 	Recommended              bool   `json:"recommended,omitempty"`
+	InputSeekOffset          int64  `json:"-"`
+	InputDuration            int64  `json:"-"`
+	InputPrefixURL           string `json:"-"`
+	InputPrefixDuration      int64  `json:"-"`
 }
 
 func BuildCatalog(input CatalogInput) []Entry {

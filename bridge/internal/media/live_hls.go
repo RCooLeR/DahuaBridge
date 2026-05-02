@@ -234,8 +234,8 @@ func (w *hlsWorker) buildFFmpegArgs(attempt ffmpegStartAttempt, includeAudio boo
 		"-loglevel", ffmpegLogLevel(w.parent.cfg),
 	}
 	args = appendInputHWAccelArgs(args, w.parent.cfg, attempt.useHWAccel)
-	args = append(args, buildRTSPInputArgsWithWallclock(w.profile, attempt.inputPreset, false)...)
-	if playbackDuration, ok := playbackDurationFromStreamURL(w.profile.StreamURL); ok {
+	args = append(args, buildInputArgsWithWallclock(w.profile, attempt.inputPreset, false)...)
+	if playbackDuration, ok := playbackDurationFromProfile(w.profile); ok {
 		args = append(args, "-t", formatFFmpegSeconds(playbackDuration))
 	}
 	if w.parent.cfg.Threads > 0 {
