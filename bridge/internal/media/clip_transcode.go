@@ -136,6 +136,11 @@ func (job *clipJob) runFFmpegAttempt(parent *Manager, profile streams.Profile, d
 	if waitErr != nil && stderrText != "" {
 		waitErr = fmt.Errorf("%w: %s", waitErr, stderrText)
 	}
+	if waitErr == nil {
+		if validationErr := job.validateClipOutput(parent, profile); validationErr != nil {
+			waitErr = validationErr
+		}
+	}
 
 	job.mu.Lock()
 	job.stdin = nil
@@ -143,6 +148,95 @@ func (job *clipJob) runFFmpegAttempt(parent *Manager, profile streams.Profile, d
 	job.mu.Unlock()
 
 	return waitErr
+}
+
+func (job *clipJob) validateClipOutput(parent *Manager, profile streams.Profile) error {
+	expectedDuration := job.expectedOutputDuration()
+	if expectedDuration <= 2*time.Second {
+		return nil
+	}
+
+	probedDuration, err := probeMediaDuration(parent.cfg.FFmpegPath, job.outputPath, audioProbeTimeout(parent.cfg.StartTimeout))
+	if err != nil {
+		job.logger.Warn().
+			Err(err).
+			Str("clip_id", job.info.ID).
+			Str("output_path", job.outputPath).
+			Msg("clip output duration probe failed")
+		return nil
+	}
+
+	minDuration := minimumValidClipDuration(expectedDuration)
+	if probedDuration >= minDuration {
+		return nil
+	}
+
+	job.logger.Warn().
+		Str("clip_id", job.info.ID).
+		Dur("expected_duration", expectedDuration).
+		Dur("minimum_valid_duration", minDuration).
+		Dur("probed_duration", probedDuration).
+		Bool("iframe_prefix", strings.TrimSpace(profile.InputPrefixURL) != "").
+		Msg("clip output duration shorter than archive event window")
+
+	return fmt.Errorf(
+		"clip output duration %s is shorter than expected archive event duration %s",
+		probedDuration.Round(100*time.Millisecond),
+		expectedDuration.Round(100*time.Millisecond),
+	)
+}
+
+func (job *clipJob) expectedOutputDuration() time.Duration {
+	if !job.info.SourceStartAt.IsZero() && !job.info.SourceEndAt.IsZero() && job.info.SourceEndAt.After(job.info.SourceStartAt) {
+		return job.info.SourceEndAt.Sub(job.info.SourceStartAt)
+	}
+	return job.info.Duration
+}
+
+func minimumValidClipDuration(expected time.Duration) time.Duration {
+	if expected <= 0 {
+		return 0
+	}
+	tolerance := expected / 5
+	if tolerance < time.Second {
+		tolerance = time.Second
+	}
+	if tolerance > 3*time.Second {
+		tolerance = 3 * time.Second
+	}
+	minDuration := expected - tolerance
+	if minDuration < 1500*time.Millisecond {
+		return 1500 * time.Millisecond
+	}
+	return minDuration
+}
+
+func probeMediaDuration(ffmpegPath string, mediaPath string, timeout time.Duration) (time.Duration, error) {
+	if strings.TrimSpace(mediaPath) == "" {
+		return 0, fmt.Errorf("media path is empty")
+	}
+	probeCtx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	args := []string{
+		"-v", "error",
+		"-show_entries", "format=duration",
+		"-of", "default=noprint_wrappers=1:nokey=1",
+		mediaPath,
+	}
+	cmd := exec.CommandContext(probeCtx, ffprobePath(ffmpegPath), args...)
+	body, err := cmd.CombinedOutput()
+	if err != nil {
+		return 0, fmt.Errorf("probe media duration: %w: %s", err, strings.TrimSpace(string(body)))
+	}
+	seconds, err := strconv.ParseFloat(strings.TrimSpace(string(body)), 64)
+	if err != nil {
+		return 0, fmt.Errorf("parse media duration: %w", err)
+	}
+	if seconds <= 0 {
+		return 0, fmt.Errorf("media duration is not positive")
+	}
+	return time.Duration(seconds * float64(time.Second)), nil
 }
 
 func (job *clipJob) complete(parent *Manager, waitErr error) {
