@@ -1510,6 +1510,59 @@ export const surveillancePanelDetailStyles = css`
     margin: 0;
   }
 
+  .archive-seek-range-wrap {
+    position: relative;
+    display: grid;
+    align-items: center;
+    min-height: 24px;
+  }
+
+  .archive-seek-range {
+    position: relative;
+    z-index: 1;
+  }
+
+  .archive-seek-grid {
+    position: absolute;
+    top: 50%;
+    left: 0;
+    right: 0;
+    height: 18px;
+    transform: translateY(-50%);
+    pointer-events: none;
+    border-left: 1px solid rgba(148, 163, 184, 0.34);
+    border-right: 1px solid rgba(148, 163, 184, 0.34);
+    background-image:
+      linear-gradient(to right, rgba(106, 199, 255, 0.28) 1px, transparent 1px),
+      linear-gradient(to right, rgba(148, 163, 184, 0.2) 1px, transparent 1px);
+    background-size:
+      var(--archive-seek-grid-hour, 4.1667%) 100%,
+      var(--archive-seek-grid-half-hour, 2.0833%) 100%;
+    background-repeat: repeat-x;
+  }
+
+  .archive-seek-range-wrap datalist {
+    display: none;
+  }
+
+  .archive-seek-grid-labels {
+    position: relative;
+    height: 14px;
+    margin-top: -4px;
+    color: var(--db-text-soft);
+    font-size: 10px;
+    font-weight: 600;
+    line-height: 1;
+    pointer-events: none;
+  }
+
+  .archive-seek-grid-label {
+    position: absolute;
+    top: 0;
+    transform: translateX(-50%);
+    white-space: nowrap;
+  }
+
   .ptz-overlay {
     position: absolute;
     inset: 14px;

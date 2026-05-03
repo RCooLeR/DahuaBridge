@@ -104,12 +104,13 @@ type SnapshotProvider interface {
 }
 
 type NVRRecordingQuery struct {
-	Channel   int
-	StartTime time.Time
-	EndTime   time.Time
-	Limit     int
-	EventCode string
-	EventOnly bool
+	Channel             int
+	StartTime           time.Time
+	EndTime             time.Time
+	Limit               int
+	EventCode           string
+	EventOnly           bool
+	SkipAssetEnrichment bool
 }
 
 type NVRRecording struct {

@@ -39,6 +39,7 @@ type stubRecordingSearcher struct {
 
 type stubRuntimeArchiveReader struct {
 	search func(context.Context, string, dahua.NVRRecordingQuery, func(context.Context, string, dahua.NVRRecordingQuery) (dahua.NVRRecordingSearchResult, error)) (dahua.NVRRecordingSearchResult, error)
+	enrich func(context.Context, string, *dahua.NVRRecordingSearchResult, archiveapi.ClipFinder) error
 }
 
 func (s stubRuntimeArchiveReader) SearchRecordings(ctx context.Context, deviceID string, query dahua.NVRRecordingQuery, fallback func(context.Context, string, dahua.NVRRecordingQuery) (dahua.NVRRecordingSearchResult, error)) (dahua.NVRRecordingSearchResult, error) {
@@ -48,7 +49,10 @@ func (s stubRuntimeArchiveReader) SearchRecordings(ctx context.Context, deviceID
 	return dahua.NVRRecordingSearchResult{}, nil
 }
 
-func (s stubRuntimeArchiveReader) EnrichRecordings(context.Context, string, *dahua.NVRRecordingSearchResult, archiveapi.ClipFinder) error {
+func (s stubRuntimeArchiveReader) EnrichRecordings(ctx context.Context, deviceID string, result *dahua.NVRRecordingSearchResult, clips archiveapi.ClipFinder) error {
+	if s.enrich != nil {
+		return s.enrich(ctx, deviceID, result, clips)
+	}
 	return nil
 }
 
@@ -564,6 +568,70 @@ func TestRuntimeServicesNVRRecordingsDoesNotMergeBridgeClips(t *testing.T) {
 	}
 	if result.Items[0].DownloadURL != "" {
 		t.Fatalf("NVR archive items must not expose unverified direct download URLs, got %q", result.Items[0].DownloadURL)
+	}
+}
+
+func TestRuntimeServicesNVRRecordingsSkipsAssetEnrichmentWhenRequested(t *testing.T) {
+	services := newRuntimeServices(config.Config{}, store.NewProbeStore())
+	services.RegisterNVR("west20_nvr", nil, stubRecordingSearcher{
+		find: func(context.Context, dahua.NVRRecordingQuery) (dahua.NVRRecordingSearchResult, error) {
+			t.Fatal("expected attached archive search to serve recording query")
+			return dahua.NVRRecordingSearchResult{}, nil
+		},
+	}, config.DeviceConfig{ID: "west20_nvr"})
+	services.AttachArchive(stubRuntimeArchiveReader{
+		search: func(_ context.Context, deviceID string, query dahua.NVRRecordingQuery, _ func(context.Context, string, dahua.NVRRecordingQuery) (dahua.NVRRecordingSearchResult, error)) (dahua.NVRRecordingSearchResult, error) {
+			if deviceID != "west20_nvr" {
+				t.Fatalf("unexpected device id %q", deviceID)
+			}
+			if !query.SkipAssetEnrichment {
+				t.Fatal("expected skip asset enrichment query flag")
+			}
+			return dahua.NVRRecordingSearchResult{
+				DeviceID:      deviceID,
+				Channel:       query.Channel,
+				Limit:         query.Limit,
+				ReturnedCount: 1,
+				Items: []dahua.NVRRecording{{
+					ID:         "event_1",
+					RecordKind: "event",
+					Source:     "nvr_event",
+					Channel:    query.Channel,
+					StartTime:  "2026-05-01 08:10:00",
+					EndTime:    "2026-05-01 08:10:20",
+					Type:       "Event.smdTypeHuman",
+				}},
+			}, nil
+		},
+		enrich: func(context.Context, string, *dahua.NVRRecordingSearchResult, archiveapi.ClipFinder) error {
+			t.Fatal("asset enrichment must not run for DB-only event list searches")
+			return nil
+		},
+	})
+	services.AttachMedia(stubRuntimeMedia{
+		findClips: func(query media.ClipQuery) ([]media.ClipInfo, error) {
+			t.Fatalf("DB-only event list must not scan clips, got %+v", query)
+			return nil, nil
+		},
+	})
+
+	result, err := services.NVRRecordings(context.Background(), "west20_nvr", dahua.NVRRecordingQuery{
+		Channel:             1,
+		StartTime:           time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC),
+		EndTime:             time.Date(2026, 5, 2, 0, 0, 0, 0, time.UTC),
+		Limit:               20,
+		EventOnly:           true,
+		EventCode:           "all",
+		SkipAssetEnrichment: true,
+	})
+	if err != nil {
+		t.Fatalf("NVRRecordings returned error: %v", err)
+	}
+	if len(result.Items) != 1 {
+		t.Fatalf("expected one event item, got %d", len(result.Items))
+	}
+	if result.Items[0].AssetClipID != "" || result.Items[0].AssetStatus != "" {
+		t.Fatalf("expected DB-only item without MP4 asset fields, got %+v", result.Items[0])
 	}
 }
 

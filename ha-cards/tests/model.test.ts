@@ -69,6 +69,64 @@ describe("buildPanelModel", () => {
     expect(model.headerMetrics[0]?.value).toBe("1/1");
   });
 
+  it("applies today event summary counts to matching NVR channel cameras", () => {
+    const now = new Date().toISOString();
+    const hass: HomeAssistant = {
+      states: {
+        "camera.west20_nvr_channel_01_camera": {
+          entity_id: "camera.west20_nvr_channel_01_camera",
+          state: "recording",
+          attributes: {
+            friendly_name: "Entrance Gate",
+            bridge_device_id: "west20_nvr_channel_01",
+            bridge_root_device_id: "west20_nvr",
+            bridge_device_kind: "nvr_channel",
+            stream_source: "http://bridge.local:9205/api/v1/media/hls/west20_nvr_channel_01/quality",
+          },
+          last_changed: now,
+          last_updated: now,
+        },
+      },
+      callService: async () => undefined,
+    };
+
+    const model = buildPanelModel(
+      hass,
+      { type: "custom:dahuabridge-surveillance-panel" },
+      { kind: "overview" },
+      undefined,
+      undefined,
+      undefined,
+      {
+        windowStart: "2026-05-03T00:00:00.000Z",
+        windowEnd: "2026-05-04T00:00:00.000Z",
+        totalCount: 29,
+        humanCount: 9,
+        vehicleCount: 20,
+        animalCount: 0,
+        ivsCount: 0,
+        cameras: [
+          {
+            rootDeviceId: "west20_nvr",
+            channel: 1,
+            totalCount: 29,
+            humanCount: 9,
+            vehicleCount: 20,
+            animalCount: 0,
+            ivsCount: 0,
+          },
+        ],
+      },
+    );
+
+    expect(model.cameras[0]).toMatchObject({
+      eventCount24h: 29,
+      humanCount24h: 9,
+      vehicleCount24h: 20,
+      ivsCount24h: 0,
+    });
+  });
+
   it("discovers NVR channels from bridge URLs when camera entity ids were customized", () => {
     const now = new Date().toISOString();
     const hass: HomeAssistant = {

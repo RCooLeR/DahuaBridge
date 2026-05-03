@@ -148,7 +148,8 @@ export function findPanelCameraEventSummary(
 }
 
 function normalizeSummaryCode(value: string): string {
-  return value.trim().toLowerCase();
+  const normalized = value.trim().toLowerCase();
+  return normalized.startsWith("event.") ? normalized.slice("event.".length) : normalized;
 }
 
 function summaryCategoryCounts(
@@ -167,8 +168,12 @@ function summaryCategoryCounts(
     case "smdtypeanimal":
     case "animal":
       return { humanCount: 0, vehicleCount: 0, animalCount: count, ivsCount: 0 };
+    case "tripwire":
+    case "intrusion":
     case "crosslinedetection":
     case "crossregiondetection":
+    case "crossline":
+    case "crossregion":
     case "leftdetection":
     case "movedetection":
       return { humanCount: 0, vehicleCount: 0, animalCount: 0, ivsCount: count };

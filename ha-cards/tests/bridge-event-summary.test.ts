@@ -42,6 +42,7 @@ describe("bridge event summary", () => {
         startTime: "2026-05-01T00:00:00Z",
         endTime: "2026-05-02T00:00:00Z",
         eventCode: " all ",
+        channel: 1,
       },
     );
 
@@ -49,6 +50,7 @@ describe("bridge event summary", () => {
     expect(requestedUrl.searchParams.get("start")).toBe("2026-05-01T00:00:00Z");
     expect(requestedUrl.searchParams.get("end")).toBe("2026-05-02T00:00:00Z");
     expect(requestedUrl.searchParams.get("event")).toBe("all");
+    expect(requestedUrl.searchParams.get("channel")).toBe("1");
     expect(result).toEqual({
       deviceId: "west20_nvr",
       startTime: "2026-05-01T00:00:00Z",

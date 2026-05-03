@@ -489,13 +489,22 @@ func parseNVRRecordingQuery(r *http.Request) (dahua.NVRRecordingQuery, error) {
 		limit = 200
 	}
 
+	values := r.URL.Query()
+	eventOnly := parseQueryBool(values, "event_only", "events_only")
+	includeAssets := parseQueryBool(values, "include_assets", "with_assets")
+	skipAssetEnrichment := parseQueryBool(values, "db_only", "skip_assets", "skip_asset_enrichment")
+	if eventOnly && !includeAssets {
+		skipAssetEnrichment = true
+	}
+
 	return dahua.NVRRecordingQuery{
-		Channel:   channel,
-		StartTime: startTime,
-		EndTime:   endTime,
-		Limit:     limit,
-		EventCode: firstNonEmptyQueryValue(r.URL.Query(), "event", "event_type", "event_code"),
-		EventOnly: parseQueryBool(r.URL.Query(), "event_only", "events_only"),
+		Channel:             channel,
+		StartTime:           startTime,
+		EndTime:             endTime,
+		Limit:               limit,
+		EventCode:           firstNonEmptyQueryValue(values, "event", "event_type", "event_code"),
+		EventOnly:           eventOnly,
+		SkipAssetEnrichment: skipAssetEnrichment,
 	}, nil
 }
 
@@ -503,6 +512,7 @@ type nvrEventSummaryQuery struct {
 	StartTime time.Time
 	EndTime   time.Time
 	EventCode string
+	Channel   int
 }
 
 func parseNVREventSummaryQuery(r *http.Request) (nvrEventSummaryQuery, error) {
@@ -517,11 +527,16 @@ func parseNVREventSummaryQuery(r *http.Request) (nvrEventSummaryQuery, error) {
 	if endTime.Before(startTime) {
 		return nvrEventSummaryQuery{}, fmt.Errorf("end must not be before start")
 	}
+	channel, err := parseOptionalPositiveInt(r.URL.Query().Get("channel"))
+	if err != nil {
+		return nvrEventSummaryQuery{}, err
+	}
 
 	return nvrEventSummaryQuery{
 		StartTime: startTime,
 		EndTime:   endTime,
 		EventCode: firstNonEmptyQueryValue(r.URL.Query(), "event", "event_type", "event_code"),
+		Channel:   channel,
 	}, nil
 }
 

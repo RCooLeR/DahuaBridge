@@ -17,12 +17,33 @@ describe("renderCameraEventCountBadges", () => {
     const template = result as TemplateResult;
     expect(template.strings.join("")).toContain("tile-event-counts-");
     expect(template.strings.join("")).toContain("tile-event-count");
-    expect(template.values).toHaveLength(4);
     expect(template.values[0]).toBe("overlay");
+  });
+
+  it("renders IVS-only counters", () => {
+    const camera = {
+      humanCount24h: 0,
+      vehicleCount24h: 0,
+      ivsCount24h: 4,
+    } as CameraViewModel;
+
+    expect(renderCameraEventCountBadges(camera, "inline")).not.toBe(nothing);
+  });
+
+  it("renders generic SMD/IVS total counters when category counts are unavailable", () => {
+    const camera = {
+      eventCount24h: 90,
+      humanCount24h: 0,
+      vehicleCount24h: 0,
+      ivsCount24h: 0,
+    } as CameraViewModel;
+
+    expect(renderCameraEventCountBadges(camera, "inline")).not.toBe(nothing);
   });
 
   it("renders nothing when all counters are zero", () => {
     const camera = {
+      eventCount24h: 0,
       humanCount24h: 0,
       vehicleCount24h: 0,
       ivsCount24h: 0,

@@ -2716,6 +2716,9 @@ func TestNVRRecordingsEndpointParsesEventOnlyQuery(t *testing.T) {
 			if query.EventCode != "all" {
 				t.Fatalf("unexpected event code %q", query.EventCode)
 			}
+			if !query.SkipAssetEnrichment {
+				t.Fatal("expected event-only search to skip asset enrichment")
+			}
 			return dahua.NVRRecordingSearchResult{
 				DeviceID:      "west20_nvr",
 				Channel:       query.Channel,
@@ -2756,6 +2759,44 @@ func TestNVRRecordingsEndpointParsesEventOnlyQuery(t *testing.T) {
 		!strings.Contains(rec.Body.String(), `type=Event.smdTypeHuman`) ||
 		!strings.Contains(rec.Body.String(), `video_stream=Main`) {
 		t.Fatalf("expected event export URL parameters in response: %s", rec.Body.String())
+	}
+}
+
+func TestNVRSMDIVSEndpointSkipsAssetEnrichment(t *testing.T) {
+	server := newTestServerWithConfig(config.HTTPConfig{
+		ListenAddress: ":0",
+		MetricsPath:   "/metrics",
+		HealthPath:    "/healthz",
+	}, stubSnapshotReader{
+		nvrRecordings: func(_ context.Context, _ string, query dahua.NVRRecordingQuery) (dahua.NVRRecordingSearchResult, error) {
+			if !query.EventOnly {
+				t.Fatal("expected smd/ivs route to force event-only search")
+			}
+			if query.EventCode != "all" {
+				t.Fatalf("unexpected event code %q", query.EventCode)
+			}
+			if !query.SkipAssetEnrichment {
+				t.Fatal("expected smd/ivs route to skip asset enrichment")
+			}
+			return dahua.NVRRecordingSearchResult{
+				DeviceID:      "west20_nvr",
+				Channel:       query.Channel,
+				StartTime:     "2026-05-01 00:00:00",
+				EndTime:       "2026-05-02 00:00:00",
+				Limit:         query.Limit,
+				ReturnedCount: 0,
+				Items:         []dahua.NVRRecording{},
+			}, nil
+		},
+	}, nil, stubActionReader{}, stubEventReader{})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/nvr/west20_nvr/smd-ivs?channel=1&start=2026-05-01T00:00:00Z&end=2026-05-02T00:00:00Z&limit=20", nil)
+	rec := httptest.NewRecorder()
+
+	server.httpServer.Handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d: %s", rec.Code, rec.Body.String())
 	}
 }
 
@@ -2971,6 +3012,30 @@ func TestNVREventSummaryEndpoint(t *testing.T) {
 	}
 	if !reflect.DeepEqual(gotLabels, expectedLabels) {
 		t.Fatalf("unexpected summary labels %+v", gotLabels)
+	}
+
+	channelReq := httptest.NewRequest(http.MethodGet, "/api/v1/nvr/west20_nvr/events/summary?start=2026-05-01T00:00:00Z&end=2026-05-02T00:00:00Z&event=all&channel=1", nil)
+	channelRec := httptest.NewRecorder()
+
+	server.httpServer.Handler.ServeHTTP(channelRec, channelReq)
+
+	if channelRec.Code != http.StatusOK {
+		t.Fatalf("expected channel status 200, got %d: %s", channelRec.Code, channelRec.Body.String())
+	}
+
+	var channelSummary dahua.NVREventSummary
+	if err := json.NewDecoder(channelRec.Body).Decode(&channelSummary); err != nil {
+		t.Fatalf("decode channel summary response: %v", err)
+	}
+	if channelSummary.TotalCount != 2 || len(channelSummary.Channels) != 1 || channelSummary.Channels[0].Channel != 1 {
+		t.Fatalf("unexpected filtered channel summary %+v", channelSummary)
+	}
+	channelCounts := map[string]int{}
+	for _, item := range channelSummary.Items {
+		channelCounts[item.Code] = item.Count
+	}
+	if !reflect.DeepEqual(channelCounts, map[string]int{"human": 1, "tripwire": 1}) {
+		t.Fatalf("unexpected filtered channel counts %+v", channelCounts)
 	}
 }
 

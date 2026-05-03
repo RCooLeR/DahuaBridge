@@ -137,6 +137,8 @@ const EVENT_WINDOW_OPTIONS = [
 const ARCHIVE_PAGE_SIZE = 20;
 const MP4_PAGE_SIZE = 20;
 const ARCHIVE_SEEK_MAX_LOOKBACK_DAYS = 90;
+const ARCHIVE_SEEK_STEP_SECONDS = 1;
+const ARCHIVE_SEEK_GRID_LABEL_HOURS = [2, 4, 6, 8, 12, 14, 16, 18, 20] as const;
 
 const ARCHIVE_EVENT_TYPE_OPTIONS = [
   { value: EVENT_FILTER_ALL, label: "All SMD/IVS" },
@@ -195,6 +197,7 @@ export class DahuaBridgeSurveillancePanelCard
   private _todayEventSummaryRequestVersion = 0;
   private _todayEventSummaryRefreshedAt = 0;
   private _todayEventSummaryRefreshTimer: number | null = null;
+  private _suppressNextArchiveRefresh = false;
 
   static async getConfigElement(): Promise<HTMLElement> {
     return document.createElement("dahuabridge-surveillance-panel-editor");
@@ -428,14 +431,7 @@ export class DahuaBridgeSurveillancePanelCard
     ) {
       this._runtime.handleEventContextChanged();
     }
-    if (
-      changedProperties.has("_selection") ||
-      changedProperties.has("_config") ||
-      changedProperties.has("_detailTab") ||
-      changedProperties.has("_archiveDate") ||
-      changedProperties.has("_archiveEventCodeFilter") ||
-      changedProperties.has("_nvrArchiveChannelNumber")
-    ) {
+    if (this.shouldRefreshArchiveRecordings(changedProperties)) {
       void this.refreshArchiveRecordings();
     }
     if (
@@ -1863,10 +1859,12 @@ export class DahuaBridgeSurveillancePanelCard
     }
   }
 
-  private resetSharedSelectionViewState(): void {
+  private resetSharedSelectionViewState(options: { preserveArchive?: boolean } = {}): void {
     this.resetEventFilters();
-    this.resetArchiveEventFilter();
-    this._archivePage = 0;
+    if (!options.preserveArchive) {
+      this.resetArchiveEventFilter();
+      this._archivePage = 0;
+    }
     this._mp4Page = 0;
     this._selectedPlaybackStreamProfile = null;
     this._selectedPlaybackStreamSource = null;
@@ -2039,6 +2037,33 @@ export class DahuaBridgeSurveillancePanelCard
     this.requestUpdate("_mp4Page", previousPage);
   }
 
+  private shouldRefreshArchiveRecordings(
+    changedProperties: Map<PropertyKey, unknown>,
+  ): boolean {
+    const shouldRefresh =
+      changedProperties.has("_selection") ||
+      changedProperties.has("_config") ||
+      changedProperties.has("_detailTab") ||
+      changedProperties.has("_archiveDate") ||
+      changedProperties.has("_archiveEventCodeFilter") ||
+      changedProperties.has("_nvrArchiveChannelNumber");
+    if (!shouldRefresh) {
+      return false;
+    }
+    if (this._suppressNextArchiveRefresh) {
+      this._suppressNextArchiveRefresh = false;
+      return false;
+    }
+    return true;
+  }
+
+  private suppressNextArchiveRefresh(): void {
+    this._suppressNextArchiveRefresh = true;
+    window.setTimeout(() => {
+      this._suppressNextArchiveRefresh = false;
+    }, 0);
+  }
+
   private async refreshArchiveRecordings(): Promise<void> {
     if (!this.hass || !this._config) {
       this.cancelArchiveRefresh();
@@ -2100,7 +2125,6 @@ export class DahuaBridgeSurveillancePanelCard
     const controller = new AbortController();
     this._archiveAbort = controller;
     const requestVersion = ++this._archiveRequestVersion;
-    this._archiveRecordings = null;
     this._archiveLoading = true;
     this._archiveError = "";
     const { startTime, endTime } = dateRangeForArchiveDay(this._archiveDate);
@@ -2127,6 +2151,7 @@ export class DahuaBridgeSurveillancePanelCard
           limit: archiveSource.archive.defaultLimit,
           eventCode,
           eventOnly,
+          dbOnly: eventOnly,
         },
         controller.signal,
       );
@@ -2740,7 +2765,8 @@ export class DahuaBridgeSurveillancePanelCard
       this._selectedCameraStreamProfile ??
       defaultSelectedStreamProfileKey(archiveSource.stream) ??
       null;
-    this.resetSharedSelectionViewState();
+    this.suppressNextArchiveRefresh();
+    this.resetSharedSelectionViewState({ preserveArchive: true });
     this.clearVtoSelectionState();
     this.applySelectionTransition(
       {
@@ -3083,6 +3109,7 @@ export class DahuaBridgeSurveillancePanelCard
     );
     const seekDateBounds = archiveSeekDateBounds();
     const seekLabel = formatSeekSecondLabel(this._archiveDate, seekSecond);
+    const seekGridLabels = archiveSeekGridLabels(maxSeekSecond);
 
     return html`
       <div class="slider-wrap archive-seek-panel">
@@ -3102,25 +3129,47 @@ export class DahuaBridgeSurveillancePanelCard
               this.selectArchiveDate((event.currentTarget as HTMLInputElement).value)}
           />
         </label>
-        <input
-          class="archive-seek-range"
-          type="range"
-          min="0"
-          max=${String(maxSeekSecond)}
-          step="1"
-          .value=${String(seekSecond)}
-          @input=${(event: Event) => {
-            const second = parseArchiveSeekSecond((event.currentTarget as HTMLInputElement).value);
-            this._archiveSeekSecond = second;
-          }}
-          @change=${(event: Event) => {
-            const second = parseArchiveSeekSecond((event.currentTarget as HTMLInputElement).value);
-            const seekTime = archiveSeekDateTimeFromSecond(this._archiveDate, second);
-            if (seekTime) {
-              void this.startNativeArchivePlayback(camera, seekTime);
-            }
-          }}
-        />
+        <div
+          class="archive-seek-range-wrap"
+          style=${archiveSeekGridStyle(maxSeekSecond)}
+        >
+          <div class="archive-seek-grid" aria-hidden="true"></div>
+          <input
+            class="archive-seek-range"
+            type="range"
+            min="0"
+            max=${String(maxSeekSecond)}
+            step=${String(ARCHIVE_SEEK_STEP_SECONDS)}
+            list="archive-seek-30min-grid"
+            .value=${String(seekSecond)}
+            @input=${(event: Event) => {
+              const second = parseArchiveSeekSecond((event.currentTarget as HTMLInputElement).value);
+              this._archiveSeekSecond = second;
+            }}
+            @change=${(event: Event) => {
+              const second = parseArchiveSeekSecond((event.currentTarget as HTMLInputElement).value);
+              const seekTime = archiveSeekDateTimeFromSecond(this._archiveDate, second);
+              if (seekTime) {
+                void this.startNativeArchivePlayback(camera, seekTime);
+              }
+            }}
+          />
+          <datalist id="archive-seek-30min-grid">
+            ${archiveSeekTickSeconds(maxSeekSecond).map(
+               (second) => html`<option value=${String(second)}></option>`,
+            )}
+          </datalist>
+        </div>
+        <div class="archive-seek-grid-labels" aria-hidden="true">
+          ${seekGridLabels.map(
+            (label) => html`
+              <span
+                class="archive-seek-grid-label"
+                style=${archiveSeekGridLabelStyle(label.leftPercent)}
+              >${label.hour}</span>
+            `,
+          )}
+        </div>
         <div class="split-row muted">
           <span>00:00</span>
           <span>23:59</span>
@@ -3169,6 +3218,7 @@ export class DahuaBridgeSurveillancePanelCard
       seekTime: seekTime.toISOString(),
       profileKey: selectedProfile?.key ?? null,
     };
+    this.suppressNextArchiveRefresh();
     this._archiveDate = toDateInputValue(seekTime);
     this._archiveSeekSecond = secondsSinceLocalMidnight(seekTime);
     this._archivePage = 0;
@@ -3239,6 +3289,7 @@ export class DahuaBridgeSurveillancePanelCard
     };
     const eventStart = new Date(recording.startTime);
     if (!Number.isNaN(eventStart.getTime())) {
+      this.suppressNextArchiveRefresh();
       this._archiveDate = toDateInputValue(eventStart);
       this._archiveSeekSecond = secondsSinceLocalMidnight(eventStart);
     }
@@ -3793,6 +3844,54 @@ function parseArchiveSeekSecond(value: string): number {
     return 0;
   }
   return Math.min(Math.max(parsed, 0), 86_399);
+}
+
+function archiveSeekGridStyle(maxSeekSecond: number): string {
+  const boundedMaxSecond = Math.max(
+    ARCHIVE_SEEK_STEP_SECONDS,
+    parseArchiveSeekSecond(String(maxSeekSecond)),
+  );
+  const halfHourPercent = (ARCHIVE_SEEK_STEP_SECONDS / boundedMaxSecond) * 100;
+  const hourPercent = ((ARCHIVE_SEEK_STEP_SECONDS * 2) / boundedMaxSecond) * 100;
+  return [
+    `--archive-seek-grid-half-hour: ${halfHourPercent.toFixed(4)}%`,
+    `--archive-seek-grid-hour: ${hourPercent.toFixed(4)}%`,
+  ].join("; ");
+}
+
+function archiveSeekTickSeconds(maxSeekSecond: number): number[] {
+  const maxSecond = parseArchiveSeekSecond(String(maxSeekSecond));
+  const ticks: number[] = [];
+  for (let second = 0; second <= maxSecond; second += ARCHIVE_SEEK_STEP_SECONDS) {
+    ticks.push(second);
+  }
+  if (ticks.length === 0 || ticks[ticks.length - 1] !== maxSecond) {
+    ticks.push(maxSecond);
+  }
+  return ticks;
+}
+
+function archiveSeekGridLabels(
+  maxSeekSecond: number,
+): Array<{ hour: number; leftPercent: number }> {
+  const maxSecond = parseArchiveSeekSecond(String(maxSeekSecond));
+  if (maxSecond <= 0) {
+    return [];
+  }
+  return ARCHIVE_SEEK_GRID_LABEL_HOURS
+    .map((hour) => ({
+      hour,
+      second: hour * 60 * 60,
+    }))
+    .filter((label) => label.second <= maxSecond)
+    .map((label) => ({
+      hour: label.hour,
+      leftPercent: (label.second / maxSecond) * 100,
+    }));
+}
+
+function archiveSeekGridLabelStyle(leftPercent: number): string {
+  return `left: ${Math.min(Math.max(leftPercent, 0), 100).toFixed(4)}%`;
 }
 
 function archiveCurrentTimeOfDaySecond(): number {

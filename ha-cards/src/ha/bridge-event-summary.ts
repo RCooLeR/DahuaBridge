@@ -32,6 +32,7 @@ export interface NvrEventSummaryQuery {
   startTime: string;
   endTime: string;
   eventCode?: string;
+  channel?: number | null;
 }
 
 export async function fetchNvrEventSummary(
@@ -44,6 +45,13 @@ export async function fetchNvrEventSummary(
   url.searchParams.set("end", query.endTime);
   if (query.eventCode?.trim()) {
     url.searchParams.set("event", query.eventCode.trim());
+  }
+  if (
+    typeof query.channel === "number" &&
+    Number.isFinite(query.channel) &&
+    query.channel > 0
+  ) {
+    url.searchParams.set("channel", String(Math.trunc(query.channel)));
   }
 
   const response = await fetch(url, {

@@ -39,6 +39,7 @@ import {
 } from "../ha/bridge-intercom";
 import {
   summarizePanelTodayEvents,
+  type NvrEventSummaryModel,
   type PanelTodayEventSummaryModel,
 } from "../domain/event-summary";
 import {
@@ -278,7 +279,7 @@ export class DahuaBridgeSurveillanceTileCard
     this._cameraAudioMuted = true;
     this._vtoStreamPlaying = false;
     this._vtoMicrophoneState = INITIAL_VTO_MICROPHONE_STATE;
-    this._eventSummary = null;
+    this.setEventSummary(null);
     this._eventSummaryRefreshedAt = 0;
     this._eventSummaryCameraKey = "";
     this.cancelEventSummaryRefresh();
@@ -912,7 +913,7 @@ export class DahuaBridgeSurveillanceTileCard
         device_id: this._config.device_id,
         reason: "nvr_channel_not_found",
       });
-      this._eventSummary = null;
+      this.setEventSummary(null);
       this._eventSummaryCameraKey = "";
       this._eventSummaryRefreshedAt = Date.now();
       return;
@@ -928,7 +929,7 @@ export class DahuaBridgeSurveillanceTileCard
         reason: "summary_url_unavailable",
         bridge_base_url: camera.bridgeBaseUrl,
       });
-      this._eventSummary = null;
+      this.setEventSummary(null);
       this._eventSummaryCameraKey = `${camera.rootDeviceId}:${camera.channelNumber}`;
       this._eventSummaryRefreshedAt = Date.now();
       this.scheduleEventSummaryRefresh(15_000);
@@ -957,6 +958,7 @@ export class DahuaBridgeSurveillanceTileCard
           startTime: startTime.toISOString(),
           endTime: endTime.toISOString(),
           eventCode: "all",
+          channel: camera.channelNumber,
         },
         controller.signal,
       );
@@ -967,17 +969,28 @@ export class DahuaBridgeSurveillanceTileCard
       ) {
         return;
       }
-      this._eventSummary = summarizePanelTodayEvents(
+      const cameraSummary = ensureTileSummaryChannel(summary, camera.channelNumber);
+      const panelSummary = summarizePanelTodayEvents(
         summary.startTime,
         summary.endTime,
-        [summary],
+        [cameraSummary],
       );
+      const cameraCounts = panelSummary.cameras.find(
+        (item) =>
+          item.rootDeviceId === camera.rootDeviceId &&
+          item.channel === camera.channelNumber,
+      ) ?? null;
+      this.setEventSummary(panelSummary);
       this._eventSummaryCameraKey = `${camera.rootDeviceId}:${camera.channelNumber}`;
       this.logMedia("card tile event summary completed", {
         device_id: camera.deviceId,
         root_device_id: camera.rootDeviceId,
         channel: camera.channelNumber,
         total_count: summary.totalCount,
+        channel_total_count: cameraCounts?.totalCount ?? 0,
+        human_count: cameraCounts?.humanCount ?? 0,
+        vehicle_count: cameraCounts?.vehicleCount ?? 0,
+        ivs_count: cameraCounts?.ivsCount ?? 0,
       });
     } catch (error) {
       if (
@@ -1044,6 +1057,37 @@ export class DahuaBridgeSurveillanceTileCard
     }
     return camera;
   }
+
+  private setEventSummary(summary: PanelTodayEventSummaryModel | null): void {
+    const previousSummary = this._eventSummary;
+    this._eventSummary = summary;
+    this.requestUpdate("_eventSummary", previousSummary);
+  }
+}
+
+function ensureTileSummaryChannel(
+  summary: NvrEventSummaryModel,
+  channel: number | null,
+): NvrEventSummaryModel {
+  if (channel === null || channel <= 0) {
+    return summary;
+  }
+  if (summary.channels.some((item) => item.channel === channel)) {
+    return summary;
+  }
+  if (summary.totalCount <= 0) {
+    return summary;
+  }
+  return {
+    ...summary,
+    channels: [
+      {
+        channel,
+        totalCount: summary.totalCount,
+        items: summary.items,
+      },
+    ],
+  };
 }
 
 if (!customElements.get("dahuabridge-surveillance-tile")) {

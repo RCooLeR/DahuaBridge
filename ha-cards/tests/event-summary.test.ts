@@ -16,7 +16,7 @@ describe("event summary", () => {
         totalCount: 5,
         items: [
           { code: "smdTypeHuman", label: "Human", count: 2 },
-          { code: "CrossLineDetection", label: "Cross Line", count: 1 },
+          { code: "tripwire", label: "Cross Line", count: 1 },
         ],
         channels: [
           {
@@ -24,7 +24,7 @@ describe("event summary", () => {
             totalCount: 3,
             items: [
               { code: "smdTypeHuman", label: "Human", count: 2 },
-              { code: "CrossLineDetection", label: "Cross Line", count: 1 },
+              { code: "tripwire", label: "Cross Line", count: 1 },
             ],
           },
         ],
@@ -36,7 +36,7 @@ describe("event summary", () => {
         totalCount: 4,
         items: [
           { code: "vehicle", label: "Vehicle", count: 3 },
-          { code: "MoveDetection", label: "Motion Detection", count: 1 },
+          { code: "Event.Intrusion", label: "Intrusion", count: 1 },
         ],
         channels: [
           {
@@ -44,7 +44,7 @@ describe("event summary", () => {
             totalCount: 4,
             items: [
               { code: "vehicle", label: "Vehicle", count: 3 },
-              { code: "MoveDetection", label: "Motion Detection", count: 1 },
+              { code: "Event.Intrusion", label: "Intrusion", count: 1 },
             ],
           },
         ],

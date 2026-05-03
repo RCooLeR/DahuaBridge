@@ -178,6 +178,7 @@ export interface ArchiveRecordingsQuery {
   limit: number;
   eventCode?: string;
   eventOnly?: boolean;
+  dbOnly?: boolean;
 }
 
 export interface BridgeRecordingsQuery {
@@ -238,6 +239,9 @@ export async function fetchArchiveRecordings(
     url.searchParams.set("event", query.eventCode && query.eventCode !== "__all__" ? query.eventCode : "all");
   } else if (query.eventCode && query.eventCode !== "__all__") {
     url.searchParams.set("event", query.eventCode);
+  }
+  if (query.dbOnly) {
+    url.searchParams.set("db_only", "true");
   }
 
   const started = performance.now();

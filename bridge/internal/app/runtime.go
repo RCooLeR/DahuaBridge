@@ -273,7 +273,7 @@ func (r *runtimeServices) NVRRecordings(ctx context.Context, deviceID string, qu
 	if result.Items == nil {
 		result.Items = []dahua.NVRRecording{}
 	}
-	if archiveReader != nil {
+	if archiveReader != nil && !query.SkipAssetEnrichment {
 		if enrichErr := archiveReader.EnrichRecordings(ctx, deviceID, &result, mediaReader); enrichErr != nil {
 			r.finishRecordingSearchFlight(cacheKey, flight, dahua.NVRRecordingSearchResult{}, enrichErr)
 			return dahua.NVRRecordingSearchResult{}, enrichErr
@@ -889,6 +889,7 @@ func recordingSearchCacheKey(deviceID string, query dahua.NVRRecordingQuery) str
 		strconv.Itoa(query.Limit),
 		strings.TrimSpace(query.EventCode),
 		strconv.FormatBool(query.EventOnly),
+		strconv.FormatBool(query.SkipAssetEnrichment),
 	}, "|")
 }
 

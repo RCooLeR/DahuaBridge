@@ -101,6 +101,44 @@ describe("bridge archive", () => {
     const requestedUrl = new URL(String(fetchMock.mock.calls[0]?.[0]));
     expect(requestedUrl.searchParams.get("event_only")).toBe("true");
     expect(requestedUrl.searchParams.get("event")).toBe("all");
+    expect(requestedUrl.searchParams.get("db_only")).toBeNull();
+  });
+
+  it("marks DB-only archive searches without MP4 asset enrichment", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        items: [],
+      }),
+    } as Response);
+
+    Object.defineProperty(globalThis, "window", {
+      configurable: true,
+      value: {
+        location: {
+          origin: "https://ha.example.com",
+        },
+      },
+    });
+
+    await fetchArchiveRecordings(
+      "/api/v1/nvr/west20_nvr/smd-ivs",
+      {
+        channel: 1,
+        startTime: "2026-05-01T00:00:00Z",
+        endTime: "2026-05-02T00:00:00Z",
+        limit: 100,
+        eventCode: "__all__",
+        eventOnly: true,
+        dbOnly: true,
+      },
+    );
+
+    const requestedUrl = new URL(String(fetchMock.mock.calls[0]?.[0]));
+    expect(requestedUrl.searchParams.get("event_only")).toBe("true");
+    expect(requestedUrl.searchParams.get("event")).toBe("all");
+    expect(requestedUrl.searchParams.get("db_only")).toBe("true");
   });
 
   it("normalizes archive search templates before adding live query parameters", async () => {

@@ -209,6 +209,7 @@ func (c *controller) registerNVRRoutes(router chi.Router) {
 			writeClassifiedActionError(w, err, http.StatusBadGateway)
 			return
 		}
+		summary = filterNVREventSummaryByChannel(summary, query.Channel)
 
 		writeJSON(w, http.StatusOK, summary)
 	})
@@ -854,6 +855,9 @@ func (c *controller) handleNVRRecordingCollection(w http.ResponseWriter, r *http
 		if strings.TrimSpace(query.EventCode) == "" {
 			query.EventCode = "all"
 		}
+		if !parseQueryBool(r.URL.Query(), "include_assets", "with_assets") {
+			query.SkipAssetEnrichment = true
+		}
 	} else {
 		query.EventOnly = false
 		query.EventCode = ""
@@ -884,6 +888,70 @@ func shouldUseOptionalNVRRecordingIFrame(request dahua.NVRPlaybackSessionRequest
 		source == "nvr_event" ||
 		recordingType == "event" ||
 		strings.HasPrefix(recordingType, "event.")
+}
+
+func filterNVREventSummaryByChannel(summary dahua.NVREventSummary, channel int) dahua.NVREventSummary {
+	if channel <= 0 {
+		return summary
+	}
+
+	filtered := summary
+	filtered.Channels = []dahua.NVREventChannelSummary{}
+	for _, channelSummary := range summary.Channels {
+		if channelSummary.Channel == channel {
+			filtered.Channels = append(filtered.Channels, channelSummary)
+		}
+	}
+	if len(summary.Channels) == 0 && summary.TotalCount > 0 {
+		filtered.Channels = append(filtered.Channels, dahua.NVREventChannelSummary{
+			Channel:    channel,
+			TotalCount: summary.TotalCount,
+			Items:      append([]dahua.NVREventSummaryItem(nil), summary.Items...),
+		})
+	}
+
+	filtered.Items = mergeNVREventSummaryItems(filtered.Channels)
+	filtered.TotalCount = 0
+	for _, item := range filtered.Items {
+		filtered.TotalCount += item.Count
+	}
+	if filtered.TotalCount == 0 {
+		for _, channelSummary := range filtered.Channels {
+			filtered.TotalCount += channelSummary.TotalCount
+		}
+	}
+	return filtered
+}
+
+func mergeNVREventSummaryItems(channels []dahua.NVREventChannelSummary) []dahua.NVREventSummaryItem {
+	counts := make(map[string]int)
+	labels := make(map[string]string)
+	order := make([]string, 0)
+	for _, channelSummary := range channels {
+		for _, item := range channelSummary.Items {
+			code := strings.TrimSpace(item.Code)
+			if code == "" || item.Count <= 0 {
+				continue
+			}
+			if _, ok := counts[code]; !ok {
+				order = append(order, code)
+			}
+			counts[code] += item.Count
+			if strings.TrimSpace(item.Label) != "" {
+				labels[code] = strings.TrimSpace(item.Label)
+			}
+		}
+	}
+
+	items := make([]dahua.NVREventSummaryItem, 0, len(order))
+	for _, code := range order {
+		items = append(items, dahua.NVREventSummaryItem{
+			Code:  code,
+			Label: labels[code],
+			Count: counts[code],
+		})
+	}
+	return items
 }
 
 func (c *controller) lookupNVRStreamProfile(deviceID string, channel int, profileName string) (streams.Entry, streams.Profile) {
