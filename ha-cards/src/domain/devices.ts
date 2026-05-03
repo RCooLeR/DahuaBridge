@@ -552,6 +552,7 @@ interface BridgeCaptureShape {
 interface BridgeArchiveAttributeSummary {
   searchUrl: string | null;
   playbackUrl: string | null;
+  coverageUrl: string | null;
 }
 
 interface BridgeIntercomShape {
@@ -1697,6 +1698,7 @@ function bridgeArchiveAttributesForEntity(
       stringValue(entity?.attributes.bridge_archive_recordings_url_template),
     ),
     playbackUrl: stringValue(entity?.attributes.bridge_playback_sessions_url),
+    coverageUrl: stringValue(entity?.attributes.bridge_archive_coverage_url),
   };
 }
 
@@ -1716,6 +1718,32 @@ function withArchiveFallbackFeatures(
       group: "archive",
       kind: "query",
       url: archiveAttributes.searchUrl,
+      supported: true,
+      parameterKey: null,
+      parameterValue: null,
+      commands: [],
+      actions: [],
+      targets: [],
+      allowedValues: [],
+      minValue: null,
+      maxValue: null,
+      stepValue: null,
+      currentValue: null,
+      active: null,
+      currentText: null,
+    });
+  }
+
+  if (
+    archiveAttributes.coverageUrl &&
+    !merged.some((feature) => feature.key === "archive_coverage" && feature.url)
+  ) {
+    merged.push({
+      key: "archive_coverage",
+      label: "Coverage",
+      group: "archive",
+      kind: "query",
+      url: archiveAttributes.coverageUrl,
       supported: true,
       parameterKey: null,
       parameterValue: null,

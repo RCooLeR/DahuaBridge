@@ -338,6 +338,7 @@ export function buildRtspPlaybackUrl({
       return null;
     }
 
+    url.pathname = "/cam/playback";
     url.search = "";
     url.searchParams.set("channel", String(resolvedChannel));
     if (resolvedSubtype !== null) {

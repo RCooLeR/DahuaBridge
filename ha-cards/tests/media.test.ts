@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   availableCameraViewportSources,
   availablePlaybackViewportSources,
+  buildRtspPlaybackUrl,
   cameraImageSrc,
   defaultOverviewStreamProfileKey,
   preserveCameraViewportSourceSelection,
@@ -341,5 +342,19 @@ describe("camera media helpers", () => {
         null,
       ),
     ).toBe("http://bridge.local:9205/api/v1/nvr/west20_nvr/channels/1/snapshot");
+  });
+
+  it("rewrites native historical playback URLs to the playback RTSP path", () => {
+    expect(
+      buildRtspPlaybackUrl({
+        streamUrl: "rtsp://example-user:example-password@192.0.2.10:554/cam/realmonitor?channel=1&subtype=0",
+        channel: 1,
+        subtype: 0,
+        seekTime: "2026-05-01T08:10:00Z",
+        endTime: "2026-05-01T08:40:00Z",
+      }),
+    ).toBe(
+      "rtsp://example-user:example-password@192.0.2.10:554/cam/playback?channel=1&subtype=0&starttime=2026_05_01_11_10_00&endtime=2026_05_01_11_40_00",
+    );
   });
 });

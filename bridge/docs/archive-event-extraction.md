@@ -8,7 +8,6 @@ In bridge terminology:
 
 - `recordings` means recorder-backed archive rows from the NVR
 - `events` means SMD/IVS archive event rows, also coming from the NVR archive search
-- `/api/v1/events` is a separate live/recent event buffer and is not the source of truth for archive event video
 
 The archive event video path is built from `/api/v1/nvr/{deviceID}/recordings?...event_only=true`.
 
@@ -40,7 +39,7 @@ For an archive event clip, the bridge does this:
    - `StorageAssistant.getIFrameData`
 5. Trim the event window from the downloaded DAV according to the event start/end time.
 
-The bridge does not trust `/api/v1/events` for archive video extraction.
+The bridge does not rely on any live/recent event buffer for archive video extraction.
 
 ## Time Mapping
 
@@ -183,7 +182,7 @@ The bridge intentionally degrades in this order:
 2. full DAV + trim without iframe
 3. expose failure state in SQLite/API if extraction still fails
 
-It should never require `/api/v1/events` to recover archive event video.
+It should never require any live/recent event buffer to recover archive event video.
 
 ## Expected Result
 
@@ -196,3 +195,4 @@ With current behavior, the correct archive event flow is:
 5. bridge trims only the event time window
 6. bridge stores the resulting MP4 and job metadata in SQLite
 7. later API/card requests reuse that stored asset instead of rebuilding it
+

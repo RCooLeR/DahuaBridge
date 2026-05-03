@@ -159,7 +159,6 @@ class DahuaBridgeCamera(DahuaBridgeEntity, Camera):
         if source:
             attrs["stream_source"] = self.coordinator.api.bridge_resource_url(source)
         attrs["bridge_base_url"] = self.coordinator.api.base_url
-        attrs["bridge_events_url"] = self.coordinator.api.absolute_url("/api/v1/events")
         attrs["bridge_device_id"] = device_id
         attrs["bridge_root_device_id"] = parent_id or device_id
         attrs["bridge_device_kind"] = str(device.get("kind", "")).strip()
@@ -179,6 +178,12 @@ class DahuaBridgeCamera(DahuaBridgeEntity, Camera):
                 )
                 attrs["bridge_playback_sessions_url"] = self.coordinator.api.absolute_url(
                     f"/api/v1/nvr/{quote(parent_id, safe='')}/playback/sessions"
+                )
+                attrs["bridge_archive_coverage_url"] = (
+                    self.coordinator.api.absolute_url(
+                        f"/api/v1/nvr/{quote(parent_id, safe='')}/recordings/coverage"
+                    )
+                    + f"?channel={channel}"
                 )
         attrs["stream_available"] = self._stream_available()
         attrs["preferred_video_profile"] = self.coordinator.preferred_video_profile

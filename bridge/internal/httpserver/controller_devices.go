@@ -28,6 +28,11 @@ type nvrArchiveIFrameDownloader interface {
 	NVRDownloadRecordingIFrame(context.Context, string, dahua.NVRRecordingClipRequest) (dahua.NVRRecordingDownload, error)
 }
 
+type nvrArchiveInspector interface {
+	NVREventSummary(context.Context, string, time.Time, time.Time, string) (dahua.NVREventSummary, error)
+	NVRArchiveCoverage(context.Context, string, int) (dahua.NVRArchiveCoverage, error)
+}
+
 func (c *controller) registerDeviceRoutes(router chi.Router) {
 	router.Get("/api/v1/devices", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, c.probes.List())
@@ -175,13 +180,47 @@ func (c *controller) registerNVRRoutes(router chi.Router) {
 		summaryCtx, cancel := context.WithTimeout(r.Context(), 45*time.Second)
 		defer cancel()
 
-		summary, err := buildNVREventSummary(summaryCtx, c.snapshots, chi.URLParam(r, "deviceID"), query)
+		inspector, ok := c.snapshots.(nvrArchiveInspector)
+		if !ok {
+			writeServiceUnavailableError(w, "archive summary is not configured")
+			return
+		}
+		summary, err := inspector.NVREventSummary(
+			summaryCtx,
+			chi.URLParam(r, "deviceID"),
+			query.StartTime,
+			query.EndTime,
+			query.EventCode,
+		)
 		if err != nil {
 			writeClassifiedActionError(w, err, http.StatusBadGateway)
 			return
 		}
 
 		writeJSON(w, http.StatusOK, summary)
+	})
+	router.With(rateLimitMiddleware(c.adminLimiter)).Get("/api/v1/nvr/{deviceID}/recordings/coverage", func(w http.ResponseWriter, r *http.Request) {
+		channel, err := parseOptionalPositiveInt(r.URL.Query().Get("channel"))
+		if err != nil || channel <= 0 {
+			writeInvalidRequestError(w, fmt.Errorf("invalid channel"))
+			return
+		}
+
+		coverageCtx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+		defer cancel()
+
+		inspector, ok := c.snapshots.(nvrArchiveInspector)
+		if !ok {
+			writeServiceUnavailableError(w, "archive coverage is not configured")
+			return
+		}
+		coverage, err := inspector.NVRArchiveCoverage(coverageCtx, chi.URLParam(r, "deviceID"), channel)
+		if err != nil {
+			writeClassifiedActionError(w, err, http.StatusBadGateway)
+			return
+		}
+
+		writeJSON(w, http.StatusOK, coverage)
 	})
 	router.With(rateLimitMiddleware(c.mediaLimiter)).Post("/api/v1/nvr/{deviceID}/recordings/export", func(w http.ResponseWriter, r *http.Request) {
 		if c.media == nil || !c.media.Enabled() {
@@ -722,42 +761,4 @@ func (c *controller) lookupNVRStreamProfile(deviceID string, channel int, profil
 		return entry, streams.Profile{}
 	}
 	return streams.Entry{}, streams.Profile{}
-}
-
-func (c *controller) registerEventRoutes(router chi.Router) {
-	router.Get("/api/v1/events", func(w http.ResponseWriter, r *http.Request) {
-		if c.events == nil {
-			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "event buffer is not configured"})
-			return
-		}
-
-		limit, err := parseOptionalPositiveInt(r.URL.Query().Get("limit"))
-		if err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
-			return
-		}
-
-		deviceID := strings.TrimSpace(r.URL.Query().Get("device_id"))
-		childID := strings.TrimSpace(r.URL.Query().Get("child_id"))
-		deviceKind := dahua.DeviceKind(strings.TrimSpace(r.URL.Query().Get("device_kind")))
-		code := strings.TrimSpace(r.URL.Query().Get("code"))
-		action := strings.TrimSpace(r.URL.Query().Get("action"))
-		writeJSON(w, http.StatusOK, map[string]any{
-			"stats":  c.events.EventStats(),
-			"events": c.events.ListEvents(deviceID, childID, deviceKind, code, action, limit),
-		})
-	})
-	router.With(rateLimitMiddleware(c.adminLimiter)).Delete("/api/v1/events", func(w http.ResponseWriter, r *http.Request) {
-		if c.events == nil {
-			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "event buffer is not configured"})
-			return
-		}
-
-		removed := c.events.ClearEvents()
-		writeJSON(w, http.StatusOK, map[string]any{
-			"status":        "ok",
-			"removed_count": removed,
-			"stats":         c.events.EventStats(),
-		})
-	})
 }

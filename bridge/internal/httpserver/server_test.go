@@ -56,6 +56,8 @@ type stubSnapshotReader struct {
 	listStreams              func(bool) []streams.Entry
 	adminSettings            func() map[string]any
 	nvrRecordings            func(context.Context, string, dahua.NVRRecordingQuery) (dahua.NVRRecordingSearchResult, error)
+	nvrEventSummary          func(context.Context, string, time.Time, time.Time, string) (dahua.NVREventSummary, error)
+	nvrArchiveCoverage       func(context.Context, string, int) (dahua.NVRArchiveCoverage, error)
 	nvrDownloadRecording     func(context.Context, string, string) (dahua.NVRRecordingDownload, error)
 	nvrDownloadRecordingClip func(context.Context, string, dahua.NVRRecordingClipRequest) (dahua.NVRRecordingDownload, error)
 	createNVRPlaybackSession func(context.Context, string, dahua.NVRPlaybackSessionRequest) (dahua.NVRPlaybackSession, error)
@@ -71,6 +73,18 @@ func (s stubSnapshotReader) NVRRecordings(ctx context.Context, deviceID string, 
 		return s.nvrRecordings(ctx, deviceID, query)
 	}
 	return dahua.NVRRecordingSearchResult{}, nil
+}
+func (s stubSnapshotReader) NVREventSummary(ctx context.Context, deviceID string, startTime time.Time, endTime time.Time, eventCode string) (dahua.NVREventSummary, error) {
+	if s.nvrEventSummary != nil {
+		return s.nvrEventSummary(ctx, deviceID, startTime, endTime, eventCode)
+	}
+	return dahua.NVREventSummary{}, nil
+}
+func (s stubSnapshotReader) NVRArchiveCoverage(ctx context.Context, deviceID string, channel int) (dahua.NVRArchiveCoverage, error) {
+	if s.nvrArchiveCoverage != nil {
+		return s.nvrArchiveCoverage(ctx, deviceID, channel)
+	}
+	return dahua.NVRArchiveCoverage{}, nil
 }
 func (s stubSnapshotReader) NVRDownloadRecording(ctx context.Context, deviceID string, filePath string) (dahua.NVRRecordingDownload, error) {
 	if s.nvrDownloadRecording != nil {
@@ -1149,105 +1163,6 @@ func TestRefreshNVRInventoryEndpointDetectsTypedNotFound(t *testing.T) {
 	}
 }
 
-func TestEventsEndpoint(t *testing.T) {
-	server := newTestServer(stubActionReader{}, stubEventReader{
-		list: func(deviceID string, childID string, deviceKind dahua.DeviceKind, code string, action string, limit int) []dahua.Event {
-			if deviceID != "front_vto" {
-				t.Fatalf("unexpected device id: %q", deviceID)
-			}
-			if childID != "" {
-				t.Fatalf("unexpected child id: %q", childID)
-			}
-			if deviceKind != dahua.DeviceKindVTO {
-				t.Fatalf("unexpected device kind: %q", deviceKind)
-			}
-			if code != "DoorBell" {
-				t.Fatalf("unexpected code filter: %q", code)
-			}
-			if action != "start" {
-				t.Fatalf("unexpected action filter: %q", action)
-			}
-			if limit != 1 {
-				t.Fatalf("unexpected limit: %d", limit)
-			}
-			return []dahua.Event{
-				{
-					DeviceID:   "front_vto",
-					DeviceKind: dahua.DeviceKindVTO,
-					Code:       "DoorBell",
-				},
-			}
-		},
-		stats: func() map[string]any {
-			return map[string]any{"capacity": 512, "count": 1}
-		},
-	})
-
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/events?device_id=front_vto&device_kind=vto&code=DoorBell&action=start&limit=1", nil)
-	rec := httptest.NewRecorder()
-
-	server.httpServer.Handler.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("expected status 200, got %d: %s", rec.Code, rec.Body.String())
-	}
-
-	var payload map[string]json.RawMessage
-	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
-		t.Fatalf("decode response: %v", err)
-	}
-	if _, ok := payload["events"]; !ok {
-		t.Fatalf("missing events payload: %s", rec.Body.String())
-	}
-	if _, ok := payload["stats"]; !ok {
-		t.Fatalf("missing stats payload: %s", rec.Body.String())
-	}
-}
-
-func TestEventsEndpointRejectsInvalidLimit(t *testing.T) {
-	server := newTestServer(stubActionReader{}, stubEventReader{})
-
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/events?limit=-1", nil)
-	rec := httptest.NewRecorder()
-
-	server.httpServer.Handler.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("expected status 400, got %d: %s", rec.Code, rec.Body.String())
-	}
-}
-
-func TestClearEventsEndpoint(t *testing.T) {
-	server := newTestServer(stubActionReader{}, stubEventReader{
-		clear: func() int {
-			return 3
-		},
-		stats: func() map[string]any {
-			return map[string]any{"capacity": 512, "count": 0}
-		},
-	})
-
-	req := httptest.NewRequest(http.MethodDelete, "/api/v1/events", nil)
-	rec := httptest.NewRecorder()
-
-	server.httpServer.Handler.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("expected status 200, got %d: %s", rec.Code, rec.Body.String())
-	}
-
-	var payload map[string]any
-	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
-		t.Fatalf("decode response: %v", err)
-	}
-	if payload["status"] != "ok" {
-		t.Fatalf("unexpected payload: %+v", payload)
-	}
-	if payload["removed_count"] != float64(3) {
-		t.Fatalf("unexpected removed_count: %+v", payload)
-	}
-}
-
 func TestProbeDeviceEndpointRateLimited(t *testing.T) {
 	server := newTestServerWithConfig(config.HTTPConfig{
 		ListenAddress:           ":0",
@@ -1636,7 +1551,7 @@ func TestAdminPageEndpoint(t *testing.T) {
 	if !strings.Contains(body, "DahuaBridge Admin") || !strings.Contains(body, "Operator Surface") {
 		t.Fatalf("missing admin page heading:\n%s", body)
 	}
-	if !strings.Contains(body, `/api/v1/devices/probe-all`) || !strings.Contains(body, "Clear Event Buffer") {
+	if !strings.Contains(body, `/api/v1/devices/probe-all`) {
 		t.Fatalf("missing admin action controls:\n%s", body)
 	}
 	if !strings.Contains(body, `/admin/test-bridge`) {
@@ -2924,43 +2839,47 @@ func TestNVREventSummaryEndpoint(t *testing.T) {
 		MetricsPath:   "/metrics",
 		HealthPath:    "/healthz",
 	}, stubSnapshotReader{
-		listStreams: func(bool) []streams.Entry {
-			return []streams.Entry{
-				{RootDeviceID: "west20_nvr", DeviceKind: dahua.DeviceKindNVRChannel, Channel: 2},
-				{RootDeviceID: "west20_nvr", DeviceKind: dahua.DeviceKindNVRChannel, Channel: 1},
-				{RootDeviceID: "west20_nvr", DeviceKind: dahua.DeviceKindNVRChannel, Channel: 1},
-				{RootDeviceID: "other_nvr", DeviceKind: dahua.DeviceKindNVRChannel, Channel: 9},
-			}
-		},
-		nvrRecordings: func(_ context.Context, deviceID string, query dahua.NVRRecordingQuery) (dahua.NVRRecordingSearchResult, error) {
+		nvrEventSummary: func(_ context.Context, deviceID string, startTime time.Time, endTime time.Time, eventCode string) (dahua.NVREventSummary, error) {
 			if deviceID != "west20_nvr" {
 				t.Fatalf("unexpected device id %q", deviceID)
 			}
-			if !query.EventOnly {
-				t.Fatal("expected event-only summary search")
+			if startTime.Format(time.RFC3339) != "2026-05-01T00:00:00Z" {
+				t.Fatalf("unexpected start time %s", startTime.Format(time.RFC3339))
 			}
-			if query.EventCode != "all" {
-				t.Fatalf("unexpected event code %q", query.EventCode)
+			if endTime.Format(time.RFC3339) != "2026-05-02T00:00:00Z" {
+				t.Fatalf("unexpected end time %s", endTime.Format(time.RFC3339))
 			}
-
-			switch query.Channel {
-			case 1:
-				return dahua.NVRRecordingSearchResult{
-					Items: []dahua.NVRRecording{
-						{Type: "Event.smdTypeHuman", Flags: []string{"Event", "smdTypeHuman"}},
-						{Type: "Event.CrossLineDetection", Flags: []string{"Event", "CrossLineDetection"}},
+			if eventCode != "all" {
+				t.Fatalf("unexpected event code %q", eventCode)
+			}
+			return dahua.NVREventSummary{
+				DeviceID:   deviceID,
+				StartTime:  startTime.Format(time.RFC3339),
+				EndTime:    endTime.Format(time.RFC3339),
+				TotalCount: 3,
+				Items: []dahua.NVREventSummaryItem{
+					{Code: "human", Label: "Human", Count: 1},
+					{Code: "tripwire", Label: "Cross Line", Count: 1},
+					{Code: "vehicle", Label: "Vehicle", Count: 1},
+				},
+				Channels: []dahua.NVREventChannelSummary{
+					{
+						Channel:    1,
+						TotalCount: 2,
+						Items: []dahua.NVREventSummaryItem{
+							{Code: "human", Label: "Human", Count: 1},
+							{Code: "tripwire", Label: "Cross Line", Count: 1},
+						},
 					},
-				}, nil
-			case 2:
-				return dahua.NVRRecordingSearchResult{
-					Items: []dahua.NVRRecording{
-						{Type: "Event.smdTypeVehicle", Flags: []string{"Event", "smdTypeVehicle"}},
+					{
+						Channel:    2,
+						TotalCount: 1,
+						Items: []dahua.NVREventSummaryItem{
+							{Code: "vehicle", Label: "Vehicle", Count: 1},
+						},
 					},
-				}, nil
-			default:
-				t.Fatalf("unexpected channel %d", query.Channel)
-				return dahua.NVRRecordingSearchResult{}, nil
-			}
+				},
+			}, nil
 		},
 	}, nil, stubActionReader{}, stubEventReader{})
 
@@ -3002,20 +2921,68 @@ func TestNVREventSummaryEndpoint(t *testing.T) {
 	}
 
 	expectedCounts := map[string]int{
-		"smdTypeHuman":       1,
-		"CrossLineDetection": 1,
-		"smdTypeVehicle":     1,
+		"human":    1,
+		"tripwire": 1,
+		"vehicle":  1,
 	}
 	expectedLabels := map[string]string{
-		"smdTypeHuman":       "Human",
-		"CrossLineDetection": "Cross Line",
-		"smdTypeVehicle":     "Vehicle",
+		"human":    "Human",
+		"tripwire": "Cross Line",
+		"vehicle":  "Vehicle",
 	}
 	if !reflect.DeepEqual(gotCounts, expectedCounts) {
 		t.Fatalf("unexpected summary counts %+v", gotCounts)
 	}
 	if !reflect.DeepEqual(gotLabels, expectedLabels) {
 		t.Fatalf("unexpected summary labels %+v", gotLabels)
+	}
+}
+
+func TestNVRArchiveCoverageEndpoint(t *testing.T) {
+	server := newTestServerWithConfig(config.HTTPConfig{
+		ListenAddress: ":0",
+		MetricsPath:   "/metrics",
+		HealthPath:    "/healthz",
+	}, stubSnapshotReader{
+		nvrArchiveCoverage: func(_ context.Context, deviceID string, channel int) (dahua.NVRArchiveCoverage, error) {
+			if deviceID != "west20_nvr" {
+				t.Fatalf("unexpected device id %q", deviceID)
+			}
+			if channel != 1 {
+				t.Fatalf("unexpected channel %d", channel)
+			}
+			return dahua.NVRArchiveCoverage{
+				DeviceID:   deviceID,
+				Channel:    channel,
+				StartTime:  "2026-05-01T00:00:00Z",
+				EndTime:    "2026-05-03T00:30:00Z",
+				ChunkCount: 2,
+				Chunks: []dahua.NVRArchiveCoverageChunk{
+					{StartTime: "2026-05-01T00:00:00Z", EndTime: "2026-05-01T00:30:00Z"},
+					{StartTime: "2026-05-03T00:00:00Z", EndTime: "2026-05-03T00:30:00Z"},
+				},
+			}, nil
+		},
+	}, nil, stubActionReader{}, stubEventReader{})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/nvr/west20_nvr/recordings/coverage?channel=1", nil)
+	rec := httptest.NewRecorder()
+
+	server.httpServer.Handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var coverage dahua.NVRArchiveCoverage
+	if err := json.NewDecoder(rec.Body).Decode(&coverage); err != nil {
+		t.Fatalf("decode coverage response: %v", err)
+	}
+	if coverage.DeviceID != "west20_nvr" || coverage.Channel != 1 {
+		t.Fatalf("unexpected coverage payload %+v", coverage)
+	}
+	if coverage.ChunkCount != 2 || len(coverage.Chunks) != 2 {
+		t.Fatalf("unexpected coverage chunks %+v", coverage)
 	}
 }
 

@@ -111,30 +111,6 @@ Unless noted otherwise, endpoints return JSON and are safe to call from browser-
 - Only the provided fields are updated.
 - Returns the refreshed probe result in `result`.
 
-## 🧾 Events
-
-### `GET /api/v1/events`
-
-- Returns the in-memory normalized event buffer plus event-buffer stats.
-- Response shape:
-  - `stats`
-  - `events`
-- Optional filters:
-  - `device_id`
-  - `child_id`
-  - `device_kind`
-  - `code`
-  - `action`
-  - `limit`
-- `limit` must be zero or positive. Omit it to get the full current buffer.
-
-### `DELETE /api/v1/events`
-
-- Clears the in-memory event buffer.
-- Returns:
-  - `removed_count`
-  - updated `stats`
-
 ## 📡 Stream And Catalog Surfaces
 
 ### `GET /api/v1/streams`

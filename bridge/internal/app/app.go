@@ -16,7 +16,6 @@ import (
 	"RCooLeR/DahuaBridge/internal/dahua/ipc"
 	"RCooLeR/DahuaBridge/internal/dahua/nvr"
 	"RCooLeR/DahuaBridge/internal/dahua/vto"
-	"RCooLeR/DahuaBridge/internal/eventbuffer"
 	"RCooLeR/DahuaBridge/internal/httpserver"
 	"RCooLeR/DahuaBridge/internal/imou"
 	"RCooLeR/DahuaBridge/internal/logging"
@@ -35,7 +34,6 @@ func Run(ctx context.Context, cfg config.Config, info buildinfo.BuildInfo) error
 
 	metricsRegistry := metrics.New(info)
 	probeStore := store.NewProbeStore()
-	recentEvents := eventbuffer.New(eventbuffer.DefaultCapacity)
 	services := newRuntimeServices(cfg, probeStore)
 	mediaManager := media.New(cfg.Media, services, logger, metricsRegistry)
 	imouClient := imou.NewClient(cfg.Imou)
@@ -74,7 +72,7 @@ func Run(ctx context.Context, cfg config.Config, info buildinfo.BuildInfo) error
 		}()
 	}
 	adminActions := newAdminActions(logger, metricsRegistry, probeStore, services, drivers)
-	adminServer := httpserver.New(cfg.HTTP, cfg.Archive, logger, metricsRegistry, probeStore, services, mediaManager, adminActions, recentEvents)
+	adminServer := httpserver.New(cfg.HTTP, cfg.Archive, logger, metricsRegistry, probeStore, services, mediaManager, adminActions, nil)
 
 	serverErrors := make(chan error, 1)
 	go func() {
@@ -93,7 +91,7 @@ func Run(ctx context.Context, cfg config.Config, info buildinfo.BuildInfo) error
 			wg.Add(1)
 			go func(driver dahua.Driver, eventSource dahua.EventSource) {
 				defer wg.Done()
-				runEventLoop(ctx, logger, metricsRegistry, probeStore, recentEvents, driver, eventSource)
+				runEventLoop(ctx, logger, metricsRegistry, probeStore, driver, eventSource)
 			}(driver, eventSource)
 		}
 	}
@@ -294,7 +292,6 @@ func runEventLoop(
 	logger zerolog.Logger,
 	metricsRegistry *metrics.Registry,
 	probes *store.ProbeStore,
-	recentEvents *eventbuffer.Buffer,
 	driver dahua.Driver,
 	eventSource dahua.EventSource,
 ) {
@@ -312,7 +309,7 @@ func runEventLoop(
 			case <-ctx.Done():
 				return
 			case event := <-events:
-				handleEvent(log, metricsRegistry, probes, recentEvents, event)
+				handleEvent(log, metricsRegistry, probes, event)
 			}
 		}
 	}()
@@ -327,13 +324,8 @@ func handleEvent(
 	log zerolog.Logger,
 	metricsRegistry *metrics.Registry,
 	probes *store.ProbeStore,
-	recentEvents *eventbuffer.Buffer,
 	event dahua.Event,
 ) {
-	if recentEvents != nil {
-		recentEvents.Add(event)
-	}
-
 	metricsRegistry.ObserveEvent(
 		event.DeviceID,
 		string(event.DeviceKind),

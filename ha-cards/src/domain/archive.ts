@@ -67,10 +67,20 @@ export interface NvrPlaybackSessionCapabilityModel {
   responseProfiles: Array<"dash" | "hls" | "mjpeg" | "webrtc">;
 }
 
+export interface NvrArchiveCoverageCapabilityModel {
+  supported: boolean;
+  label: string;
+  kind: "query";
+  method: "GET";
+  url: string | null;
+  channel: number | null;
+}
+
 export interface CameraArchiveCapabilities {
   supported: boolean;
   search: NvrArchiveSearchCapabilityModel;
   playback: NvrPlaybackSessionCapabilityModel;
+  coverage: NvrArchiveCoverageCapabilityModel;
 }
 
 export interface NvrArchiveRecordingModel {
@@ -118,6 +128,20 @@ export interface NvrArchiveSearchResultModel {
   limit: number;
   returnedCount: number;
   items: NvrArchiveRecordingModel[];
+}
+
+export interface NvrArchiveCoverageChunkModel {
+  startTime: string;
+  endTime: string;
+}
+
+export interface NvrArchiveCoverageModel {
+  deviceId: string;
+  channel: number;
+  startTime: string | null;
+  endTime: string | null;
+  chunkCount: number;
+  chunks: NvrArchiveCoverageChunkModel[];
 }
 
 export interface BridgeRecordingClipModel {
@@ -180,9 +204,13 @@ export function buildCameraArchiveCapabilities(
 ): CameraArchiveCapabilities {
   const archiveSearch = featureByKey(features, "archive_search");
   const archivePlayback = featureByKey(features, "archive_playback");
+  const archiveCoverage = featureByKey(features, "archive_coverage");
 
   return {
-    supported: archiveSearch?.supported === true || archivePlayback?.supported === true,
+    supported:
+      archiveSearch?.supported === true ||
+      archivePlayback?.supported === true ||
+      archiveCoverage?.supported === true,
     search: {
       supported: archiveSearch?.supported === true,
       label: archiveSearch?.label ?? "Recordings",
@@ -213,6 +241,14 @@ export function buildCameraArchiveCapabilities(
       ],
       seekRequestFields: [buildRequestField("seek_time", true, "datetime")],
       responseProfiles: ["dash", "hls", "mjpeg", "webrtc"],
+    },
+    coverage: {
+      supported: archiveCoverage?.supported === true,
+      label: archiveCoverage?.label ?? "Coverage",
+      kind: "query",
+      method: "GET",
+      url: archiveCoverage?.url ?? null,
+      channel: channelNumber,
     },
   };
 }

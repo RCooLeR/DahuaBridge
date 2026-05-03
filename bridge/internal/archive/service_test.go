@@ -299,6 +299,152 @@ func TestServiceEnrichRecordingsAppliesStoredAssetStates(t *testing.T) {
 	}
 }
 
+func TestServiceEventSummaryUsesIndexedSMDIVSRows(t *testing.T) {
+	tempDir := t.TempDir()
+	service, err := New(config.ArchiveConfig{
+		Enabled:      true,
+		DBPath:       filepath.Join(tempDir, "archive.db"),
+		CacheDir:     filepath.Join(tempDir, "cache"),
+		TempDir:      filepath.Join(tempDir, "tmp"),
+		PrefetchDays: 1,
+		RetainDays:   7,
+		Cron:         "0 * * * *",
+	}, []config.DeviceConfig{{
+		ID:               "west20_nvr",
+		Enabled:          boolPtr(true),
+		ChannelAllowlist: []int{1, 2},
+	}}, stubSearcher{
+		find: func(context.Context, string, dahua.NVRRecordingQuery) (dahua.NVRRecordingSearchResult, error) {
+			return dahua.NVRRecordingSearchResult{}, nil
+		},
+	}, store.NewProbeStore(), zerolog.Nop())
+	if err != nil {
+		t.Fatalf("new service: %v", err)
+	}
+	defer service.Close()
+
+	seenAt := time.Date(2026, 5, 2, 12, 0, 0, 0, time.UTC)
+	items := []dahua.NVRRecording{
+		{
+			Source:      "nvr_event",
+			Channel:     1,
+			StartTime:   "2026-05-01 11:00:00",
+			EndTime:     "2026-05-01 11:00:20",
+			FilePath:    "/mnt/dvr/2026-05-01/0/11.00.00-11.30.00.dav",
+			Type:        "Event.smdTypeHuman",
+			VideoStream: "Main",
+			Flags:       []string{"Event", "smdTypeHuman"},
+		},
+		{
+			Source:      "nvr_event",
+			Channel:     1,
+			StartTime:   "2026-05-01 11:10:00",
+			EndTime:     "2026-05-01 11:10:20",
+			FilePath:    "/mnt/dvr/2026-05-01/0/11.00.00-11.30.00.dav",
+			Type:        "Event.CrossLineDetection",
+			VideoStream: "Main",
+			Flags:       []string{"Event", "CrossLineDetection"},
+		},
+		{
+			Source:      "nvr_event",
+			Channel:     2,
+			StartTime:   "2026-05-01 11:20:00",
+			EndTime:     "2026-05-01 11:20:20",
+			FilePath:    "/mnt/dvr/2026-05-01/0/11.00.00-11.30.00.dav",
+			Type:        "Event.smdTypeVehicle",
+			VideoStream: "Main",
+			Flags:       []string{"Event", "smdTypeVehicle"},
+		},
+		{
+			Source:      "nvr_event",
+			Channel:     2,
+			StartTime:   "2026-05-01 11:25:00",
+			EndTime:     "2026-05-01 11:25:20",
+			FilePath:    "/mnt/dvr/2026-05-01/0/11.00.00-11.30.00.dav",
+			Type:        "Event.MotionDetect",
+			VideoStream: "Main",
+			Flags:       []string{"Event", "MotionDetect"},
+		},
+	}
+	if err := service.store.UpsertArchiveEvents(context.Background(), "west20_nvr", items, seenAt); err != nil {
+		t.Fatalf("upsert events: %v", err)
+	}
+
+	summary, err := service.EventSummary(
+		context.Background(),
+		"west20_nvr",
+		time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC),
+		time.Date(2026, 5, 2, 0, 0, 0, 0, time.UTC),
+		"all",
+	)
+	if err != nil {
+		t.Fatalf("event summary: %v", err)
+	}
+	if summary.TotalCount != 3 {
+		t.Fatalf("summary total = %d, want 3", summary.TotalCount)
+	}
+	if len(summary.Channels) != 2 {
+		t.Fatalf("summary channels = %d, want 2", len(summary.Channels))
+	}
+}
+
+func TestServiceArchiveCoverageUsesIndexedFileChunks(t *testing.T) {
+	tempDir := t.TempDir()
+	service, err := New(config.ArchiveConfig{
+		Enabled:      true,
+		DBPath:       filepath.Join(tempDir, "archive.db"),
+		CacheDir:     filepath.Join(tempDir, "cache"),
+		TempDir:      filepath.Join(tempDir, "tmp"),
+		PrefetchDays: 1,
+		RetainDays:   7,
+		Cron:         "0 * * * *",
+	}, nil, stubSearcher{
+		find: func(context.Context, string, dahua.NVRRecordingQuery) (dahua.NVRRecordingSearchResult, error) {
+			return dahua.NVRRecordingSearchResult{}, nil
+		},
+	}, store.NewProbeStore(), zerolog.Nop())
+	if err != nil {
+		t.Fatalf("new service: %v", err)
+	}
+	defer service.Close()
+
+	seenAt := time.Date(2026, 5, 2, 12, 0, 0, 0, time.UTC)
+	if err := service.store.UpsertArchiveFiles(context.Background(), "west20_nvr", []dahua.NVRRecording{
+		{
+			Source:      "nvr",
+			Channel:     1,
+			StartTime:   "2026-05-01 11:00:00",
+			EndTime:     "2026-05-01 11:30:00",
+			FilePath:    "/mnt/dvr/2026-05-01/0/11.00.00-11.30.00.dav",
+			VideoStream: "Main",
+		},
+		{
+			Source:      "nvr",
+			Channel:     1,
+			StartTime:   "2026-05-03 09:30:00",
+			EndTime:     "2026-05-03 10:00:00",
+			FilePath:    "/mnt/dvr/2026-05-03/0/09.30.00-10.00.00.dav",
+			VideoStream: "Main",
+		},
+	}, seenAt); err != nil {
+		t.Fatalf("upsert files: %v", err)
+	}
+
+	coverage, err := service.ArchiveCoverage(context.Background(), "west20_nvr", 1)
+	if err != nil {
+		t.Fatalf("archive coverage: %v", err)
+	}
+	if coverage.ChunkCount != 2 || len(coverage.Chunks) != 2 {
+		t.Fatalf("unexpected coverage %+v", coverage)
+	}
+	if coverage.StartTime != "2026-05-01T08:00:00Z" {
+		t.Fatalf("unexpected coverage start %q", coverage.StartTime)
+	}
+	if coverage.EndTime != "2026-05-03T07:00:00Z" {
+		t.Fatalf("unexpected coverage end %q", coverage.EndTime)
+	}
+}
+
 func boolPtr(value bool) *bool {
 	return &value
 }
