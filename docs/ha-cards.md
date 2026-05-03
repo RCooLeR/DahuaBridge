@@ -16,6 +16,9 @@ Current repo status:
   - `MP4`
   - `Settings`
 - archive-backed camera views support local-day filtering, event-type filtering for event clips, pagination, playback launch, and export/download actions
+- selected-camera live view defaults to the main stream and keeps native HA subtype selection in sync with the selected stream profile
+- overview tiles and selected-camera toolbars show daily human and vehicle event counts
+- archive seek is driven by bridge archive coverage and a dedicated slider widget instead of a plain browser range input
 - archive playback/export still works when the integration only exposes dedicated archive URL attributes and not full archive feature metadata
 - bridge-owned MP4 clips can be browsed by day and stopped or downloaded from the card
 

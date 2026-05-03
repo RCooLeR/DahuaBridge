@@ -16,7 +16,6 @@ You need:
 Use the bridge guide:
 
 - [bridge/docs/getting-started.md](../bridge/docs/getting-started.md)
-- [github-deploy.md](github-deploy.md)
 
 That guide covers:
 

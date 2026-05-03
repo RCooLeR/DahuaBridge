@@ -110,9 +110,15 @@ For event-backed archive items such as SMD and IVS hits, the supported bridge wo
 
 1. search archive items
 2. use the returned `export_url` or playback session flow
-3. record the playback stream into a bridge-owned MP4 clip when a file export is needed
+3. record the archive playback RTSP stream into a bridge-owned MP4 clip when a file export is needed
 
-Direct recorder file transfer is used when the event result resolves to a recorder `file_path`. Raw direct-download URLs are intentionally not exposed for event items.
+Important distinction:
+
+- non-event archive rows can still export directly from recorder `.dav` content when `file_path` is present
+- event-backed archive rows are SQLite-backed and exported from archive RTSP playback even if a `file_path` is available on the row
+- raw direct-download URLs are intentionally not exposed for event items
+
+When `archive.enabled` is on, the background archive service also keeps a SQLite index of SMD/IVS rows, stores generated archive RTSP URLs for them, checks for recent changes every 5 minutes, and queues missing MP4 assets for extraction.
 
 ## Playback Sessions
 
@@ -130,6 +136,7 @@ Playback-specific worker behavior:
 
 - playback HLS, MJPEG, and WebRTC workers enforce the requested archive window duration
 - playback RTSP inputs use wallclock timestamps so finite archive windows terminate cleanly
+- playback RTSP URLs use Dahua's `/cam/playback` path with ordered query parameters: `channel`, `subtype`, `starttime`, optional `endtime`
 - playback HLS output can remain addressable after FFmpeg exits, while the worker entry stays visible until idle-timeout cleanup runs
 - live validation on May 2, 2026 confirmed near-end seek playback on a 24/7 archive window exited FFmpeg at EOF while the retained HLS playlist stayed fetchable
 

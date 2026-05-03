@@ -336,6 +336,7 @@ Example catalog skeleton:
 - Optional query param:
   - `limit`, default `25`, max `200`
   - `event` or `event_type`, optional Dahua event filter. Friendly values such as `motion`, `human`, `vehicle`, `tripwire`, `intrusion`, and `access` are normalized to recorder event codes.
+  - `event_only=true` limits the result set to event-backed rows. The surveillance panel uses `event_only=true&event=all` for archive event browsing.
   - When an event filter is supplied, the bridge resolves matching archive windows from recorder event metadata, including recorder log RPC, SMD finder RPC, and IVS media-file RPC as needed.
 - Example:
 
@@ -347,7 +348,9 @@ Example catalog skeleton:
 - Every item now carries a stable bridge `id` plus `record_kind` (`file` or `event`).
 - Native non-event NVR archive items can also include `download_url` when the recorder returned a usable `file_path`.
 - The bridge caches identical archive-search queries briefly and coalesces concurrent misses so repeated UI polling does not duplicate recorder searches.
+- Event-backed items are DB-first when archive indexing is enabled. The bridge prefers SQLite-backed event rows, persisted asset state, and stored coverage before falling back to live recorder search.
 - Event-backed items such as SMD and IVS results are intended for bridge playback/export workflows and do not expose raw direct-download URLs.
+- Event-backed items can include `rtsp_main_url` and `rtsp_sub_url` for bridge-generated archive playback sources.
 - Native NVR archive items expose `export_url` as the supported bridge MP4 export path.
 - Archive items can also include persisted asset metadata:
   - `asset_status`: `indexed`, `transcoding`, `ready`, `failed`, or `missing`
@@ -356,11 +359,34 @@ Example catalog skeleton:
   - `asset_playback_url` and `asset_download_url`: present only when the asset is `ready`
   - `asset_stop_url`: present when the asset is still `transcoding`
 
+### `GET /api/v1/nvr/{deviceID}/events/summary`
+
+- Returns aggregate event counts for the requested time window.
+- This is the supported summary surface for daily human and vehicle counters used by the Home Assistant cards.
+- Required query params:
+  - `start`
+  - `end`
+- Optional query param:
+  - `event`
+- When archive indexing is enabled, the summary is computed from SQLite-backed event rows.
+
+### `GET /api/v1/nvr/{deviceID}/recordings/coverage`
+
+- Returns archive coverage chunks for one channel.
+- Required query param:
+  - `channel`
+- The surveillance panel uses this to drive archive seek over the indexed recorder window.
+- Response fields include:
+  - `start_time`
+  - `end_time`
+  - `chunk_count`
+  - `chunks`
+
 ### `POST /api/v1/nvr/{deviceID}/recordings/export`
 
 - Exports a native NVR archive window as a bridge-owned MP4 clip.
-- When `file_path` is supplied, the bridge downloads the recorder `.dav` file first and transcodes from that file.
-- When `file_path` is absent, the bridge creates an archive playback session and records that playback stream into a bridge-owned MP4 clip.
+- For non-event archive rows, when `file_path` is supplied, the bridge downloads the recorder `.dav` file first and transcodes from that file.
+- For event-backed archive rows such as SMD and IVS, the bridge creates an archive playback session and records that playback stream into a bridge-owned MP4 clip, even if the row also includes `file_path`.
 - Accepts query params or JSON body fields:
 
 ```json
@@ -377,8 +403,8 @@ Example catalog skeleton:
 - `seek_time`, `profile`, `duration_seconds`, and `duration_ms` are optional.
 - If no duration is supplied, the bridge records from `seek_time` or `start_time` until `end_time`.
 - For finite archive exports, the bridge derives the playback duration from the archive RTSP window and lets FFmpeg terminate at end-of-file.
-- Live validation on May 2, 2026 confirmed a 22-second SMD export on channel 1 completed cleanly as a video-only MP4 on the tested recorder.
-- The same export flow is the supported path for SMD and IVS event-backed archive items.
+- Archive playback RTSP is built on `/cam/playback` with Dahua-required parameter order: `channel`, `subtype`, `starttime`, optional `endtime`.
+- The same playback-session export flow is the supported path for SMD and IVS event-backed archive items.
 - Returns:
   - `session`: playback session metadata when the playback-session path was used
   - `clip`: bridge MP4 clip metadata with `self_url` and `download_url`
@@ -408,6 +434,8 @@ Example catalog skeleton:
 
 - `seek_time` is optional. If present, playback starts near that point.
 - Returns session metadata plus generated HLS, MJPEG, and WebRTC URLs under `profiles`.
+- The generated playback RTSP source behind those profiles uses Dahua's `/cam/playback` endpoint, not `/cam/realmonitor`.
+- Parameter order matters on tested recorders. The bridge emits `channel`, `subtype`, `starttime`, optional `endtime` in that exact order.
 - Live validation on May 2, 2026 confirmed a seek to `2026-04-28T02:59:50+03:00` inside a `2026-04-28T02:30:00+03:00` to `2026-04-28T03:00:00+03:00` playback window exited FFmpeg at EOF while the retained HLS playlist remained fetchable.
 
 ### `GET /api/v1/nvr/playback/sessions/{sessionID}`

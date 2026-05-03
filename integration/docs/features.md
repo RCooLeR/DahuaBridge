@@ -51,7 +51,7 @@ The integration camera entity provides:
 - bridge capture metadata in attributes
 - bridge recording state exposure
 - bridge-backed start/stop recording services
-- archive workflow attributes for NVR channels so Home Assistant can discover bridge search, playback, and export endpoints for regular recordings and event-backed recordings such as SMD and IVS
+- archive workflow attributes for NVR channels so Home Assistant can discover bridge search, playback, export, and archive coverage endpoints for regular recordings and event-backed recordings such as SMD and IVS
 
 Read more:
 

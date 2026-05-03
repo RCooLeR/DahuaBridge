@@ -49,8 +49,10 @@ The panel supports:
 - event type and date window filters for archive searches
 - selected-camera archive browsing
 - inline playback session creation
+- archive coverage-driven seek with a dedicated slider component
 - playback seek and playback source switching
 - native NVR archive export to bridge MP4, followed by download when the export clip completes
+- daily human and vehicle counters on overview tiles and in the selected-camera toolbar
 
 Browser viewport playback currently uses:
 
@@ -58,6 +60,8 @@ Browser viewport playback currently uses:
 - MJPEG as the fallback path
 
 This is an intentional stability choice for multi-camera dashboards.
+
+For the selected live camera view, the card can also stay on the native Home Assistant camera element while overriding the selected main/sub stream source.
 
 ## 6. Device Actions
 

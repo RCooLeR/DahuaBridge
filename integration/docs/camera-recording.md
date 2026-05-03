@@ -26,6 +26,7 @@ For NVR channel cameras, the integration also exposes bridge archive endpoints i
 - `bridge_archive_recordings_url_template`
 - `bridge_archive_export_url`
 - `bridge_playback_sessions_url`
+- `bridge_archive_coverage_url`
 
 These attributes are for archive workflows, not for live clip capture.
 
@@ -34,8 +35,11 @@ They are the integration-supported path for:
 - regular 24/7 recorder playback
 - event-backed archive playback such as SMD and IVS
 - MP4 export through the bridge
+- archive seek driven by bridge coverage data
 
 The bridge owns the transcode and export behavior. If the source stream has audio, the bridge includes it. If the source stream has no audio, the bridge emits video-only output instead of mutating NVR audio settings.
+
+For non-event archive rows, export can still transcode directly from recorder DAV when `file_path` is known. For event-backed archive rows such as SMD and IVS, the bridge uses archive playback RTSP export rather than direct DAV download.
 
 ## What These Services Do
 

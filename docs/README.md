@@ -6,9 +6,8 @@ Use these pages in order:
 
 1. [Architecture](architecture.md)
 2. [Deployment Guide](deployment.md)
-3. [GitHub And Deployment Checklist](github-deploy.md)
-4. [Feature Map](features.md)
-5. [HA Cards](ha-cards.md)
+3. [Feature Map](features.md)
+4. [HA Cards](ha-cards.md)
 
 Then move into the component-specific docs:
 

@@ -24,9 +24,13 @@ If the browser supports native HLS, the card can attach the playlist directly to
 Archive search is resolved from either:
 
 - archive feature metadata exposed by the bridge integration
-- integration archive URL attributes such as `bridge_archive_recordings_url_template` and `bridge_playback_sessions_url`
+- integration archive URL attributes such as `bridge_archive_recordings_url_template`, `bridge_playback_sessions_url`, and `bridge_archive_coverage_url`
 
 Template-style archive search URLs are normalized in the card runtime before query parameters are appended.
+
+For the selected live camera view, `surveillance-panel-media.ts` can keep the Home Assistant native camera element while overriding `stream_source`, snapshot URLs, and `subtype`-specific query params so main/sub stream selection actually follows the selected profile.
+
+Archive seek is rendered by `surveillance-panel-archive-seek.ts`, which wraps `nouislider` and consumes bridge archive coverage chunks instead of relying on a plain browser range input.
 
 ## Module Layout
 
