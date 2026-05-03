@@ -100,18 +100,6 @@ export function renderArchiveRecordings({
   return html`
     <section class="events archive-panel">
       <div class="archive-head">
-        <div class="panel-title">
-          <span class="split-row">
-            <span class="header-chip-icon nvr-storage-icon" aria-hidden="true">
-              ${renderIcon(eventMode ? "mdi:motion-sensor" : "mdi:filmstrip-box-multiple")}
-            </span>
-            <span>${title}</span>
-          </span>
-        </div>
-        <div class="chip-row archive-summary">
-          <span class="badge ${statusTone}">${countText}</span>
-          <span class="badge info">${formatArchiveDateBadge(archiveDate)}</span>
-        </div>
         <div class="archive-filter-row">
           <label class="event-filter archive-date-filter">
             <span class="event-filter-label">Date</span>
@@ -279,18 +267,6 @@ export function renderBridgeRecordings({
   return html`
     <section class="events archive-panel">
       <div class="archive-head">
-        <div class="panel-title">
-          <span class="split-row">
-            <span class="header-chip-icon nvr-storage-icon" aria-hidden="true">
-              ${renderIcon("mdi:file-video-outline")}
-            </span>
-            <span>${title}</span>
-          </span>
-        </div>
-        <div class="chip-row archive-summary">
-          <span class="badge ${statusTone}">${countText}</span>
-          <span class="badge info">${formatArchiveDateBadge(recordingsDate)}</span>
-        </div>
         <div class="archive-filter-row">
           <label class="event-filter archive-date-filter">
             <span class="event-filter-label">Date</span>

@@ -243,6 +243,7 @@ export class DahuaBridgeSurveillanceTileCard
   private _vtoMicrophoneState = INITIAL_VTO_MICROPHONE_STATE;
   private _eventSummary: PanelTodayEventSummaryModel | null = null;
   private _remoteStreamSyncTimer: number | null = null;
+  private _viewportAudioSyncTimer: number | null = null;
   private _eventSummaryAbort?: AbortController;
   private _eventSummaryRequestVersion = 0;
   private _eventSummaryRefreshedAt = 0;
@@ -299,6 +300,10 @@ export class DahuaBridgeSurveillanceTileCard
       window.clearTimeout(this._remoteStreamSyncTimer);
       this._remoteStreamSyncTimer = null;
     }
+    if (this._viewportAudioSyncTimer !== null) {
+      window.clearTimeout(this._viewportAudioSyncTimer);
+      this._viewportAudioSyncTimer = null;
+    }
 
     this.cancelEventSummaryRefresh();
     void this.stopVtoMicrophone();
@@ -326,17 +331,40 @@ export class DahuaBridgeSurveillanceTileCard
       );
     };
 
-    runSyncAt(0);
+    this._remoteStreamSyncTimer = window.setTimeout(() => runSyncAt(0), 0);
+  }
+
+  private scheduleCameraViewportAudioSync(): void {
+    if (this._viewportAudioSyncTimer !== null) {
+      window.clearTimeout(this._viewportAudioSyncTimer);
+    }
+    this._viewportAudioSyncTimer = window.setTimeout(() => {
+      this._viewportAudioSyncTimer = null;
+      this.syncCameraViewportAudioState(this._cameraAudioMuted);
+    }, 0);
+  }
+
+  private shouldSyncMediaAfterUpdate(
+    changedProperties: Map<PropertyKey, unknown>,
+  ): boolean {
+    if (changedProperties.has("hass") && changedProperties.get("hass") === undefined) {
+      return true;
+    }
+    return [
+      "_config",
+      "_cameraAudioMuted",
+      "_vtoStreamPlaying",
+    ].some((key) => changedProperties.has(key));
   }
 
   protected updated(changedProperties: Map<PropertyKey, unknown>): void {
     if (this.shouldRefreshEventSummary()) {
       void this.refreshEventSummary();
     }
-    this.scheduleRemoteStreamStyleSync();
-    window.requestAnimationFrame(() => {
-      this.syncCameraViewportAudioState(this._cameraAudioMuted);
-    });
+    if (this.shouldSyncMediaAfterUpdate(changedProperties)) {
+      this.scheduleRemoteStreamStyleSync();
+      this.scheduleCameraViewportAudioSync();
+    }
 
     if (
       this._vtoStreamPlaying &&
