@@ -135,7 +135,6 @@ func New(
 		snapshots,
 		media,
 		actions,
-		events,
 		adminLimiter,
 		snapshotLimiter,
 		mediaLimiter,
@@ -1148,163 +1147,6 @@ func isEventRecordingItem(item dahua.NVRRecording) bool {
 	return source == "nvr_event" || recordingType == "event" || strings.HasPrefix(recordingType, "event.")
 }
 
-func buildNVREventSummary(ctx context.Context, snapshots SnapshotReader, deviceID string, query nvrEventSummaryQuery) (dahua.NVREventSummary, error) {
-	summary := dahua.NVREventSummary{
-		DeviceID:  strings.TrimSpace(deviceID),
-		StartTime: query.StartTime.Format(time.RFC3339),
-		EndTime:   query.EndTime.Format(time.RFC3339),
-		Items:     []dahua.NVREventSummaryItem{},
-		Channels:  []dahua.NVREventChannelSummary{},
-	}
-	if snapshots == nil {
-		return summary, fmt.Errorf("snapshot reader is not configured")
-	}
-
-	channels := nvrSummaryChannels(snapshots.ListStreams(false), summary.DeviceID)
-	if len(channels) == 0 {
-		return summary, nil
-	}
-
-	const summaryLimitPerChannel = 2000
-
-	totalByCode := make(map[string]int)
-	channelSummaries := make([]dahua.NVREventChannelSummary, 0, len(channels))
-	for _, channel := range channels {
-		result, err := snapshots.NVRRecordings(ctx, summary.DeviceID, dahua.NVRRecordingQuery{
-			Channel:   channel,
-			StartTime: query.StartTime,
-			EndTime:   query.EndTime,
-			Limit:     summaryLimitPerChannel,
-			EventCode: query.EventCode,
-			EventOnly: true,
-		})
-		if err != nil {
-			return dahua.NVREventSummary{}, err
-		}
-
-		channelByCode := make(map[string]int)
-		for _, item := range result.Items {
-			code := nvrSummaryCodeForRecording(item)
-			if code == "" {
-				continue
-			}
-			channelByCode[code]++
-			totalByCode[code]++
-			summary.TotalCount++
-		}
-		channelItems := makeNVREventSummaryItems(channelByCode)
-		channelSummaries = append(channelSummaries, dahua.NVREventChannelSummary{
-			Channel:    channel,
-			TotalCount: countNVREventSummaryItems(channelItems),
-			Items:      channelItems,
-		})
-	}
-
-	sort.Slice(channelSummaries, func(i, j int) bool {
-		return channelSummaries[i].Channel < channelSummaries[j].Channel
-	})
-	summary.Items = makeNVREventSummaryItems(totalByCode)
-	summary.Channels = channelSummaries
-	return summary, nil
-}
-
-func nvrSummaryChannels(entries []streams.Entry, deviceID string) []int {
-	seen := make(map[int]struct{})
-	channels := make([]int, 0)
-	for _, entry := range entries {
-		if entry.RootDeviceID != deviceID || entry.DeviceKind != dahua.DeviceKindNVRChannel || entry.Channel <= 0 {
-			continue
-		}
-		if _, ok := seen[entry.Channel]; ok {
-			continue
-		}
-		seen[entry.Channel] = struct{}{}
-		channels = append(channels, entry.Channel)
-	}
-	sort.Ints(channels)
-	return channels
-}
-
-func makeNVREventSummaryItems(countByCode map[string]int) []dahua.NVREventSummaryItem {
-	items := make([]dahua.NVREventSummaryItem, 0, len(countByCode))
-	for code, count := range countByCode {
-		if count <= 0 {
-			continue
-		}
-		items = append(items, dahua.NVREventSummaryItem{
-			Code:  code,
-			Label: nvrEventSummaryLabel(code),
-			Count: count,
-		})
-	}
-	sort.Slice(items, func(i, j int) bool {
-		if items[i].Count == items[j].Count {
-			return items[i].Code < items[j].Code
-		}
-		return items[i].Count > items[j].Count
-	})
-	return items
-}
-
-func countNVREventSummaryItems(items []dahua.NVREventSummaryItem) int {
-	total := 0
-	for _, item := range items {
-		total += item.Count
-	}
-	return total
-}
-
-func nvrSummaryCodeForRecording(item dahua.NVRRecording) string {
-	candidates := make([]string, 0, len(item.Flags)+1)
-	candidates = append(candidates, item.Type)
-	candidates = append(candidates, item.Flags...)
-	for _, candidate := range candidates {
-		normalized := normalizeNVREventSummaryCode(candidate)
-		if normalized != "" && !strings.EqualFold(normalized, "event") {
-			return normalized
-		}
-	}
-	return ""
-}
-
-func normalizeNVREventSummaryCode(value string) string {
-	trimmed := strings.TrimSpace(value)
-	if trimmed == "" {
-		return ""
-	}
-	if strings.HasPrefix(strings.ToLower(trimmed), "event.") {
-		trimmed = strings.TrimSpace(trimmed[len("event."):])
-	}
-	return trimmed
-}
-
-func nvrEventSummaryLabel(value string) string {
-	switch strings.ToLower(normalizeNVREventSummaryCode(value)) {
-	case "motion", "videomotion", "movedetection", "alarmpir":
-		return "Motion"
-	case "human", "humandetection", "smartmotionhuman", "intelliframehuman", "smdtypehuman":
-		return "Human"
-	case "vehicle", "vehicledetection", "smartmotionvehicle", "motorvehicle", "smdtypevehicle":
-		return "Vehicle"
-	case "animal", "animaldetection", "smdtypeanimal":
-		return "Animal"
-	case "crosslinedetection", "tripwire":
-		return "Cross Line"
-	case "crossregiondetection", "intrusion":
-		return "Cross Region"
-	case "leftdetection":
-		return "Left Detection"
-	case "access", "accesscontrol", "accessctl":
-		return "Access"
-	default:
-		return humanizeNVREventSummaryValue(value)
-	}
-}
-
-func humanizeNVREventSummaryValue(value string) string {
-	return strings.TrimSpace(strings.NewReplacer("_", " ", "-", " ").Replace(value))
-}
-
 func normalizeNVRRecordingSearchResult(result *dahua.NVRRecordingSearchResult) {
 	if result == nil {
 		return
@@ -1424,10 +1266,8 @@ func renderAdminPage(
 	probeResults []*dahua.ProbeResult,
 	streamEntries []streams.Entry,
 	settings map[string]any,
-	eventStats map[string]any,
 	workerStatuses []mediaapi.WorkerStatus,
 	actionsAvailable bool,
-	eventsAvailable bool,
 	mediaEnabled bool,
 	healthPath string,
 	metricsPath string,
@@ -1437,7 +1277,6 @@ func renderAdminPage(
 	deviceCards := buildAdminDeviceCards(probeResults, streamEntries)
 	streamCards := buildAdminStreamCards(streamEntries)
 	settingsJSON := htmlEscape(marshalIndentedJSON(settings))
-	eventStatsJSON := htmlEscape(marshalIndentedJSON(eventStats))
 	workerJSON := htmlEscape(marshalIndentedJSON(workerStatuses))
 	deviceCount := len(probeResults)
 	streamCount := len(streamEntries)
@@ -1810,7 +1649,6 @@ func renderAdminPage(
             <div class="action-row">
               <a class="btn btn-outline-light" href="/admin/test-bridge">Open Bridge Test Page</a>
               <button type="button" class="btn btn-success" data-method="POST" data-url="/api/v1/devices/probe-all" data-success="Probe-all requested." %s>Probe All Devices</button>
-              <button type="button" class="btn btn-outline-danger" data-method="DELETE" data-url="/api/v1/events" data-success="Event buffer clear requested." %s>Clear Event Buffer</button>
             </div>
           <pre id="admin-action-result" class="result-box">No action has been run yet.</pre>
         </section>
@@ -1838,11 +1676,6 @@ func renderAdminPage(
         <section class="panel">
           <h2>Redacted Settings</h2>
           <p>Passwords, access tokens, ICE credentials, and ONVIF passwords are redacted before reaching this page.</p>
-          <pre>%s</pre>
-        </section>
-
-        <section class="panel">
-          <h2>Event Buffer Stats</h2>
           <pre>%s</pre>
         </section>
 
@@ -1907,12 +1740,10 @@ func renderAdminPage(
 		controlStats.ActionableEntries,
 		htmlEscape(controlStats.Summary()),
 		boolHTMLAttr(actionsAvailable),
-		boolHTMLAttr(eventsAvailable),
 		endpointSections,
 		deviceCards,
 		streamCards,
 		settingsJSON,
-		eventStatsJSON,
 		workerJSON,
 	)
 }
@@ -2759,8 +2590,6 @@ func buildAdminEndpointSections(healthPath string, metricsPath string) string {
 		{
 			Title: "Events And Media",
 			Items: []adminEndpoint{
-				{Method: "GET", Path: "/api/v1/events", Description: "Recent event buffer", Linkable: true},
-				{Method: "DELETE", Path: "/api/v1/events", Description: "Clear event buffer", Linkable: false},
 				{Method: "GET", Path: "/api/v1/home-assistant/native/catalog", Description: "Bridge-native Home Assistant catalog", Linkable: true},
 			},
 		},

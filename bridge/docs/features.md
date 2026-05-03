@@ -50,14 +50,9 @@ The bridge collects and exposes normalized events.
 
 Key uses:
 
-- recent event browsing
-- diagnostic review
 - Home Assistant-facing state derivation
-
-APIs:
-
-- `GET /api/v1/events`
-- `DELETE /api/v1/events`
+- runtime device-state updates
+- metrics and diagnostics during active event streaming
 
 ## 4. Snapshots
 

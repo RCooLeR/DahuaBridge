@@ -148,6 +148,7 @@ export interface CameraArchiveViewModel {
   supported: boolean;
   searchUrl: string | null;
   playbackUrl: string | null;
+  coverageUrl: string | null;
   channel: number | null;
   defaultLimit: number;
 }
@@ -837,6 +838,7 @@ function buildCameraArchiveViewModel(
     supported: archive.supported,
     searchUrl: rewriteBridgeUrl(archive.search.url, browserBridgeUrl),
     playbackUrl: rewriteBridgeUrl(archive.playback.url, browserBridgeUrl),
+    coverageUrl: rewriteBridgeUrl(archive.coverage.url, browserBridgeUrl),
     channel: archive.search.channel ?? archive.playback.channel,
     defaultLimit: archive.search.defaultLimit,
   };

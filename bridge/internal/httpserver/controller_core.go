@@ -32,10 +32,6 @@ func (c *controller) registerCoreRoutes(router chi.Router) {
 		status := toHTTPStatus(c.probes.Stats())
 		entries := c.snapshots.ListStreams(false)
 		settings := c.snapshots.AdminSettings()
-		eventStats := map[string]any{}
-		if c.events != nil {
-			eventStats = c.events.EventStats()
-		}
 		workerStatuses := []mediaapi.WorkerStatus{}
 		mediaEnabled := false
 		if c.media != nil {
@@ -48,10 +44,8 @@ func (c *controller) registerCoreRoutes(router chi.Router) {
 			c.probes.List(),
 			entries,
 			settings,
-			eventStats,
 			workerStatuses,
 			c.actions != nil,
-			c.events != nil,
 			mediaEnabled,
 			c.cfg.HealthPath,
 			c.cfg.MetricsPath,

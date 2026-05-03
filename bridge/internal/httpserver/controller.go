@@ -15,7 +15,6 @@ type controller struct {
 	snapshots       SnapshotReader
 	media           MediaReader
 	actions         ActionReader
-	events          EventReader
 	adminLimiter    *perClientRateLimiter
 	snapshotLimiter *perClientRateLimiter
 	mediaLimiter    *perClientRateLimiter
@@ -29,7 +28,6 @@ func newController(
 	snapshots SnapshotReader,
 	media MediaReader,
 	actions ActionReader,
-	events EventReader,
 	adminLimiter *perClientRateLimiter,
 	snapshotLimiter *perClientRateLimiter,
 	mediaLimiter *perClientRateLimiter,
@@ -42,7 +40,6 @@ func newController(
 		snapshots:       snapshots,
 		media:           media,
 		actions:         actions,
-		events:          events,
 		adminLimiter:    adminLimiter,
 		snapshotLimiter: snapshotLimiter,
 		mediaLimiter:    mediaLimiter,
@@ -53,7 +50,6 @@ func (c *controller) registerRoutes(router chi.Router) {
 	c.registerCoreRoutes(router)
 	c.registerDeviceRoutes(router)
 	c.registerNVRRoutes(router)
-	c.registerEventRoutes(router)
 	c.registerVTORoutes(router)
 	c.registerCatalogRoutes(router)
 	c.registerMediaRoutes(router)

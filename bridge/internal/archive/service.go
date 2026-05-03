@@ -392,6 +392,79 @@ func (s *Service) TrackClipExport(ctx context.Context, deviceID string, request 
 	return s.store.UpsertClipAsset(ctx, recordKind, recordID, deviceID, item.FilePath, clip)
 }
 
+func (s *Service) EventSummary(
+	ctx context.Context,
+	deviceID string,
+	startTime time.Time,
+	endTime time.Time,
+	eventCode string,
+) (dahua.NVREventSummary, error) {
+	summary := dahua.NVREventSummary{
+		DeviceID:  strings.TrimSpace(deviceID),
+		StartTime: startTime.Format(time.RFC3339),
+		EndTime:   endTime.Format(time.RFC3339),
+		Items:     []dahua.NVREventSummaryItem{},
+		Channels:  []dahua.NVREventChannelSummary{},
+	}
+	if s == nil || s.store == nil {
+		return summary, errors.New("archive store is not configured")
+	}
+
+	countsByChannel, err := s.store.LoadEventSummaryCounts(ctx, deviceID, startTime, endTime, eventCode)
+	if err != nil {
+		return summary, err
+	}
+
+	channels := s.channelsForSummary(deviceID, countsByChannel)
+	totalByCode := make(map[string]int)
+	for _, channel := range channels {
+		items := makeNVREventSummaryItems(countsByChannel[channel])
+		summary.Channels = append(summary.Channels, dahua.NVREventChannelSummary{
+			Channel:    channel,
+			TotalCount: countNVREventSummaryItems(items),
+			Items:      items,
+		})
+		for _, item := range items {
+			totalByCode[item.Code] += item.Count
+		}
+	}
+	summary.Items = makeNVREventSummaryItems(totalByCode)
+	summary.TotalCount = countNVREventSummaryItems(summary.Items)
+	return summary, nil
+}
+
+func (s *Service) ArchiveCoverage(
+	ctx context.Context,
+	deviceID string,
+	channel int,
+) (dahua.NVRArchiveCoverage, error) {
+	coverage := dahua.NVRArchiveCoverage{
+		DeviceID: strings.TrimSpace(deviceID),
+		Channel:  channel,
+		Chunks:   []dahua.NVRArchiveCoverageChunk{},
+	}
+	if s == nil || s.store == nil {
+		return coverage, errors.New("archive store is not configured")
+	}
+
+	chunks, err := s.store.LoadArchiveCoverage(ctx, deviceID, channel)
+	if err != nil {
+		return coverage, err
+	}
+	coverage.ChunkCount = len(chunks)
+	if first, last, ok := firstAndLastCoverageChunk(chunks); ok {
+		coverage.StartTime = first.StartTime.UTC().Format(time.RFC3339)
+		coverage.EndTime = last.EndTime.UTC().Format(time.RFC3339)
+	}
+	for _, chunk := range chunks {
+		coverage.Chunks = append(coverage.Chunks, dahua.NVRArchiveCoverageChunk{
+			StartTime: chunk.StartTime.UTC().Format(time.RFC3339),
+			EndTime:   chunk.EndTime.UTC().Format(time.RFC3339),
+		})
+	}
+	return coverage, nil
+}
+
 func (s *Service) runLoop(ctx context.Context) {
 	for {
 		select {
@@ -521,6 +594,64 @@ func normalizeChannels(values []int) []int {
 	}
 	slices.Sort(result)
 	return result
+}
+
+func (s *Service) channelsForSummary(deviceID string, countsByChannel map[int]map[string]int) []int {
+	for _, device := range s.devices {
+		if device.ID != deviceID {
+			continue
+		}
+		channels := s.channelsForDevice(device)
+		if len(channels) > 0 {
+			return channels
+		}
+		break
+	}
+	return normalizeChannels(archiveCountMapKeys(countsByChannel))
+}
+
+func makeNVREventSummaryItems(countByCode map[string]int) []dahua.NVREventSummaryItem {
+	if len(countByCode) == 0 {
+		return []dahua.NVREventSummaryItem{}
+	}
+	items := make([]dahua.NVREventSummaryItem, 0, len(countByCode))
+	for _, code := range []string{"human", "vehicle", "animal", "tripwire", "intrusion"} {
+		count := countByCode[code]
+		if count <= 0 {
+			continue
+		}
+		items = append(items, dahua.NVREventSummaryItem{
+			Code:  code,
+			Label: archiveEventSummaryLabel(code),
+			Count: count,
+		})
+	}
+	return items
+}
+
+func countNVREventSummaryItems(items []dahua.NVREventSummaryItem) int {
+	total := 0
+	for _, item := range items {
+		total += item.Count
+	}
+	return total
+}
+
+func archiveEventSummaryLabel(code string) string {
+	switch normalizeArchiveEventCode(code) {
+	case "human":
+		return "Human"
+	case "vehicle":
+		return "Vehicle"
+	case "animal":
+		return "Animal"
+	case "tripwire":
+		return "Cross Line"
+	case "intrusion":
+		return "Cross Region"
+	default:
+		return strings.TrimSpace(code)
+	}
 }
 
 func resolveClipPrefetcher(searcher Searcher) ClipPrefetcher {

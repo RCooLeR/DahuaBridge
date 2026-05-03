@@ -1,6 +1,8 @@
 import { z } from "zod";
 
 import type {
+  NvrArchiveCoverageModel,
+  NvrArchiveCoverageChunkModel,
   BridgeRecordingClipListModel,
   BridgeRecordingClipModel,
   NvrArchiveExportClipModel,
@@ -150,6 +152,20 @@ const bridgeRecordingListSchema = z.object({
   items: bridgeRecordingArraySchema,
 });
 
+const archiveCoverageChunkSchema = z.object({
+  start_time: z.string().optional().nullable(),
+  end_time: z.string().optional().nullable(),
+});
+
+const archiveCoverageSchema = z.object({
+  device_id: z.string().optional().nullable(),
+  channel: optionalIntegerSchema,
+  start_time: z.string().optional().nullable(),
+  end_time: z.string().optional().nullable(),
+  chunk_count: optionalIntegerSchema,
+  chunks: z.array(archiveCoverageChunkSchema).default([]),
+});
+
 export interface ArchiveRecordingsQuery {
   channel: number;
   startTime: string;
@@ -163,6 +179,42 @@ export interface BridgeRecordingsQuery {
   startTime?: string;
   endTime?: string;
   limit?: number;
+}
+
+export async function fetchArchiveCoverage(
+  coverageUrl: string,
+  channel?: number | null,
+  signal?: AbortSignal,
+): Promise<NvrArchiveCoverageModel> {
+  const url = new URL(coverageUrl, window.location.origin);
+  if (typeof channel === "number" && Number.isFinite(channel) && channel > 0) {
+    url.searchParams.set("channel", String(Math.trunc(channel)));
+  }
+
+  const started = performance.now();
+  logArchiveRequest("request", "GET", url.toString());
+  const response = await fetch(url, {
+    method: "GET",
+    headers: {
+      Accept: "application/json",
+    },
+    signal,
+  });
+  logArchiveRequest("response", "GET", url.toString(), response.status, performance.now() - started);
+
+  if (!response.ok) {
+    throw new Error(`Bridge archive coverage request failed with status ${response.status}`);
+  }
+
+  const payload = archiveCoverageSchema.parse(await response.json());
+  return {
+    deviceId: firstString(payload.device_id),
+    channel: firstNumber(payload.channel, channel ?? 0),
+    startTime: firstNullableString(payload.start_time),
+    endTime: firstNullableString(payload.end_time),
+    chunkCount: firstNumber(payload.chunk_count, payload.chunks.length),
+    chunks: payload.chunks.map(mapArchiveCoverageChunk),
+  };
 }
 
 export async function fetchArchiveRecordings(
@@ -525,4 +577,13 @@ function normalizeFlags(
     normalized.push(trimmed);
   }
   return normalized;
+}
+
+function mapArchiveCoverageChunk(
+  item: z.infer<typeof archiveCoverageChunkSchema>,
+): NvrArchiveCoverageChunkModel {
+  return {
+    startTime: firstString(item.start_time),
+    endTime: firstString(item.end_time),
+  };
 }

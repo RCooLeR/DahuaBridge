@@ -57,6 +57,8 @@ type runtimeArchiveReader interface {
 	) (dahua.NVRRecordingSearchResult, error)
 	EnrichRecordings(context.Context, string, *dahua.NVRRecordingSearchResult, archiveapi.ClipFinder) error
 	TrackClipExport(context.Context, string, dahua.NVRPlaybackSessionRequest, media.ClipInfo) error
+	EventSummary(context.Context, string, time.Time, time.Time, string) (dahua.NVREventSummary, error)
+	ArchiveCoverage(context.Context, string, int) (dahua.NVRArchiveCoverage, error)
 }
 
 type cachedSnapshot struct {
@@ -333,6 +335,46 @@ func (r *runtimeServices) TrackNVRArchiveClip(ctx context.Context, deviceID stri
 		return nil
 	}
 	return archiveReader.TrackClipExport(ctx, deviceID, request, clip)
+}
+
+func (r *runtimeServices) NVREventSummary(
+	ctx context.Context,
+	deviceID string,
+	startTime time.Time,
+	endTime time.Time,
+	eventCode string,
+) (dahua.NVREventSummary, error) {
+	r.mu.RLock()
+	archiveReader := r.archive
+	r.mu.RUnlock()
+	if archiveReader == nil {
+		return dahua.NVREventSummary{
+			DeviceID:  strings.TrimSpace(deviceID),
+			StartTime: startTime.Format(time.RFC3339),
+			EndTime:   endTime.Format(time.RFC3339),
+			Items:     []dahua.NVREventSummaryItem{},
+			Channels:  []dahua.NVREventChannelSummary{},
+		}, fmt.Errorf("archive reader is not configured")
+	}
+	return archiveReader.EventSummary(ctx, deviceID, startTime, endTime, eventCode)
+}
+
+func (r *runtimeServices) NVRArchiveCoverage(
+	ctx context.Context,
+	deviceID string,
+	channel int,
+) (dahua.NVRArchiveCoverage, error) {
+	r.mu.RLock()
+	archiveReader := r.archive
+	r.mu.RUnlock()
+	if archiveReader == nil {
+		return dahua.NVRArchiveCoverage{
+			DeviceID: strings.TrimSpace(deviceID),
+			Channel:  channel,
+			Chunks:   []dahua.NVRArchiveCoverageChunk{},
+		}, fmt.Errorf("archive reader is not configured")
+	}
+	return archiveReader.ArchiveCoverage(ctx, deviceID, channel)
 }
 
 func (r *runtimeServices) VTOSnapshot(ctx context.Context, deviceID string) ([]byte, string, error) {

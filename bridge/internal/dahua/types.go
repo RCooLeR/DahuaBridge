@@ -173,6 +173,20 @@ type NVREventSummary struct {
 	Channels   []NVREventChannelSummary `json:"channels"`
 }
 
+type NVRArchiveCoverageChunk struct {
+	StartTime string `json:"start_time"`
+	EndTime   string `json:"end_time"`
+}
+
+type NVRArchiveCoverage struct {
+	DeviceID   string                    `json:"device_id"`
+	Channel    int                       `json:"channel"`
+	StartTime  string                    `json:"start_time,omitempty"`
+	EndTime    string                    `json:"end_time,omitempty"`
+	ChunkCount int                       `json:"chunk_count"`
+	Chunks     []NVRArchiveCoverageChunk `json:"chunks"`
+}
+
 type NVRRecordingSearcher interface {
 	FindRecordings(context.Context, NVRRecordingQuery) (NVRRecordingSearchResult, error)
 }
