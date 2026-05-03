@@ -43,11 +43,16 @@ type ClipFinder interface {
 	GetClip(string) (mediaapi.ClipInfo, error)
 }
 
+type ClipPrefetcher interface {
+	EnsureNVRArchiveClip(context.Context, string, dahua.NVRRecording) (mediaapi.ClipInfo, error)
+}
+
 type Service struct {
 	cfg      config.ArchiveConfig
 	devices  []config.DeviceConfig
 	searcher Searcher
 	probes   *store.ProbeStore
+	clips    ClipPrefetcher
 	logger   zerolog.Logger
 
 	db      *sql.DB
@@ -94,6 +99,7 @@ func New(cfg config.ArchiveConfig, devices []config.DeviceConfig, searcher Searc
 		devices:  append([]config.DeviceConfig(nil), devices...),
 		searcher: searcher,
 		probes:   probes,
+		clips:    resolveClipPrefetcher(searcher),
 		logger:   logger.With().Str("component", "archive").Logger(),
 		db:       db,
 		store:    store,
@@ -180,6 +186,7 @@ func (s *Service) SyncNow(ctx context.Context) error {
 		Msg("archive sync started")
 
 	var firstErr error
+	prefetchBudget := max(0, s.cfg.MaxParallelJobs)
 	for _, device := range s.devices {
 		if !device.EnabledValue() {
 			continue
@@ -190,7 +197,7 @@ func (s *Service) SyncNow(ctx context.Context) error {
 			continue
 		}
 		for _, channel := range channels {
-			if err := s.syncChannel(ctx, device, channel); err != nil {
+			if err := s.syncChannel(ctx, device, channel, &prefetchBudget); err != nil {
 				s.logger.Error().Err(err).Str("device_id", device.ID).Int("channel", channel).Msg("archive sync channel failed")
 				if firstErr == nil {
 					firstErr = err
@@ -399,7 +406,7 @@ func (s *Service) runLoop(ctx context.Context) {
 	}
 }
 
-func (s *Service) syncChannel(ctx context.Context, device config.DeviceConfig, channel int) error {
+func (s *Service) syncChannel(ctx context.Context, device config.DeviceConfig, channel int, prefetchBudget *int) error {
 	now := time.Now().In(time.Local)
 	windowStart := now.AddDate(0, 0, -s.cfg.PrefetchDays).Truncate(archiveSyncWindow)
 	windowEnd := now
@@ -414,14 +421,14 @@ func (s *Service) syncChannel(ctx context.Context, device config.DeviceConfig, c
 		}
 		if s.cfg.PrefetchSMD {
 			for _, code := range smdEventCodes {
-				if err := s.syncEventWindow(ctx, device.ID, channel, code, from, to); err != nil {
+				if err := s.syncEventWindow(ctx, device.ID, channel, code, from, to, prefetchBudget); err != nil {
 					return err
 				}
 			}
 		}
 		if s.cfg.PrefetchIVS {
 			for _, code := range ivsEventCodes {
-				if err := s.syncEventWindow(ctx, device.ID, channel, code, from, to); err != nil {
+				if err := s.syncEventWindow(ctx, device.ID, channel, code, from, to, prefetchBudget); err != nil {
 					return err
 				}
 			}
@@ -447,7 +454,7 @@ func (s *Service) syncArchiveWindow(ctx context.Context, deviceID string, channe
 	return s.store.MarkCoverage(ctx, "archive", deviceID, channel, startTime, endTime, now)
 }
 
-func (s *Service) syncEventWindow(ctx context.Context, deviceID string, channel int, eventCode string, startTime time.Time, endTime time.Time) error {
+func (s *Service) syncEventWindow(ctx context.Context, deviceID string, channel int, eventCode string, startTime time.Time, endTime time.Time, prefetchBudget *int) error {
 	result, err := s.searcher.NVRRecordings(ctx, deviceID, dahua.NVRRecordingQuery{
 		Channel:   channel,
 		StartTime: startTime,
@@ -463,7 +470,17 @@ func (s *Service) syncEventWindow(ctx context.Context, deviceID string, channel 
 	if err := s.store.UpsertArchiveEvents(ctx, deviceID, result.Items, now); err != nil {
 		return err
 	}
-	return s.store.MarkCoverage(ctx, "event:"+normalizeArchiveEventCode(eventCode), deviceID, channel, startTime, endTime, now)
+	if err := s.store.MarkCoverage(ctx, "event:"+normalizeArchiveEventCode(eventCode), deviceID, channel, startTime, endTime, now); err != nil {
+		return err
+	}
+	if prefetchBudget != nil && *prefetchBudget > 0 {
+		remaining, err := s.prefetchEventAssets(ctx, deviceID, result.Items, *prefetchBudget)
+		if err != nil {
+			return err
+		}
+		*prefetchBudget = remaining
+	}
+	return nil
 }
 
 func (s *Service) channelsForDevice(device config.DeviceConfig) []int {
@@ -511,12 +528,80 @@ func normalizeChannels(values []int) []int {
 	return result
 }
 
+func resolveClipPrefetcher(searcher Searcher) ClipPrefetcher {
+	prefetcher, ok := searcher.(ClipPrefetcher)
+	if !ok {
+		return nil
+	}
+	return prefetcher
+}
+
 func parseArchiveLocalTime(value string) (time.Time, bool) {
 	parsed, err := time.ParseInLocation(archiveTimeLayout, strings.TrimSpace(value), time.Local)
 	if err != nil {
 		return time.Time{}, false
 	}
 	return parsed, true
+}
+
+func (s *Service) prefetchEventAssets(ctx context.Context, deviceID string, items []dahua.NVRRecording, budget int) (int, error) {
+	if s == nil || s.store == nil || s.clips == nil || budget <= 0 || len(items) == 0 {
+		return budget, nil
+	}
+
+	pending := make([]dahua.NVRRecording, 0, len(items))
+	for _, item := range items {
+		ensureArchiveRecordIdentity(deviceID, &item)
+		if !shouldPrefetchArchiveEventClip(item) {
+			continue
+		}
+		pending = append(pending, item)
+	}
+	if len(pending) == 0 {
+		return budget, nil
+	}
+
+	storedAssets, err := s.store.LoadClipAssets(ctx, deviceID, pending)
+	if err != nil {
+		return budget, err
+	}
+
+	for _, item := range pending {
+		if budget <= 0 {
+			break
+		}
+		stored := storedAssets[archiveRecordKey(item.RecordKind, item.ID)]
+		status := normalizeArchiveAssetState(stored.Status)
+		if stored.ClipID != "" {
+			switch status {
+			case archiveAssetStateReady, archiveAssetStateQueued, archiveAssetStateDownloading, archiveAssetStateTranscoding:
+				continue
+			}
+		}
+		clip, err := s.clips.EnsureNVRArchiveClip(ctx, deviceID, item)
+		if err != nil {
+			s.logger.Warn().Err(err).Str("device_id", deviceID).Str("record_id", item.ID).Str("file_path", item.FilePath).Msg("archive event clip prefetch failed")
+			continue
+		}
+		if err := s.store.UpsertClipAsset(ctx, item.RecordKind, item.ID, deviceID, item.FilePath, clip); err != nil {
+			s.logger.Warn().Err(err).Str("device_id", deviceID).Str("record_id", item.ID).Str("clip_id", clip.ID).Msg("archive prefetched asset upsert failed")
+			continue
+		}
+		budget--
+	}
+	return budget, nil
+}
+
+func shouldPrefetchArchiveEventClip(item dahua.NVRRecording) bool {
+	if !strings.EqualFold(strings.TrimSpace(item.RecordKind), "event") {
+		return false
+	}
+	if item.Channel <= 0 || strings.TrimSpace(item.FilePath) == "" {
+		return false
+	}
+	startTime, okStart := parseArchiveLocalTime(item.StartTime)
+	endTime, okEnd := parseArchiveLocalTime(item.EndTime)
+	return okStart && okEnd && endTime.After(startTime)
 }
 
 func matchClipForRecording(item dahua.NVRRecording, clips []mediaapi.ClipInfo) *mediaapi.ClipInfo {

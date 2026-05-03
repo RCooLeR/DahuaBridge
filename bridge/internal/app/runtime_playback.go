@@ -89,6 +89,7 @@ func (r *runtimeServices) SeekNVRPlaybackSession(_ context.Context, sessionID st
 	}
 
 	now := time.Now()
+	delete(r.playback, sessionID)
 	existing.ID = newPlaybackSessionID()
 	existing.SeekTime = seekTime
 	existing.CreatedAt = now
@@ -335,33 +336,6 @@ func buildPlaybackProfiles(cfg config.Config, deviceCfg config.DeviceConfig, ses
 	useWallclock := true
 	fileSeekOffset := time.Duration(0)
 	filePlaybackDuration := time.Duration(0)
-	if strings.TrimSpace(session.FilePath) != "" {
-		filePlaybackURL := buildPlaybackRecordingDownloadURL(
-			deviceCfg,
-			session.FilePath,
-			includeCredentials,
-		)
-		if fileStart, fileEnd, ok := dahua.ParseRecordingFileTimeRange(session.FilePath, time.Local); ok {
-			trimStart := session.SeekTime
-			if trimStart.IsZero() || trimStart.Before(fileStart) {
-				trimStart = fileStart
-			}
-			if trimStart.Before(fileStart) {
-				trimStart = fileStart
-			}
-			if trimStart.Before(fileEnd) {
-				fileSeekOffset = trimStart.Sub(fileStart)
-				filePlaybackDuration = session.EndTime.Sub(trimStart)
-				if remaining := fileEnd.Sub(trimStart); remaining > 0 && (filePlaybackDuration <= 0 || filePlaybackDuration > remaining) {
-					filePlaybackDuration = remaining
-				}
-			}
-		}
-		mainPlaybackURL = filePlaybackURL
-		stablePlaybackURL = filePlaybackURL
-		substreamPlaybackURL = filePlaybackURL
-		useWallclock = false
-	}
 
 	return map[string]streams.Profile{
 		"default": {
