@@ -26,6 +26,24 @@ func (job *clipJob) run(parent *Manager, profile streams.Profile, duration time.
 			duration = playbackDuration
 		}
 	}
+	waitErr := job.runFFmpegAttempt(parent, profile, duration, started, true)
+	if waitErr != nil && strings.TrimSpace(profile.InputPrefixURL) != "" {
+		job.logger.Warn().
+			Err(waitErr).
+			Str("clip_id", job.info.ID).
+			Str("source_url", redactURLUserinfo(profile.StreamURL)).
+			Str("prefix_url", profile.InputPrefixURL).
+			Msg("prefixed iframe clip transcode failed; retrying without iframe prefix")
+		_ = os.Remove(job.outputPath)
+		retryProfile := profile
+		retryProfile.InputPrefixURL = ""
+		retryProfile.InputPrefixDuration = 0
+		waitErr = job.runFFmpegAttempt(parent, retryProfile, duration, started, false)
+	}
+	job.complete(parent, waitErr)
+}
+
+func (job *clipJob) runFFmpegAttempt(parent *Manager, profile streams.Profile, duration time.Duration, started chan<- error, notifyStarted bool) error {
 	disableStdin := duration > 0
 	includeAudio := parent.shouldIncludeSourceAudio(profile, job.logger)
 	if strings.TrimSpace(profile.InputPrefixURL) != "" {
@@ -33,6 +51,7 @@ func (job *clipJob) run(parent *Manager, profile streams.Profile, duration time.
 	}
 	job.mu.Lock()
 	job.includeAudio = includeAudio
+	job.profile = profile
 	job.mu.Unlock()
 	args := buildClipFFmpegArgs(parent.cfg, profile, duration, job.outputPath, includeAudio, disableStdin)
 	outputWidth, outputHeight := profile.SourceWidth, profile.SourceHeight
@@ -57,6 +76,7 @@ func (job *clipJob) run(parent *Manager, profile streams.Profile, duration time.
 		Dur("duration", duration).
 		Bool("include_audio", includeAudio).
 		Bool("disable_stdin", disableStdin).
+		Bool("iframe_prefix", strings.TrimSpace(profile.InputPrefixURL) != "").
 		Msg("clip transcode starting")
 
 	cmd := exec.Command(parent.cfg.FFmpegPath, args...)
@@ -65,16 +85,18 @@ func (job *clipJob) run(parent *Manager, profile streams.Profile, duration time.
 	if !disableStdin {
 		stdin, err = cmd.StdinPipe()
 		if err != nil {
-			started <- fmt.Errorf("ffmpeg stdin pipe: %w", err)
-			job.complete(parent, err)
-			return
+			if notifyStarted {
+				started <- fmt.Errorf("ffmpeg stdin pipe: %w", err)
+			}
+			return fmt.Errorf("ffmpeg stdin pipe: %w", err)
 		}
 	}
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
-		started <- fmt.Errorf("ffmpeg stderr pipe: %w", err)
-		job.complete(parent, err)
-		return
+		if notifyStarted {
+			started <- fmt.Errorf("ffmpeg stderr pipe: %w", err)
+		}
+		return fmt.Errorf("ffmpeg stderr pipe: %w", err)
 	}
 	cmd.Stdout = io.Discard
 
@@ -84,9 +106,10 @@ func (job *clipJob) run(parent *Manager, profile streams.Profile, duration time.
 	job.mu.Unlock()
 
 	if err := cmd.Start(); err != nil {
-		started <- fmt.Errorf("start ffmpeg: %w", err)
-		job.complete(parent, err)
-		return
+		if notifyStarted {
+			started <- fmt.Errorf("start ffmpeg: %w", err)
+		}
+		return fmt.Errorf("start ffmpeg: %w", err)
 	}
 	job.logger.Debug().
 		Str("clip_id", job.info.ID).
@@ -100,8 +123,11 @@ func (job *clipJob) run(parent *Manager, profile streams.Profile, duration time.
 		Int("output_width", outputWidth).
 		Int("output_height", outputHeight).
 		Str("input_preset", parent.cfg.InputPreset).
+		Bool("iframe_prefix", strings.TrimSpace(profile.InputPrefixURL) != "").
 		Msg("clip transcode started")
-	started <- nil
+	if notifyStarted {
+		started <- nil
+	}
 
 	stderrDone := drainFFmpegStderr(stderr, 64*1024)
 
@@ -110,7 +136,13 @@ func (job *clipJob) run(parent *Manager, profile streams.Profile, duration time.
 	if waitErr != nil && stderrText != "" {
 		waitErr = fmt.Errorf("%w: %s", waitErr, stderrText)
 	}
-	job.complete(parent, waitErr)
+
+	job.mu.Lock()
+	job.stdin = nil
+	job.cmd = nil
+	job.mu.Unlock()
+
+	return waitErr
 }
 
 func (job *clipJob) complete(parent *Manager, waitErr error) {
