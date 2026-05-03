@@ -20,22 +20,9 @@ export function resolveSelectedCameraStreamProfile(
 export function defaultSelectedStreamProfileKey(
   stream: CameraStreamViewModel,
 ): string | null {
-  const preferredProfileKey = preferredProfileKeyForStream(stream);
-  if (preferredProfileKey) {
-    return preferredProfileKey;
-  }
-
-  const recommendedProfileKey = recommendedProfileKeyForStream(stream);
-  if (recommendedProfileKey) {
-    return recommendedProfileKey;
-  }
-
-  const qualityProfile =
-    stream.profiles.find((profile) =>
-      isQualityProfile(profile.key, profile.name),
-    ) ?? null;
-  if (qualityProfile) {
-    return qualityProfile.key;
+  const mainProfileKey = mainProfileKeyForStream(stream);
+  if (mainProfileKey) {
+    return mainProfileKey;
   }
 
   return stream.profiles[0]?.key ?? null;
@@ -259,22 +246,10 @@ export function preserveCameraViewportSourceSelectionOnProfileChange(
   selectedProfileKey: string | null,
   selectedSource: CameraViewportSource | null,
 ): CameraViewportSource | null {
-  const preserved = preserveCameraViewportSourceSelection(
+  return preserveCameraViewportSourceSelection(
     camera,
     selectedProfileKey,
     selectedSource,
-  );
-  if (preserved !== "native" || selectedSource !== "native") {
-    return preserved;
-  }
-
-  return (
-    selectSourceByPriority(
-      availableCameraViewportSources(camera, selectedProfileKey).filter(
-        (source) => source !== "native",
-      ),
-      ["hls", "dash", "mjpeg"],
-    ) ?? preserved
   );
 }
 
@@ -423,4 +398,34 @@ function prefersNativeIntegration(
     default:
       return false;
   }
+}
+
+function mainProfileKeyForStream(
+  stream: CameraStreamViewModel,
+): string | null {
+  const subtypeZeroProfile =
+    stream.profiles.find((profile) => profile.subtype === 0) ?? null;
+  if (subtypeZeroProfile) {
+    return subtypeZeroProfile.key;
+  }
+
+  const qualityProfile =
+    stream.profiles.find((profile) =>
+      isQualityProfile(profile.key, profile.name),
+    ) ?? null;
+  if (qualityProfile) {
+    return qualityProfile.key;
+  }
+
+  const preferredProfileKey = preferredProfileKeyForStream(stream);
+  if (preferredProfileKey) {
+    return preferredProfileKey;
+  }
+
+  const recommendedProfileKey = recommendedProfileKeyForStream(stream);
+  if (recommendedProfileKey) {
+    return recommendedProfileKey;
+  }
+
+  return null;
 }

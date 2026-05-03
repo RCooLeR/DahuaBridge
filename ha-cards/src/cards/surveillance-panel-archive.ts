@@ -97,14 +97,6 @@ export function renderArchiveRecordings({
   return html`
     <section class="events archive-panel">
       <div class="archive-head">
-        <div class="panel-title">
-          <span class="split-row">
-            <span class="header-chip-icon nvr-storage-icon" aria-hidden="true">
-              ${renderIcon("mdi:filmstrip")}
-            </span>
-            <span>${title}</span>
-          </span>
-        </div>
         <div class="chip-row archive-summary">
           <span class="badge ${statusTone}">${countText}</span>
           <span class="badge info">${formatArchiveDateBadge(archiveDate)}</span>

@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
@@ -25,8 +27,11 @@ import (
 )
 
 const (
-	archiveQueryLimit = 128
-	archiveSyncWindow = time.Hour
+	archiveQueryLimit                = 128
+	archiveSyncWindow                = time.Hour
+	archiveRecentEventSyncInterval   = 5 * time.Minute
+	archiveRecentEventLookbackWindow = 2 * time.Hour
+	archivePlaybackRTSPTimeLayout    = "2006_01_02_15_04_05"
 )
 
 var (
@@ -47,6 +52,13 @@ type ClipPrefetcher interface {
 	EnsureNVRArchiveClip(context.Context, string, dahua.NVRRecording) (mediaapi.ClipInfo, error)
 }
 
+type syncRequest int
+
+const (
+	syncRequestFull syncRequest = iota
+	syncRequestRecentEvents
+)
+
 type Service struct {
 	cfg      config.ArchiveConfig
 	devices  []config.DeviceConfig
@@ -58,7 +70,7 @@ type Service struct {
 	db      *sql.DB
 	cron    *cron.Cron
 	store   *SQLiteStore
-	trigger chan struct{}
+	trigger chan syncRequest
 
 	running int32
 	started bool
@@ -103,7 +115,7 @@ func New(cfg config.ArchiveConfig, devices []config.DeviceConfig, searcher Searc
 		logger:   logger.With().Str("component", "archive").Logger(),
 		db:       db,
 		store:    store,
-		trigger:  make(chan struct{}, 1),
+		trigger:  make(chan syncRequest, 4),
 	}, nil
 }
 
@@ -129,6 +141,7 @@ func (s *Service) Start(ctx context.Context) error {
 	s.started = true
 
 	go s.runLoop(ctx)
+	go s.recentEventLoop(ctx)
 	s.QueueSync()
 	return nil
 }
@@ -162,7 +175,17 @@ func (s *Service) QueueSync() {
 		return
 	}
 	select {
-	case s.trigger <- struct{}{}:
+	case s.trigger <- syncRequestFull:
+	default:
+	}
+}
+
+func (s *Service) queueRecentEventSync() {
+	if s == nil {
+		return
+	}
+	select {
+	case s.trigger <- syncRequestRecentEvents:
 	default:
 	}
 }
@@ -231,6 +254,26 @@ func (s *Service) SearchRecordings(
 	}
 
 	scope, covered := archiveScopeForQuery(query)
+	if strings.HasPrefix(scope, "event:") {
+		result, err := s.store.SearchRecordings(ctx, deviceID, query)
+		if err == nil {
+			for index := range result.Items {
+				ensureArchiveRecordIdentity(deviceID, &result.Items[index])
+			}
+			if covered {
+				windows := buildCoverageWindows(query.StartTime, query.EndTime, archiveSyncWindow)
+				complete, coverageErr := s.store.IsCoverageComplete(ctx, scope, deviceID, query.Channel, windows)
+				if coverageErr == nil && complete {
+					return result, nil
+				}
+			}
+			if len(result.Items) > 0 {
+				return result, nil
+			}
+		} else {
+			s.logger.Warn().Err(err).Str("device_id", deviceID).Int("channel", query.Channel).Str("scope", scope).Msg("archive sqlite event search failed")
+		}
+	}
 	if covered {
 		windows := buildCoverageWindows(query.StartTime, query.EndTime, archiveSyncWindow)
 		complete, err := s.store.IsCoverageComplete(ctx, scope, deviceID, query.Channel, windows)
@@ -258,6 +301,7 @@ func (s *Service) SearchRecordings(
 			s.logger.Warn().Err(err).Str("device_id", deviceID).Int("channel", query.Channel).Msg("archive file upsert after fallback failed")
 		}
 	} else if strings.HasPrefix(scope, "event:") {
+		s.populateArchiveEventRTSPURLs(deviceID, result.Items)
 		if err := s.store.UpsertArchiveEvents(ctx, deviceID, result.Items, now); err != nil {
 			s.logger.Warn().Err(err).Str("device_id", deviceID).Int("channel", query.Channel).Str("scope", scope).Msg("archive event upsert after fallback failed")
 		}
@@ -470,12 +514,68 @@ func (s *Service) runLoop(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			return
-		case <-s.trigger:
-			if err := s.SyncNow(ctx); err != nil {
-				s.logger.Error().Err(err).Msg("archive sync failed")
+		case request := <-s.trigger:
+			switch request {
+			case syncRequestRecentEvents:
+				if err := s.SyncRecentEventsNow(ctx); err != nil {
+					s.logger.Error().Err(err).Msg("archive recent event sync failed")
+				}
+			default:
+				if err := s.SyncNow(ctx); err != nil {
+					s.logger.Error().Err(err).Msg("archive sync failed")
+				}
 			}
 		}
 	}
+}
+
+func (s *Service) recentEventLoop(ctx context.Context) {
+	ticker := time.NewTicker(archiveRecentEventSyncInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			s.queueRecentEventSync()
+		}
+	}
+}
+
+func (s *Service) SyncRecentEventsNow(ctx context.Context) error {
+	if s == nil {
+		return nil
+	}
+	if !atomic.CompareAndSwapInt32(&s.running, 0, 1) {
+		s.logger.Debug().Msg("archive sync already running")
+		return nil
+	}
+	defer atomic.StoreInt32(&s.running, 0)
+
+	if !s.cfg.PrefetchSMD && !s.cfg.PrefetchIVS {
+		return nil
+	}
+
+	var firstErr error
+	for _, device := range s.devices {
+		if !device.EnabledValue() {
+			continue
+		}
+		channels := s.channelsForDevice(device)
+		if len(channels) == 0 {
+			continue
+		}
+		for _, channel := range channels {
+			if err := s.syncRecentEventChannel(ctx, device.ID, channel); err != nil {
+				s.logger.Error().Err(err).Str("device_id", device.ID).Int("channel", channel).Msg("archive recent event sync failed")
+				if firstErr == nil {
+					firstErr = err
+				}
+			}
+		}
+	}
+	return firstErr
 }
 
 func (s *Service) syncChannel(ctx context.Context, device config.DeviceConfig, channel int) error {
@@ -539,6 +639,7 @@ func (s *Service) syncEventWindow(ctx context.Context, deviceID string, channel 
 		return fmt.Errorf("search archive events %q: %w", eventCode, err)
 	}
 	now := time.Now().UTC()
+	s.populateArchiveEventRTSPURLs(deviceID, result.Items)
 	if err := s.store.UpsertArchiveEvents(ctx, deviceID, result.Items, now); err != nil {
 		return err
 	}
@@ -547,6 +648,32 @@ func (s *Service) syncEventWindow(ctx context.Context, deviceID string, channel 
 	}
 	if err := s.prefetchEventAssets(ctx, deviceID, result.Items); err != nil {
 		return err
+	}
+	return nil
+}
+
+func (s *Service) syncRecentEventChannel(ctx context.Context, deviceID string, channel int) error {
+	windowEnd := time.Now().In(time.Local)
+	windowStart := windowEnd.Add(-archiveRecentEventLookbackWindow).Truncate(archiveSyncWindow)
+	for from := windowStart; from.Before(windowEnd); from = from.Add(archiveSyncWindow) {
+		to := from.Add(archiveSyncWindow)
+		if to.After(windowEnd) {
+			to = windowEnd
+		}
+		if s.cfg.PrefetchSMD {
+			for _, code := range smdEventCodes {
+				if err := s.syncEventWindow(ctx, deviceID, channel, code, from, to); err != nil {
+					return err
+				}
+			}
+		}
+		if s.cfg.PrefetchIVS {
+			for _, code := range ivsEventCodes {
+				if err := s.syncEventWindow(ctx, deviceID, channel, code, from, to); err != nil {
+					return err
+				}
+			}
+		}
 	}
 	return nil
 }
@@ -729,12 +856,79 @@ func shouldPrefetchArchiveEventClip(item dahua.NVRRecording) bool {
 	if !strings.EqualFold(strings.TrimSpace(item.RecordKind), "event") {
 		return false
 	}
-	if item.Channel <= 0 || strings.TrimSpace(item.FilePath) == "" {
+	if item.Channel <= 0 {
 		return false
 	}
 	startTime, okStart := parseArchiveLocalTime(item.StartTime)
 	endTime, okEnd := parseArchiveLocalTime(item.EndTime)
 	return okStart && okEnd && endTime.After(startTime)
+}
+
+func (s *Service) populateArchiveEventRTSPURLs(deviceID string, items []dahua.NVRRecording) {
+	if len(items) == 0 {
+		return
+	}
+	device, ok := s.deviceConfig(deviceID)
+	if !ok {
+		return
+	}
+	for index := range items {
+		item := &items[index]
+		startTime, okStart := parseArchiveLocalTime(item.StartTime)
+		endTime, okEnd := parseArchiveLocalTime(item.EndTime)
+		if item.Channel <= 0 || !okStart || !okEnd || !endTime.After(startTime) {
+			continue
+		}
+		item.RTSPMainURL = buildArchiveEventRTSPURL(device, item.Channel, 0, startTime, endTime, true)
+		item.RTSPSubURL = buildArchiveEventRTSPURL(device, item.Channel, 1, startTime, endTime, true)
+	}
+}
+
+func (s *Service) deviceConfig(deviceID string) (config.DeviceConfig, bool) {
+	deviceID = strings.TrimSpace(deviceID)
+	for _, device := range s.devices {
+		if strings.TrimSpace(device.ID) == deviceID {
+			return device, true
+		}
+	}
+	return config.DeviceConfig{}, false
+}
+
+func buildArchiveEventRTSPURL(device config.DeviceConfig, channel int, subtype int, startTime time.Time, endTime time.Time, includeCredentials bool) string {
+	base, err := url.Parse(device.BaseURL)
+	if err != nil || base.Hostname() == "" {
+		return ""
+	}
+
+	host := base.Hostname()
+	if port := base.Port(); port != "" && port != "80" && port != "443" {
+		host = net.JoinHostPort(host, port)
+	} else {
+		host = net.JoinHostPort(host, "554")
+	}
+
+	rtspURL := &url.URL{
+		Scheme:   "rtsp",
+		Host:     host,
+		Path:     "/cam/playback",
+		RawQuery: buildArchiveEventRTSPQuery(channel, subtype, startTime.In(time.Local), endTime.In(time.Local)),
+	}
+	if includeCredentials {
+		rtspURL.User = url.UserPassword(device.Username, device.Password)
+	}
+	return rtspURL.String()
+}
+
+func buildArchiveEventRTSPQuery(channel int, subtype int, startTime time.Time, endTime time.Time) string {
+	parts := []string{
+		"channel=" + url.QueryEscape(strconv.Itoa(channel)),
+		"subtype=" + url.QueryEscape(strconv.Itoa(subtype)),
+		"starttime=" + url.QueryEscape(startTime.Format(archivePlaybackRTSPTimeLayout)),
+	}
+	if !endTime.IsZero() {
+		parts = append(parts, "endtime="+url.QueryEscape(endTime.Format(archivePlaybackRTSPTimeLayout)))
+	}
+	return strings.Join(parts, "&")
 }
 
 func matchClipForRecording(item dahua.NVRRecording, clips []mediaapi.ClipInfo) *mediaapi.ClipInfo {

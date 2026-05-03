@@ -6,6 +6,7 @@ import {
   buildRtspPlaybackUrl,
   cameraImageSrc,
   defaultOverviewStreamProfileKey,
+  defaultSelectedStreamProfileKey,
   preserveCameraViewportSourceSelection,
   preserveCameraViewportSourceSelectionOnProfileChange,
   preservePlaybackViewportSourceSelection,
@@ -212,6 +213,18 @@ describe("camera media helpers", () => {
     expect(resolveOverviewCameraViewportSource(camera, overviewProfileKey)).toBe("hls");
   });
 
+  it("defaults the selected camera view to the main stream even when stable is recommended", () => {
+    const camera = buildCamera({
+      stream: {
+        ...buildCamera().stream,
+        recommendedProfile: "stable",
+        preferredVideoProfile: null,
+      },
+    });
+
+    expect(defaultSelectedStreamProfileKey(camera.stream)).toBe("quality");
+  });
+
   it("keeps playback on HLS/MJPEG even when the session exposes WebRTC", () => {
     const session: NvrPlaybackSessionModel = {
       id: "nvrpb_test",
@@ -287,7 +300,7 @@ describe("camera media helpers", () => {
     expect(preserveCameraViewportSourceSelection(camera, "quality", "mjpeg")).toBe("mjpeg");
     expect(preserveCameraViewportSourceSelection(camera, "stable", "hls")).toBeNull();
     expect(preserveCameraViewportSourceSelectionOnProfileChange(camera, "stable", "native")).toBe(
-      "mjpeg",
+      "native",
     );
 
     const session: NvrPlaybackSessionModel = {
@@ -348,13 +361,26 @@ describe("camera media helpers", () => {
     expect(
       buildRtspPlaybackUrl({
         streamUrl: "rtsp://example-user:example-password@192.0.2.10:554/cam/realmonitor?channel=1&subtype=0",
-        channel: 1,
+        channel: 9,
         subtype: 0,
         seekTime: "2026-05-01T08:10:00Z",
         endTime: "2026-05-01T08:40:00Z",
       }),
     ).toBe(
-      "rtsp://example-user:example-password@192.0.2.10:554/cam/playback?channel=1&subtype=0&starttime=2026_05_01_11_10_00&endtime=2026_05_01_11_40_00",
+      "rtsp://example-user:example-password@192.0.2.10:554/cam/playback?channel=9&subtype=0&starttime=2026_05_01_11_10_00&endtime=2026_05_01_11_40_00",
+    );
+  });
+
+  it("allows native historical playback URLs without an end time", () => {
+    expect(
+      buildRtspPlaybackUrl({
+        streamUrl: "rtsp://example-user:example-password@192.0.2.10:554/cam/realmonitor?channel=1&subtype=0",
+        channel: 9,
+        subtype: 0,
+        seekTime: "2026-05-01T08:10:00Z",
+      }),
+    ).toBe(
+      "rtsp://example-user:example-password@192.0.2.10:554/cam/playback?channel=9&subtype=0&starttime=2026_05_01_11_10_00",
     );
   });
 });

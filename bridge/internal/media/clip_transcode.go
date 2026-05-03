@@ -17,6 +17,8 @@ import (
 	"RCooLeR/DahuaBridge/internal/streams"
 )
 
+const minimumClipOutputBytesOnProbeFailure int64 = 4 * 1024
+
 func (job *clipJob) run(parent *Manager, profile streams.Profile, duration time.Duration, started chan<- error) {
 	defer close(job.done)
 	defer parent.removeClipJob(job.info.ID, job)
@@ -158,11 +160,16 @@ func (job *clipJob) validateClipOutput(parent *Manager, profile streams.Profile)
 
 	probedDuration, err := probeMediaDuration(parent.cfg.FFmpegPath, job.outputPath, audioProbeTimeout(parent.cfg.StartTimeout))
 	if err != nil {
+		sizeBytes, statErr := clipOutputSizeBytes(job.outputPath)
 		job.logger.Warn().
 			Err(err).
 			Str("clip_id", job.info.ID).
 			Str("output_path", job.outputPath).
+			Int64("output_bytes", sizeBytes).
 			Msg("clip output duration probe failed")
+		if statErr != nil || sizeBytes < minimumClipOutputBytesOnProbeFailure {
+			return fmt.Errorf("clip output validation failed after duration probe error: %w", err)
+		}
 		return nil
 	}
 
@@ -237,6 +244,17 @@ func probeMediaDuration(ffmpegPath string, mediaPath string, timeout time.Durati
 		return 0, fmt.Errorf("media duration is not positive")
 	}
 	return time.Duration(seconds * float64(time.Second)), nil
+}
+
+func clipOutputSizeBytes(mediaPath string) (int64, error) {
+	if strings.TrimSpace(mediaPath) == "" {
+		return 0, fmt.Errorf("media path is empty")
+	}
+	info, err := os.Stat(mediaPath)
+	if err != nil {
+		return 0, err
+	}
+	return info.Size(), nil
 }
 
 func (job *clipJob) complete(parent *Manager, waitErr error) {

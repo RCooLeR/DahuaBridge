@@ -431,20 +431,27 @@ func buildPlaybackRTSPURL(deviceCfg config.DeviceConfig, channel int, subtype in
 	}
 
 	rtspURL := &url.URL{
-		Scheme: "rtsp",
-		Host:   host,
-		Path:   "/cam/realmonitor",
-		RawQuery: url.Values{
-			"channel":   []string{strconv.Itoa(channel)},
-			"subtype":   []string{strconv.Itoa(subtype)},
-			"starttime": []string{startTime.Format(playbackRTSPTimeLayout)},
-			"endtime":   []string{endTime.Format(playbackRTSPTimeLayout)},
-		}.Encode(),
+		Scheme:   "rtsp",
+		Host:     host,
+		Path:     "/cam/playback",
+		RawQuery: buildOrderedPlaybackRTSPQuery(channel, subtype, startTime, endTime),
 	}
 	if includeCredentials {
 		rtspURL.User = url.UserPassword(deviceCfg.Username, deviceCfg.Password)
 	}
 	return rtspURL.String()
+}
+
+func buildOrderedPlaybackRTSPQuery(channel int, subtype int, startTime time.Time, endTime time.Time) string {
+	parts := []string{
+		"channel=" + url.QueryEscape(strconv.Itoa(channel)),
+		"subtype=" + url.QueryEscape(strconv.Itoa(subtype)),
+		"starttime=" + url.QueryEscape(startTime.Format(playbackRTSPTimeLayout)),
+	}
+	if !endTime.IsZero() {
+		parts = append(parts, "endtime="+url.QueryEscape(endTime.Format(playbackRTSPTimeLayout)))
+	}
+	return strings.Join(parts, "&")
 }
 
 func buildPlaybackRecordingDownloadURL(deviceCfg config.DeviceConfig, filePath string, includeCredentials bool) string {

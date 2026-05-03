@@ -3,9 +3,11 @@ import { repeat } from "lit/directives/repeat.js";
 import type { TemplateResult } from "lit";
 
 import { createSurveillancePanelStubConfig } from "./surveillance-panel-card-editor";
+import "./surveillance-panel-archive-seek";
 import { SurveillancePanelActions } from "./surveillance-panel-actions";
 import { SurveillancePanelRuntime } from "./surveillance-panel-runtime";
 import { surveillancePanelStyles } from "./surveillance-panel-styles";
+import { renderCameraEventCountBadges } from "./surveillance-panel-event-badges";
 import { renderSurveillancePanelEvents } from "./surveillance-panel-events";
 import { renderSurveillancePanelHeader } from "./surveillance-panel-header";
 import { renderSurveillancePanelSidebar } from "./surveillance-panel-sidebar";
@@ -136,6 +138,8 @@ const EVENT_WINDOW_OPTIONS = [
 
 const ARCHIVE_PAGE_SIZE = 20;
 const MP4_PAGE_SIZE = 20;
+const ARCHIVE_SEEK_MAX_LOOKBACK_DAYS = 90;
+const DEFAULT_ARCHIVE_SEEK_WINDOW_HOURS = 24;
 
 const ARCHIVE_EVENT_TYPE_OPTIONS = [
   { value: EVENT_FILTER_ALL, label: "All event types" },
@@ -171,7 +175,7 @@ interface SelectedNativePlaybackState {
   sourceDeviceId: string;
   streamSource: string;
   startTime: string;
-  endTime: string;
+  endTime: string | null;
   seekTime: string;
   profileKey: string | null;
 }
@@ -237,6 +241,8 @@ export class DahuaBridgeSurveillancePanelCard
     _archiveCoverage: { state: true },
     _archiveCoverageLoading: { state: true },
     _archiveCoverageError: { state: true },
+    _archiveSeekWindowStartIndex: { state: true },
+    _archiveSeekWindowEndIndex: { state: true },
     _bridgeRecordings: { state: true },
     _bridgeRecordingsLoading: { state: true },
     _bridgeRecordingsError: { state: true },
@@ -291,6 +297,8 @@ export class DahuaBridgeSurveillancePanelCard
   private _archiveCoverage: NvrArchiveCoverageModel | null = null;
   private _archiveCoverageLoading = false;
   private _archiveCoverageError = "";
+  private _archiveSeekWindowStartIndex: number | null = null;
+  private _archiveSeekWindowEndIndex: number | null = null;
   private _bridgeRecordings: BridgeRecordingClipListModel | null = null;
   private _bridgeRecordingsLoading = false;
   private _bridgeRecordingsError = "";
@@ -384,6 +392,8 @@ export class DahuaBridgeSurveillancePanelCard
     this._archiveCoverage = null;
     this._archiveCoverageLoading = false;
     this._archiveCoverageError = "";
+    this._archiveSeekWindowStartIndex = null;
+    this._archiveSeekWindowEndIndex = null;
     this._bridgeRecordings = null;
     this._bridgeRecordingsLoading = false;
     this._bridgeRecordingsError = "";
@@ -680,7 +690,8 @@ export class DahuaBridgeSurveillancePanelCard
             <div class="video-panel">
               ${((selectedPlayback === null && selectedNativePlayback === null && camera.stream.profiles.length > 1) ||
               (selectedPlayback !== null && playbackProfileKeys.length > 1) ||
-              availableStreamSources.length > 1)
+              availableStreamSources.length > 1 ||
+              hasCameraEventCounts(camera))
                 ? html`
                     <div class="detail-media-toolbar">
                       ${selectedPlayback === null && selectedNativePlayback === null && camera.stream.profiles.length > 1
@@ -775,6 +786,14 @@ export class DahuaBridgeSurveillancePanelCard
                                   },
                                 ),
                               )}
+                            </div>
+                          `
+                        : nothing}
+                      ${hasCameraEventCounts(camera)
+                        ? html`
+                            <div class="detail-media-group detail-media-group-spacer"></div>
+                            <div class="detail-media-group detail-media-event-counts">
+                              ${renderCameraEventCountBadges(camera, "inline")}
                             </div>
                           `
                         : nothing}
@@ -1881,6 +1900,8 @@ export class DahuaBridgeSurveillancePanelCard
   private clearCameraSelectionState(): void {
     this._selectedCameraStreamProfile = null;
     this._selectedCameraStreamSource = null;
+    this._archiveSeekWindowStartIndex = null;
+    this._archiveSeekWindowEndIndex = null;
   }
 
   private clearVtoSelectionState(): void {
@@ -2043,6 +2064,8 @@ export class DahuaBridgeSurveillancePanelCard
       this._archiveCoverage = null;
       this._archiveCoverageLoading = false;
       this._archiveCoverageError = "";
+      this._archiveSeekWindowStartIndex = null;
+      this._archiveSeekWindowEndIndex = null;
       return;
     }
 
@@ -2051,6 +2074,8 @@ export class DahuaBridgeSurveillancePanelCard
       this._archiveCoverage = null;
       this._archiveCoverageLoading = false;
       this._archiveCoverageError = "";
+      this._archiveSeekWindowStartIndex = null;
+      this._archiveSeekWindowEndIndex = null;
       return;
     }
 
@@ -2068,6 +2093,8 @@ export class DahuaBridgeSurveillancePanelCard
       this._archiveCoverage = null;
       this._archiveCoverageLoading = false;
       this._archiveCoverageError = "";
+      this._archiveSeekWindowStartIndex = null;
+      this._archiveSeekWindowEndIndex = null;
       return;
     }
 
@@ -2105,6 +2132,8 @@ export class DahuaBridgeSurveillancePanelCard
       this._archiveCoverage = null;
       this._archiveCoverageError =
         error instanceof Error ? error.message : "Archive coverage request failed.";
+      this._archiveSeekWindowStartIndex = null;
+      this._archiveSeekWindowEndIndex = null;
     } finally {
       if (
         this._archiveCoverageAbort === controller &&
@@ -2546,7 +2575,7 @@ export class DahuaBridgeSurveillancePanelCard
       this.playIndexedArchiveRecording(model, recording, archiveSource?.deviceId ?? null, archiveSource?.rootDeviceId ?? null);
       return;
     }
-    if (this.isArchiveEventRecording(recording) && recording.filePath && recording.exportUrl) {
+    if (this.isArchiveEventRecording(recording) && recording.exportUrl) {
       await this.launchArchiveClipPlayback(model, recording);
       return;
     }
@@ -3064,7 +3093,10 @@ export class DahuaBridgeSurveillancePanelCard
     selectedNativePlayback: SelectedNativePlaybackState | null,
   ): TemplateResult | typeof nothing {
     const coverage = this._archiveCoverage;
-    const chunks = coverage?.chunks ?? [];
+    const recentChunks = limitCoverageChunksToLookback(
+      coverage?.chunks ?? [],
+      ARCHIVE_SEEK_MAX_LOOKBACK_DAYS,
+    );
     if (!camera.archive?.coverageUrl && !coverage && !this._archiveCoverageLoading) {
       return nothing;
     }
@@ -3072,38 +3104,47 @@ export class DahuaBridgeSurveillancePanelCard
     const activeSeekTime =
       selectedNativePlayback?.seekTime ??
       selectedPlayback?.session.seekTime ??
-      chunks[chunks.length - 1]?.startTime ??
+      recentChunks[recentChunks.length - 1]?.startTime ??
       null;
-    const activeIndex = resolveCoverageChunkIndex(chunks, activeSeekTime);
+    const activeIndex = resolveCoverageChunkIndex(recentChunks, activeSeekTime);
+    const [windowStartIndex, windowEndIndex] = resolveArchiveSeekWindowRange(
+      recentChunks,
+      this._archiveSeekWindowStartIndex,
+      this._archiveSeekWindowEndIndex,
+      activeIndex,
+    );
     const selectedChunk =
-      chunks[activeIndex] ??
-      (chunks.length > 0 ? chunks[chunks.length - 1] : null);
-    const startLabel = coverage?.startTime ?? chunks[0]?.startTime ?? "";
-    const endLabel = coverage?.endTime ?? chunks[chunks.length - 1]?.endTime ?? "";
+      recentChunks[activeIndex] ??
+      (recentChunks.length > 0 ? recentChunks[recentChunks.length - 1] : null);
 
     return html`
-      <div class="slider-wrap">
+      <div class="slider-wrap archive-seek-panel">
         <div class="split-row">
           <span class="badge info">Archive seek</span>
           <span class="muted">
             ${selectedChunk ? formatSeekPanelDateTime(selectedChunk.startTime) : "No indexed archive"}
           </span>
         </div>
-        <input
-          type="range"
-          min="0"
-          max=${String(Math.max(0, chunks.length - 1))}
-          step="1"
-          .value=${String(Math.max(0, activeIndex))}
-          ?disabled=${chunks.length === 0 || this._archiveCoverageLoading}
-          @change=${(event: Event) => {
-            const target = event.currentTarget as HTMLInputElement;
-            void this.startNativeArchivePlayback(camera, Number(target.value));
+        <dahuabridge-archive-seek
+          .chunks=${recentChunks}
+          .windowStartIndex=${windowStartIndex}
+          .windowEndIndex=${windowEndIndex}
+          .activeIndex=${activeIndex}
+          .disabled=${recentChunks.length === 0 || this._archiveCoverageLoading}
+          @archive-window-change=${(event: CustomEvent<{ startIndex: number; endIndex: number }>) => {
+            this._archiveSeekWindowStartIndex = event.detail.startIndex;
+            this._archiveSeekWindowEndIndex = event.detail.endIndex;
           }}
-        />
+          @archive-seek-change=${(event: CustomEvent<{ index: number }>) => {
+            const chunk = recentChunks[event.detail.index];
+            if (chunk) {
+              void this.startNativeArchivePlayback(camera, chunk.startTime);
+            }
+          }}
+        ></dahuabridge-archive-seek>
         <div class="split-row muted">
-          <span>${startLabel ? formatSeekPanelDateTime(startLabel) : "No archive"}</span>
-          <span>${endLabel ? formatSeekPanelDateTime(endLabel) : ""}</span>
+          <span>${coverage?.startTime ? `Coverage ${formatSeekPanelDateTime(coverage.startTime)}` : "No archive"}</span>
+          <span>${coverage?.endTime ? formatSeekPanelDateTime(coverage.endTime) : ""}</span>
         </div>
         ${this._archiveCoverageError
           ? html`<div class="muted">${this._archiveCoverageError}</div>`
@@ -3114,20 +3155,15 @@ export class DahuaBridgeSurveillancePanelCard
 
   private async startNativeArchivePlayback(
     camera: CameraViewModel,
-    chunkIndex: number,
+    seekTime: string,
   ): Promise<void> {
     const coverage = this._archiveCoverage;
-    const chunks = coverage?.chunks ?? [];
-    const boundedIndex = Math.min(chunks.length - 1, Math.max(0, Math.trunc(chunkIndex)));
-    const chunk = chunks[boundedIndex];
+    const chunk = resolveCoverageChunkByStartTime(coverage?.chunks ?? [], seekTime);
     if (!chunk) {
       return;
     }
 
-    const selectedProfile =
-      resolveSelectedCameraStreamProfile(camera, this._selectedCameraStreamProfile) ??
-      camera.stream.profiles[0] ??
-      null;
+    const selectedProfile = this.resolveArchivePlaybackProfile(camera);
     const entityStreamSource =
       typeof camera.cameraEntity?.attributes.stream_source === "string"
         ? camera.cameraEntity.attributes.stream_source
@@ -3137,7 +3173,7 @@ export class DahuaBridgeSurveillancePanelCard
       channel: camera.channelNumber,
       subtype: selectedProfile?.subtype ?? null,
       seekTime: chunk.startTime,
-      endTime: chunk.endTime,
+      endTime: null,
     });
     if (!streamSource) {
       this._errorMessage = "Historical RTSP playback URL could not be built for this camera.";
@@ -3156,6 +3192,8 @@ export class DahuaBridgeSurveillancePanelCard
       seekTime: chunk.startTime,
       profileKey: selectedProfile?.key ?? null,
     };
+    this._archiveSeekWindowStartIndex = null;
+    this._archiveSeekWindowEndIndex = null;
     const seekDate = new Date(chunk.startTime);
     if (!Number.isNaN(seekDate.getTime())) {
       this._archiveDate = toDateInputValue(seekDate);
@@ -3170,6 +3208,27 @@ export class DahuaBridgeSurveillancePanelCard
       end_time: chunk.endTime,
       stream_source: redactUrlForLog(streamSource),
     });
+  }
+
+  private resolveArchivePlaybackProfile(camera: CameraViewModel) {
+    const selectedProfile = resolveSelectedCameraStreamProfile(
+      camera,
+      this._selectedCameraStreamProfile,
+    );
+    return (
+      camera.stream.profiles.find((profile) => profile.subtype === 0 && Boolean(profile.streamUrl)) ??
+      camera.stream.profiles.find(
+        (profile) => profile.key === "quality" && Boolean(profile.streamUrl),
+      ) ??
+      camera.stream.profiles.find(
+        (profile) => profile.key === "default" && Boolean(profile.streamUrl),
+      ) ??
+      (selectedProfile?.streamUrl ? selectedProfile : null) ??
+      camera.stream.profiles.find((profile) => Boolean(profile.streamUrl)) ??
+      selectedProfile ??
+      camera.stream.profiles[0] ??
+      null
+    );
   }
 
   private archiveRecordingLogContext(recording: NvrArchiveRecordingModel): Record<string, unknown> {
@@ -3680,12 +3739,94 @@ function resolveCoverageChunkIndex(
   return bestIndex;
 }
 
+function resolveCoverageChunkByStartTime(
+  chunks: ReadonlyArray<NvrArchiveCoverageModel["chunks"][number]>,
+  seekTime: string,
+): NvrArchiveCoverageModel["chunks"][number] | null {
+  if (chunks.length === 0) {
+    return null;
+  }
+  const exactMatch = chunks.find((chunk) => chunk.startTime === seekTime);
+  if (exactMatch) {
+    return exactMatch;
+  }
+  return chunks[resolveCoverageChunkIndex(chunks, seekTime)] ?? null;
+}
+
+function limitCoverageChunksToLookback(
+  chunks: ReadonlyArray<NvrArchiveCoverageModel["chunks"][number]>,
+  maxLookbackDays: number,
+): NvrArchiveCoverageModel["chunks"] {
+  if (chunks.length === 0) {
+    return [];
+  }
+  const latestChunk = chunks[chunks.length - 1];
+  const latestTime = new Date(latestChunk.endTime || latestChunk.startTime);
+  if (Number.isNaN(latestTime.getTime())) {
+    return [...chunks];
+  }
+  const threshold = latestTime.getTime() - maxLookbackDays * 24 * 60 * 60 * 1000;
+  return chunks.filter((chunk) => {
+    const candidate = new Date(chunk.endTime || chunk.startTime);
+    return !Number.isNaN(candidate.getTime()) && candidate.getTime() >= threshold;
+  });
+}
+
+function resolveArchiveSeekWindowRange(
+  chunks: ReadonlyArray<NvrArchiveCoverageModel["chunks"][number]>,
+  requestedStartIndex: number | null,
+  requestedEndIndex: number | null,
+  activeIndex: number,
+): [number, number] {
+  if (chunks.length === 0) {
+    return [0, 0];
+  }
+
+  const maxIndex = chunks.length - 1;
+  const safeActiveIndex = Math.min(Math.max(activeIndex, 0), maxIndex);
+  const safeRequestedStart =
+    typeof requestedStartIndex === "number" ? Math.min(Math.max(Math.trunc(requestedStartIndex), 0), maxIndex) : null;
+  const safeRequestedEnd =
+    typeof requestedEndIndex === "number" ? Math.min(Math.max(Math.trunc(requestedEndIndex), 0), maxIndex) : null;
+  if (
+    safeRequestedStart !== null &&
+    safeRequestedEnd !== null &&
+    safeRequestedEnd >= safeRequestedStart
+  ) {
+    return [
+      Math.min(safeRequestedStart, safeActiveIndex),
+      Math.max(safeRequestedEnd, safeActiveIndex),
+    ];
+  }
+
+  const activeChunk = chunks[safeActiveIndex] ?? chunks[maxIndex];
+  const activeTime = new Date(activeChunk.startTime);
+  if (Number.isNaN(activeTime.getTime())) {
+    return [0, maxIndex];
+  }
+
+  const windowStartThreshold = activeTime.getTime() - DEFAULT_ARCHIVE_SEEK_WINDOW_HOURS * 60 * 60 * 1000;
+  let windowStartIndex = safeActiveIndex;
+  while (windowStartIndex > 0) {
+    const candidate = new Date(chunks[windowStartIndex - 1]?.startTime ?? "");
+    if (Number.isNaN(candidate.getTime()) || candidate.getTime() < windowStartThreshold) {
+      break;
+    }
+    windowStartIndex--;
+  }
+  return [windowStartIndex, safeActiveIndex];
+}
+
 function formatSeekPanelDateTime(value: string): string {
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) {
     return value;
   }
   return parsed.toLocaleString();
+}
+
+function hasCameraEventCounts(camera: CameraViewModel): boolean {
+  return camera.humanCount24h > 0 || camera.vehicleCount24h > 0;
 }
 
 function pageCountForItems(totalItems: number, pageSize: number): number {

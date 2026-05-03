@@ -54,6 +54,8 @@ func (s *SQLiteStore) InitSchema(ctx context.Context) error {
 			source TEXT NOT NULL,
 			type TEXT NOT NULL,
 			video_stream TEXT NOT NULL,
+			rtsp_main_url TEXT NOT NULL DEFAULT '',
+			rtsp_sub_url TEXT NOT NULL DEFAULT '',
 			flags_json TEXT NOT NULL DEFAULT '[]',
 			first_seen_at TEXT NOT NULL,
 			last_seen_at TEXT NOT NULL
@@ -115,6 +117,29 @@ func (s *SQLiteStore) InitSchema(ctx context.Context) error {
 		if _, err := s.db.ExecContext(ctx, statement); err != nil {
 			return err
 		}
+	}
+	for _, migration := range []struct {
+		table      string
+		column     string
+		definition string
+	}{
+		{table: "archive_events", column: "rtsp_main_url", definition: "TEXT NOT NULL DEFAULT ''"},
+		{table: "archive_events", column: "rtsp_sub_url", definition: "TEXT NOT NULL DEFAULT ''"},
+	} {
+		if err := s.ensureColumn(ctx, migration.table, migration.column, migration.definition); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *SQLiteStore) ensureColumn(ctx context.Context, table string, column string, definition string) error {
+	statement := fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s", table, column, definition)
+	if _, err := s.db.ExecContext(ctx, statement); err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "duplicate column name") {
+			return nil
+		}
+		return err
 	}
 	return nil
 }
@@ -189,13 +214,15 @@ func (s *SQLiteStore) UpsertArchiveEvents(ctx context.Context, deviceID string, 
 	}()
 
 	eventStatement, err := tx.PrepareContext(ctx, `INSERT INTO archive_events (
-		event_id, device_id, channel, start_time, end_time, file_path, source, type, video_stream, flags_json, first_seen_at, last_seen_at
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		event_id, device_id, channel, start_time, end_time, file_path, source, type, video_stream, rtsp_main_url, rtsp_sub_url, flags_json, first_seen_at, last_seen_at
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	ON CONFLICT(event_id) DO UPDATE SET
 		file_path=excluded.file_path,
 		source=excluded.source,
 		type=excluded.type,
 		video_stream=excluded.video_stream,
+		rtsp_main_url=excluded.rtsp_main_url,
+		rtsp_sub_url=excluded.rtsp_sub_url,
 		flags_json=excluded.flags_json,
 		last_seen_at=excluded.last_seen_at`)
 	if err != nil {
@@ -244,6 +271,8 @@ func (s *SQLiteStore) UpsertArchiveEvents(ctx context.Context, deviceID string, 
 			eventRow.Source,
 			eventRow.Type,
 			eventRow.VideoStream,
+			eventRow.RTSPMainURL,
+			eventRow.RTSPSubURL,
 			eventRow.FlagsJSON,
 			eventRow.FirstSeenAt,
 			eventRow.LastSeenAt,
@@ -342,6 +371,8 @@ type archiveEventRow struct {
 	Source      string
 	Type        string
 	VideoStream string
+	RTSPMainURL string
+	RTSPSubURL  string
 	FlagsJSON   string
 	FirstSeenAt string
 	LastSeenAt  string
@@ -403,6 +434,8 @@ func archiveEventRowFromRecording(deviceID string, item dahua.NVRRecording, seen
 		Source:      strings.TrimSpace(item.Source),
 		Type:        strings.TrimSpace(item.Type),
 		VideoStream: strings.TrimSpace(item.VideoStream),
+		RTSPMainURL: strings.TrimSpace(item.RTSPMainURL),
+		RTSPSubURL:  strings.TrimSpace(item.RTSPSubURL),
 		FlagsJSON:   string(flagsJSON),
 		FirstSeenAt: seenAt.UTC().Format(time.RFC3339Nano),
 		LastSeenAt:  seenAt.UTC().Format(time.RFC3339Nano),

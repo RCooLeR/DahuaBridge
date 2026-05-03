@@ -653,7 +653,7 @@ func TestRuntimeServicesCreateNVRPlaybackSessionResolvesPlaybackStream(t *testin
 	if entry.Channel != 1 || entry.RootDeviceID != "west20_nvr" {
 		t.Fatalf("unexpected playback entry: %+v", entry)
 	}
-	if !strings.Contains(profile.StreamURL, "/cam/realmonitor?") {
+	if !strings.Contains(profile.StreamURL, "/cam/playback?") {
 		t.Fatalf("expected playback stream url, got %q", profile.StreamURL)
 	}
 	if !strings.Contains(profile.StreamURL, "starttime=2026_04_28_00_15_00") {

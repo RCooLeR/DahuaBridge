@@ -128,6 +128,8 @@ type NVRRecording struct {
 	AssetDownloadURL string   `json:"asset_download_url,omitempty"`
 	AssetSelfURL     string   `json:"asset_self_url,omitempty"`
 	AssetStopURL     string   `json:"asset_stop_url,omitempty"`
+	RTSPMainURL      string   `json:"rtsp_main_url,omitempty"`
+	RTSPSubURL       string   `json:"rtsp_sub_url,omitempty"`
 	Channel          int      `json:"channel"`
 	StartTime        string   `json:"start_time"`
 	EndTime          string   `json:"end_time"`

@@ -33,6 +33,10 @@ type nvrArchiveInspector interface {
 	NVRArchiveCoverage(context.Context, string, int) (dahua.NVRArchiveCoverage, error)
 }
 
+type nvrPlaybackStreamResolver interface {
+	GetStream(string, string, bool) (streams.Entry, streams.Profile, bool)
+}
+
 func (c *controller) registerDeviceRoutes(router chi.Router) {
 	router.Get("/api/v1/devices", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, c.probes.List())
@@ -235,6 +239,25 @@ func (c *controller) registerNVRRoutes(router chi.Router) {
 		}
 
 		deviceID := chi.URLParam(r, "deviceID")
+		if shouldUsePlaybackSessionArchiveExport(playbackRequest) {
+			clip, err := c.startPlaybackNVRRecordingExport(
+				r.Context(),
+				deviceID,
+				playbackRequest,
+				profile,
+				duration,
+			)
+			if err != nil {
+				writeClassifiedActionError(w, err, http.StatusBadGateway)
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]any{
+				"status": "ok",
+				"clip":   clipAPIResponse(r, clip),
+			})
+			return
+		}
+
 		if strings.TrimSpace(playbackRequest.FilePath) != "" {
 			clip, err := c.startDirectNVRRecordingExport(
 				r.Context(),
@@ -545,6 +568,73 @@ func (c *controller) registerNVRRoutes(router chi.Router) {
 	})
 }
 
+func (c *controller) startPlaybackNVRRecordingExport(
+	ctx context.Context,
+	deviceID string,
+	request dahua.NVRPlaybackSessionRequest,
+	profileName string,
+	duration time.Duration,
+) (mediaapi.ClipInfo, error) {
+	if c.media == nil {
+		return mediaapi.ClipInfo{}, fmt.Errorf("media layer is not configured")
+	}
+
+	session, err := c.snapshots.CreateNVRPlaybackSession(ctx, deviceID, request)
+	if err != nil {
+		return mediaapi.ClipInfo{}, err
+	}
+
+	resolver, ok := c.snapshots.(nvrPlaybackStreamResolver)
+	if !ok {
+		return mediaapi.ClipInfo{}, fmt.Errorf("playback stream resolver is not configured")
+	}
+
+	resolvedProfileName := firstNonEmpty(strings.TrimSpace(profileName), strings.TrimSpace(session.RecommendedProfile), "quality")
+	entry, streamProfile, ok := resolver.GetStream(session.StreamID, resolvedProfileName, true)
+	if !ok {
+		return mediaapi.ClipInfo{}, fmt.Errorf("playback stream profile %q is unavailable", resolvedProfileName)
+	}
+	if strings.TrimSpace(streamProfile.StreamURL) == "" {
+		return mediaapi.ClipInfo{}, fmt.Errorf("playback stream profile %q does not expose an rtsp source url", resolvedProfileName)
+	}
+	if duration <= 0 || duration > request.EndTime.Sub(request.StartTime) {
+		duration = request.EndTime.Sub(request.StartTime)
+	}
+	if duration <= 0 {
+		return mediaapi.ClipInfo{}, fmt.Errorf("invalid archive clip duration")
+	}
+
+	clip, err := c.media.StartDirectClip(ctx, mediaapi.DirectClipStartRequest{
+		StreamID:                 archiveExportStreamID(deviceID, request),
+		RootDeviceID:             firstNonEmpty(strings.TrimSpace(entry.RootDeviceID), deviceID),
+		SourceDeviceID:           firstNonEmpty(strings.TrimSpace(entry.SourceDeviceID), strings.TrimSpace(entry.ID), fmt.Sprintf("%s_channel_%02d", deviceID, request.Channel)),
+		DeviceKind:               dahua.DeviceKindNVRChannel,
+		Name:                     firstNonEmpty(strings.TrimSpace(entry.Name), fmt.Sprintf("Channel %d", request.Channel)),
+		Channel:                  request.Channel,
+		ProfileName:              resolvedProfileName,
+		Duration:                 duration,
+		SourceURL:                strings.TrimSpace(streamProfile.StreamURL),
+		VideoCodec:               streamProfile.VideoCodec,
+		AudioCodec:               streamProfile.AudioCodec,
+		SourceWidth:              streamProfile.SourceWidth,
+		SourceHeight:             streamProfile.SourceHeight,
+		RTSPTransport:            firstNonEmpty(strings.TrimSpace(streamProfile.RTSPTransport), "tcp"),
+		UseWallclockAsTimestamps: streamProfile.UseWallclockAsTimestamps,
+		Recommended:              streamProfile.Recommended,
+		SourceStartAt:            request.StartTime,
+		SourceEndAt:              request.EndTime,
+	})
+	if err != nil {
+		return mediaapi.ClipInfo{}, err
+	}
+	if tracker, ok := c.snapshots.(archiveClipTracker); ok {
+		if err := tracker.TrackNVRArchiveClip(ctx, deviceID, request, clip); err != nil {
+			return mediaapi.ClipInfo{}, err
+		}
+	}
+	return clip, nil
+}
+
 func (c *controller) startDirectNVRRecordingExport(
 	ctx context.Context,
 	deviceID string,
@@ -713,18 +803,31 @@ func (c *controller) downloadOptionalNVRRecordingIFrame(
 
 func archiveExportStreamID(deviceID string, request dahua.NVRPlaybackSessionRequest) string {
 	base := firstNonEmpty(strings.TrimSpace(deviceID), "nvr")
+	filePath := strings.TrimSpace(request.FilePath)
+	if shouldUsePlaybackSessionArchiveExport(request) {
+		filePath = ""
+	}
 	identity := strings.Join([]string{
 		base,
 		fmt.Sprintf("%d", request.Channel),
 		request.StartTime.UTC().Format(time.RFC3339Nano),
 		request.EndTime.UTC().Format(time.RFC3339Nano),
-		strings.TrimSpace(request.FilePath),
+		filePath,
 		strings.TrimSpace(request.Source),
 		strings.TrimSpace(request.Type),
 		strings.TrimSpace(request.VideoStream),
 	}, "|")
 	sum := sha1.Sum([]byte(identity))
 	return fmt.Sprintf("nvr_export_%s_%x", base, sum[:8])
+}
+
+func shouldUsePlaybackSessionArchiveExport(request dahua.NVRPlaybackSessionRequest) bool {
+	if request.Channel <= 0 || request.StartTime.IsZero() || request.EndTime.IsZero() || !request.EndTime.After(request.StartTime) {
+		return false
+	}
+	source := strings.ToLower(strings.TrimSpace(request.Source))
+	recordingType := strings.ToLower(strings.TrimSpace(request.Type))
+	return source == "nvr_event" || recordingType == "event" || strings.HasPrefix(recordingType, "event.")
 }
 
 func shouldUseOptionalNVRRecordingIFrame(request dahua.NVRPlaybackSessionRequest) bool {

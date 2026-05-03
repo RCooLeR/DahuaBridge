@@ -1103,7 +1103,7 @@ func attachNVRRecordingExportURLs(r *http.Request, deviceID string, result *dahu
 			channel,
 			startTime,
 			endTime,
-			item.FilePath,
+			conditionalArchiveExportFilePath(*item),
 			item.Source,
 			item.Type,
 			item.VideoStream,
@@ -1160,11 +1160,15 @@ func normalizeNVRRecordingSearchResult(result *dahua.NVRRecordingSearchResult) {
 }
 
 func buildNVRRecordingExportURL(r *http.Request, deviceID string, channel int, startTime string, endTime string, filePath string, source string, recordingType string, videoStream string) string {
+	profileName := "stable"
+	if isArchiveEventSource(source, recordingType) {
+		profileName = "quality"
+	}
 	query := url.Values{
 		"channel":    []string{strconv.Itoa(channel)},
 		"start_time": []string{startTime},
 		"end_time":   []string{endTime},
-		"profile":    []string{"stable"},
+		"profile":    []string{profileName},
 	}
 	if strings.TrimSpace(filePath) != "" {
 		query.Set("file_path", strings.TrimSpace(filePath))
@@ -1180,6 +1184,19 @@ func buildNVRRecordingExportURL(r *http.Request, deviceID string, channel int, s
 	}
 	path := "/api/v1/nvr/" + url.PathEscape(deviceID) + "/recordings/export?" + query.Encode()
 	return buildAbsoluteRequestURL(r, path)
+}
+
+func conditionalArchiveExportFilePath(item dahua.NVRRecording) string {
+	if isEventRecordingItem(item) {
+		return ""
+	}
+	return strings.TrimSpace(item.FilePath)
+}
+
+func isArchiveEventSource(source string, recordingType string) bool {
+	normalizedSource := strings.ToLower(strings.TrimSpace(source))
+	normalizedType := strings.ToLower(strings.TrimSpace(recordingType))
+	return normalizedSource == "nvr_event" || normalizedType == "event" || strings.HasPrefix(normalizedType, "event.")
 }
 
 func buildAbsoluteRequestURL(r *http.Request, path string) string {

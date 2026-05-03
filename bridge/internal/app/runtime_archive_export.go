@@ -63,6 +63,10 @@ func (r *runtimeServices) EnsureNVRArchiveClip(ctx context.Context, deviceID str
 		}
 	}
 
+	if shouldUsePlaybackSessionArchiveExport(request) {
+		return r.ensurePlaybackArchiveClip(ctx, starter, deviceID, request, streamID)
+	}
+
 	download, err := r.NVRDownloadRecordingClip(ctx, deviceID, dahua.NVRRecordingClipRequest{
 		Channel:     request.Channel,
 		StartTime:   request.StartTime,
@@ -179,6 +183,75 @@ func (r *runtimeServices) EnsureNVRArchiveClip(ctx context.Context, deviceID str
 	return clip, nil
 }
 
+func (r *runtimeServices) ensurePlaybackArchiveClip(
+	ctx context.Context,
+	starter runtimeDirectClipStarter,
+	deviceID string,
+	request dahua.NVRPlaybackSessionRequest,
+	streamID string,
+) (media.ClipInfo, error) {
+	session, err := r.CreateNVRPlaybackSession(ctx, deviceID, request)
+	if err != nil {
+		return media.ClipInfo{}, err
+	}
+
+	entry, streamProfile, ok := r.GetStream(session.StreamID, "quality", true)
+	if !ok {
+		return media.ClipInfo{}, fmt.Errorf("playback stream profile %q is unavailable", "quality")
+	}
+	if strings.TrimSpace(streamProfile.StreamURL) == "" {
+		return media.ClipInfo{}, fmt.Errorf("playback stream profile %q does not expose an rtsp source url", "quality")
+	}
+
+	duration := request.EndTime.Sub(request.StartTime)
+	if duration <= 0 {
+		return media.ClipInfo{}, fmt.Errorf("invalid archive clip duration")
+	}
+
+	clip, err := starter.StartDirectClip(ctx, media.DirectClipStartRequest{
+		StreamID:                 streamID,
+		RootDeviceID:             firstNonEmptyPlayback(strings.TrimSpace(entry.RootDeviceID), deviceID),
+		SourceDeviceID:           firstNonEmptyPlayback(strings.TrimSpace(entry.SourceDeviceID), strings.TrimSpace(entry.ID), fmt.Sprintf("%s_channel_%02d", deviceID, request.Channel)),
+		DeviceKind:               dahua.DeviceKindNVRChannel,
+		Name:                     firstNonEmptyPlayback(strings.TrimSpace(entry.Name), fmt.Sprintf("Channel %d", request.Channel)),
+		Channel:                  request.Channel,
+		ProfileName:              "quality",
+		Duration:                 duration,
+		SourceURL:                strings.TrimSpace(streamProfile.StreamURL),
+		VideoCodec:               streamProfile.VideoCodec,
+		AudioCodec:               streamProfile.AudioCodec,
+		SourceWidth:              streamProfile.SourceWidth,
+		SourceHeight:             streamProfile.SourceHeight,
+		RTSPTransport:            firstNonEmptyPlayback(strings.TrimSpace(streamProfile.RTSPTransport), "tcp"),
+		UseWallclockAsTimestamps: streamProfile.UseWallclockAsTimestamps,
+		Recommended:              streamProfile.Recommended,
+		SourceStartAt:            request.StartTime,
+		SourceEndAt:              request.EndTime,
+	})
+	if err != nil {
+		if errors.Is(err, media.ErrClipAlreadyActive) {
+			if clips, findErr := starter.FindClips(media.ClipQuery{
+				StreamID:  streamID,
+				StartTime: request.StartTime.UTC().Add(-2 * time.Second),
+				EndTime:   request.EndTime.UTC().Add(2 * time.Second),
+				Limit:     8,
+			}); findErr == nil {
+				for _, existing := range clips {
+					if existing.StreamID == streamID && clipMatchesWindow(existing, request.StartTime, request.EndTime) {
+						_ = r.TrackNVRArchiveClip(ctx, deviceID, request, existing)
+						return existing, nil
+					}
+				}
+			}
+		}
+		return media.ClipInfo{}, err
+	}
+	if err := r.TrackNVRArchiveClip(ctx, deviceID, request, clip); err != nil {
+		return media.ClipInfo{}, err
+	}
+	return clip, nil
+}
+
 func (r *runtimeServices) downloadOptionalArchiveIFrame(ctx context.Context, deviceID string, request dahua.NVRPlaybackSessionRequest, tempDir string) (string, time.Duration) {
 	if !shouldUseOptionalArchiveIFrame(request) {
 		return "", 0
@@ -248,18 +321,31 @@ func (r *runtimeServices) lookupNVRArchiveStreamProfile(deviceID string, channel
 
 func runtimeArchiveExportStreamID(deviceID string, request dahua.NVRPlaybackSessionRequest) string {
 	base := firstNonEmptyPlayback(strings.TrimSpace(deviceID), "nvr")
+	filePath := strings.TrimSpace(request.FilePath)
+	if shouldUsePlaybackSessionArchiveExport(request) {
+		filePath = ""
+	}
 	identity := strings.Join([]string{
 		base,
 		fmt.Sprintf("%d", request.Channel),
 		request.StartTime.UTC().Format(time.RFC3339Nano),
 		request.EndTime.UTC().Format(time.RFC3339Nano),
-		strings.TrimSpace(request.FilePath),
+		filePath,
 		strings.TrimSpace(request.Source),
 		strings.TrimSpace(request.Type),
 		strings.TrimSpace(request.VideoStream),
 	}, "|")
 	sum := sha1.Sum([]byte(identity))
 	return fmt.Sprintf("nvr_export_%s_%x", base, sum[:8])
+}
+
+func shouldUsePlaybackSessionArchiveExport(request dahua.NVRPlaybackSessionRequest) bool {
+	if request.Channel <= 0 || request.StartTime.IsZero() || request.EndTime.IsZero() || !request.EndTime.After(request.StartTime) {
+		return false
+	}
+	source := strings.ToLower(strings.TrimSpace(request.Source))
+	recordingType := strings.ToLower(strings.TrimSpace(request.Type))
+	return source == "nvr_event" || recordingType == "event" || strings.HasPrefix(recordingType, "event.")
 }
 
 func shouldUseOptionalArchiveIFrame(request dahua.NVRPlaybackSessionRequest) bool {

@@ -104,7 +104,7 @@ func (s *SQLiteStore) searchFileRows(ctx context.Context, deviceID string, query
 
 func (s *SQLiteStore) searchEventRows(ctx context.Context, deviceID string, query dahua.NVRRecordingQuery) ([]dahua.NVRRecording, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT
-		event_id, channel, start_time, end_time, file_path, source, type, video_stream, flags_json
+		event_id, channel, start_time, end_time, file_path, source, type, video_stream, rtsp_main_url, rtsp_sub_url, flags_json
 		FROM archive_events
 		WHERE device_id = ? AND channel = ? AND end_time >= ? AND start_time <= ?
 		ORDER BY start_time DESC
@@ -123,10 +123,10 @@ func (s *SQLiteStore) searchEventRows(ctx context.Context, deviceID string, quer
 	items := make([]dahua.NVRRecording, 0)
 	for rows.Next() {
 		var (
-			eventID, startTime, endTime, filePath, source, recordingType, videoStream, flagsJSON string
-			channel                                                                              int
+			eventID, startTime, endTime, filePath, source, recordingType, videoStream, rtspMainURL, rtspSubURL, flagsJSON string
+			channel                                                                                                       int
 		)
-		if err := rows.Scan(&eventID, &channel, &startTime, &endTime, &filePath, &source, &recordingType, &videoStream, &flagsJSON); err != nil {
+		if err := rows.Scan(&eventID, &channel, &startTime, &endTime, &filePath, &source, &recordingType, &videoStream, &rtspMainURL, &rtspSubURL, &flagsJSON); err != nil {
 			return nil, err
 		}
 		item := dahua.NVRRecording{
@@ -139,6 +139,8 @@ func (s *SQLiteStore) searchEventRows(ctx context.Context, deviceID string, quer
 			FilePath:    filePath,
 			Type:        recordingType,
 			VideoStream: videoStream,
+			RTSPMainURL: rtspMainURL,
+			RTSPSubURL:  rtspSubURL,
 			Flags:       parseJSONStringArray(flagsJSON),
 		}
 		if !matchesArchiveEventQuery(item, query.EventCode) {

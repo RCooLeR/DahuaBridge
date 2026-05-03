@@ -213,10 +213,10 @@ function renderCameraTile({
       </div>
       <div class="tile-media">
         ${renderCameraViewport(camera)}
-        ${renderCameraEventCountBadges(camera, "overlay")}
         <div class="media-overlay">
           <div class="media-bottom">
             <div class="tile-overlay-badges">
+              ${renderCameraEventCountBadges(camera, "inline")}
               ${camera.recordingActive
                 ? html`<span
                     class="recording-dot"

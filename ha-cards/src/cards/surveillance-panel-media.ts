@@ -115,7 +115,10 @@ export function renderSelectedCameraViewport(
   );
 
   if (resolvedSource === "native" && camera.cameraEntity) {
-    return renderLiveViewport(hass, camera.cameraEntity);
+    return renderLiveViewport(
+      hass,
+      overrideNativeLiveProfile(camera.cameraEntity, resolvedProfile?.streamUrl ?? null, resolvedProfile?.subtype ?? null),
+    );
   }
 
   if (!camera.streamAvailable && fallbackPreviewUrl) {
@@ -311,7 +314,7 @@ export function buildRtspPlaybackUrl({
   channel?: number | null;
   subtype?: number | null;
   seekTime: string;
-  endTime: string;
+  endTime?: string | null;
 }): string | null {
   const normalizedStreamUrl = streamUrl?.trim() ?? "";
   if (!normalizedStreamUrl) {
@@ -325,10 +328,10 @@ export function buildRtspPlaybackUrl({
     }
 
     const start = new Date(seekTime);
-    const end = new Date(endTime);
-    if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || end <= start) {
+    if (Number.isNaN(start.getTime())) {
       return null;
     }
+    const end = endTime?.trim() ? new Date(endTime) : null;
 
     const resolvedChannel =
       normalizeRtspInteger(channel) ?? normalizeRtspInteger(url.searchParams.get("channel"));
@@ -339,13 +342,12 @@ export function buildRtspPlaybackUrl({
     }
 
     url.pathname = "/cam/playback";
-    url.search = "";
-    url.searchParams.set("channel", String(resolvedChannel));
-    if (resolvedSubtype !== null) {
-      url.searchParams.set("subtype", String(resolvedSubtype));
-    }
-    url.searchParams.set("starttime", formatRtspPlaybackTimestamp(start));
-    url.searchParams.set("endtime", formatRtspPlaybackTimestamp(end));
+    url.search = buildOrderedRtspPlaybackSearch(
+      resolvedChannel,
+      resolvedSubtype,
+      start,
+      end && !Number.isNaN(end.getTime()) && end > start ? end : null,
+    );
     return url.toString();
   } catch {
     return null;
@@ -394,6 +396,46 @@ function overrideStreamSource(entity: HassEntity, streamSource: string): HassEnt
   };
 }
 
+function overrideNativeLiveProfile(
+  entity: HassEntity,
+  streamSource: string | null,
+  subtype: number | null,
+): HassEntity {
+  const nextAttributes: Record<string, unknown> = {
+    ...entity.attributes,
+  };
+  const normalizedSubtype = normalizeRtspInteger(subtype);
+
+  if (streamSource?.trim()) {
+    nextAttributes.stream_source = streamSource.trim();
+  } else if (normalizedSubtype !== null) {
+    const existingStreamSource = stringAttribute(entity, "stream_source");
+    if (existingStreamSource) {
+      nextAttributes.stream_source = overrideUrlQueryParam(existingStreamSource, "subtype", String(normalizedSubtype));
+    }
+  }
+
+  if (normalizedSubtype !== null) {
+    for (const key of ["entity_picture", "picture", "snapshot_url"] as const) {
+      const currentValue = stringAttribute(entity, key);
+      if (!currentValue) {
+        continue;
+      }
+      nextAttributes[key] = overrideUrlQueryParam(currentValue, "subtype", String(normalizedSubtype));
+    }
+  }
+
+  return {
+    ...entity,
+    attributes: nextAttributes,
+  };
+}
+
+function stringAttribute(entity: HassEntity, key: string): string | null {
+  const value = entity.attributes[key];
+  return typeof value === "string" && value.trim() ? value : null;
+}
+
 function normalizeRtspInteger(value: number | string | null | undefined): number | null {
   if (typeof value === "number" && Number.isFinite(value)) {
     return Math.trunc(value);
@@ -413,6 +455,36 @@ function formatRtspPlaybackTimestamp(value: Date): string {
   const minutes = String(value.getMinutes()).padStart(2, "0");
   const seconds = String(value.getSeconds()).padStart(2, "0");
   return `${year}_${month}_${day}_${hours}_${minutes}_${seconds}`;
+}
+
+function buildOrderedRtspPlaybackSearch(
+  channel: number,
+  subtype: number | null,
+  startTime: Date,
+  endTime: Date | null,
+): string {
+  const parts = [`channel=${encodeURIComponent(String(channel))}`];
+  if (subtype !== null) {
+    parts.push(`subtype=${encodeURIComponent(String(subtype))}`);
+  }
+  parts.push(`starttime=${encodeURIComponent(formatRtspPlaybackTimestamp(startTime))}`);
+  if (endTime) {
+    parts.push(`endtime=${encodeURIComponent(formatRtspPlaybackTimestamp(endTime))}`);
+  }
+  return `?${parts.join("&")}`;
+}
+
+function overrideUrlQueryParam(rawUrl: string, key: string, value: string): string {
+  try {
+    const parsed = new URL(rawUrl, window.location.origin);
+    parsed.searchParams.set(key, value);
+    if (/^[a-z][a-z0-9+.-]*:\/\//i.test(rawUrl)) {
+      return parsed.toString();
+    }
+    return `${parsed.pathname}${parsed.search}${parsed.hash}`;
+  } catch {
+    return rawUrl;
+  }
 }
 
 function uniqueSourceOrder(

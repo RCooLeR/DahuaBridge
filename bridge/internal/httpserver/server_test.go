@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -63,6 +62,7 @@ type stubSnapshotReader struct {
 	createNVRPlaybackSession func(context.Context, string, dahua.NVRPlaybackSessionRequest) (dahua.NVRPlaybackSession, error)
 	getNVRPlaybackSession    func(string) (dahua.NVRPlaybackSession, error)
 	seekNVRPlaybackSession   func(context.Context, string, time.Time) (dahua.NVRPlaybackSession, error)
+	getStream                func(string, string, bool) (streams.Entry, streams.Profile, bool)
 }
 
 func (stubSnapshotReader) NVRSnapshot(context.Context, string, int) ([]byte, string, error) {
@@ -118,6 +118,12 @@ func (s stubSnapshotReader) SeekNVRPlaybackSession(ctx context.Context, sessionI
 		return s.seekNVRPlaybackSession(ctx, sessionID, seekTime)
 	}
 	return dahua.NVRPlaybackSession{}, nil
+}
+func (s stubSnapshotReader) GetStream(streamID string, profileName string, includeCredentials bool) (streams.Entry, streams.Profile, bool) {
+	if s.getStream != nil {
+		return s.getStream(streamID, profileName, includeCredentials)
+	}
+	return streams.Entry{}, streams.Profile{}, false
 }
 func (stubSnapshotReader) VTOSnapshot(context.Context, string) ([]byte, string, error) {
 	return nil, "", nil
@@ -3073,7 +3079,7 @@ func TestNVRRecordingExportEndpointCreatesPlaybackClip(t *testing.T) {
 	}
 }
 
-func TestNVRRecordingExportEndpointUsesRecordingClipRequestForEvents(t *testing.T) {
+func TestNVRRecordingExportEndpointUsesPlaybackRTSPForEvents(t *testing.T) {
 	start := time.Date(2026, 4, 29, 0, 0, 0, 0, time.UTC)
 	end := start.Add(20 * time.Second)
 
@@ -3082,51 +3088,74 @@ func TestNVRRecordingExportEndpointUsesRecordingClipRequestForEvents(t *testing.
 		MetricsPath:   "/metrics",
 		HealthPath:    "/healthz",
 	}, stubSnapshotReader{
-		nvrDownloadRecordingClip: func(_ context.Context, deviceID string, request dahua.NVRRecordingClipRequest) (dahua.NVRRecordingDownload, error) {
+		createNVRPlaybackSession: func(_ context.Context, deviceID string, request dahua.NVRPlaybackSessionRequest) (dahua.NVRPlaybackSession, error) {
 			if deviceID != "west20_nvr" {
 				t.Fatalf("unexpected device id %q", deviceID)
 			}
 			if request.Channel != 5 || !request.StartTime.Equal(start) || !request.EndTime.Equal(end) {
-				t.Fatalf("unexpected clip request %+v", request)
+				t.Fatalf("unexpected playback request %+v", request)
 			}
 			if request.FilePath != "/mnt/dvr/2026-04-29/4/dav/00.00.00-00.30.00[R][0@0][0].dav" {
 				t.Fatalf("unexpected file path %q", request.FilePath)
 			}
 			if request.Source != "nvr_event" || request.Type != "Event.smdTypeVehicle" || request.VideoStream != "Main" {
-				t.Fatalf("unexpected event clip metadata %+v", request)
+				t.Fatalf("unexpected event playback metadata %+v", request)
 			}
-			return dahua.NVRRecordingDownload{
-				Body:          io.NopCloser(strings.NewReader("dav-bytes")),
-				ContentType:   "application/octet-stream",
-				ContentLength: int64(len("dav-bytes")),
-				FileName:      "event.dav",
+			return dahua.NVRPlaybackSession{
+				ID:                 "nvrpb_event_test",
+				StreamID:           "nvrpb_event_test",
+				DeviceID:           deviceID,
+				SourceStreamID:     "west20_nvr_channel_05",
+				Name:               "Channel 5",
+				Channel:            request.Channel,
+				StartTime:          request.StartTime.Format(time.RFC3339),
+				EndTime:            request.EndTime.Format(time.RFC3339),
+				SeekTime:           request.StartTime.Format(time.RFC3339),
+				RecommendedProfile: "quality",
 			}, nil
 		},
-		listStreams: func(bool) []streams.Entry {
-			return []streams.Entry{{
-				ID:                 "west20_nvr_channel_05",
-				RootDeviceID:       "west20_nvr",
-				DeviceKind:         dahua.DeviceKindNVRChannel,
-				Name:               "Channel 5",
-				Channel:            5,
-				RecommendedProfile: "stable",
-				Profiles: map[string]streams.Profile{
-					"stable": {
-						Name:         "stable",
-						VideoCodec:   "H.264",
-						AudioCodec:   "AAC",
-						SourceWidth:  704,
-						SourceHeight: 576,
-						Recommended:  true,
-					},
+		getStream: func(streamID string, profileName string, includeCredentials bool) (streams.Entry, streams.Profile, bool) {
+			if streamID != "nvrpb_event_test" {
+				t.Fatalf("unexpected playback stream id %q", streamID)
+			}
+			if profileName != "quality" {
+				t.Fatalf("unexpected playback profile %q", profileName)
+			}
+			if !includeCredentials {
+				t.Fatal("expected credentialed playback stream resolution")
+			}
+			return streams.Entry{
+					ID:             "nvrpb_event_test",
+					RootDeviceID:   "west20_nvr",
+					SourceDeviceID: "west20_nvr_channel_05",
+					DeviceKind:     dahua.DeviceKindNVRChannel,
+					Name:           "Channel 5",
+					Channel:        5,
 				},
-			}}
+				streams.Profile{
+					Name:                     "quality",
+					StreamURL:                "rtsp://example-user:example-password@192.0.2.10:554/cam/playback?channel=5&subtype=0&starttime=2026_04_29_00_00_00&endtime=2026_04_29_00_00_20",
+					RTSPTransport:            "tcp",
+					VideoCodec:               "H.264",
+					AudioCodec:               "AAC",
+					SourceWidth:              2560,
+					SourceHeight:             1440,
+					UseWallclockAsTimestamps: true,
+					Recommended:              true,
+				},
+				true
 		},
 	}, stubMediaReader{
 		enabled: true,
 		startDirectClip: func(_ context.Context, request mediaapi.DirectClipStartRequest) (mediaapi.ClipInfo, error) {
 			if request.Channel != 5 || request.SourceURL == "" {
 				t.Fatalf("unexpected direct clip request %+v", request)
+			}
+			if !strings.Contains(request.SourceURL, "/cam/playback?channel=5&subtype=0") {
+				t.Fatalf("expected playback rtsp source url, got %q", request.SourceURL)
+			}
+			if request.StreamID == "" || request.StreamID == "nvrpb_event_test" {
+				t.Fatalf("expected isolated archive clip stream id, got %q", request.StreamID)
 			}
 			return mediaapi.ClipInfo{
 				ID:        "clip_event",

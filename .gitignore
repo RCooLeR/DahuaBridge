@@ -9,7 +9,6 @@ dahua-pdf/
 .pytest_cache/
 .venv/
 .coverage
-todo.txt
 .env
 .env.*
 !.env.example

@@ -99,6 +99,8 @@ export interface NvrArchiveRecordingModel {
   assetSelfUrl?: string | null;
   assetStopUrl?: string | null;
   assetError?: string | null;
+  rtspMainUrl?: string | null;
+  rtspSubUrl?: string | null;
   filePath: string | null;
   type: string | null;
   videoStream: string | null;
