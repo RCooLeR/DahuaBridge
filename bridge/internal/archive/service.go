@@ -186,7 +186,6 @@ func (s *Service) SyncNow(ctx context.Context) error {
 		Msg("archive sync started")
 
 	var firstErr error
-	prefetchBudget := max(0, s.cfg.MaxParallelJobs)
 	for _, device := range s.devices {
 		if !device.EnabledValue() {
 			continue
@@ -197,7 +196,7 @@ func (s *Service) SyncNow(ctx context.Context) error {
 			continue
 		}
 		for _, channel := range channels {
-			if err := s.syncChannel(ctx, device, channel, &prefetchBudget); err != nil {
+			if err := s.syncChannel(ctx, device, channel); err != nil {
 				s.logger.Error().Err(err).Str("device_id", device.ID).Int("channel", channel).Msg("archive sync channel failed")
 				if firstErr == nil {
 					firstErr = err
@@ -406,7 +405,7 @@ func (s *Service) runLoop(ctx context.Context) {
 	}
 }
 
-func (s *Service) syncChannel(ctx context.Context, device config.DeviceConfig, channel int, prefetchBudget *int) error {
+func (s *Service) syncChannel(ctx context.Context, device config.DeviceConfig, channel int) error {
 	now := time.Now().In(time.Local)
 	windowStart := now.AddDate(0, 0, -s.cfg.PrefetchDays).Truncate(archiveSyncWindow)
 	windowEnd := now
@@ -421,14 +420,14 @@ func (s *Service) syncChannel(ctx context.Context, device config.DeviceConfig, c
 		}
 		if s.cfg.PrefetchSMD {
 			for _, code := range smdEventCodes {
-				if err := s.syncEventWindow(ctx, device.ID, channel, code, from, to, prefetchBudget); err != nil {
+				if err := s.syncEventWindow(ctx, device.ID, channel, code, from, to); err != nil {
 					return err
 				}
 			}
 		}
 		if s.cfg.PrefetchIVS {
 			for _, code := range ivsEventCodes {
-				if err := s.syncEventWindow(ctx, device.ID, channel, code, from, to, prefetchBudget); err != nil {
+				if err := s.syncEventWindow(ctx, device.ID, channel, code, from, to); err != nil {
 					return err
 				}
 			}
@@ -454,7 +453,7 @@ func (s *Service) syncArchiveWindow(ctx context.Context, deviceID string, channe
 	return s.store.MarkCoverage(ctx, "archive", deviceID, channel, startTime, endTime, now)
 }
 
-func (s *Service) syncEventWindow(ctx context.Context, deviceID string, channel int, eventCode string, startTime time.Time, endTime time.Time, prefetchBudget *int) error {
+func (s *Service) syncEventWindow(ctx context.Context, deviceID string, channel int, eventCode string, startTime time.Time, endTime time.Time) error {
 	result, err := s.searcher.NVRRecordings(ctx, deviceID, dahua.NVRRecordingQuery{
 		Channel:   channel,
 		StartTime: startTime,
@@ -473,12 +472,8 @@ func (s *Service) syncEventWindow(ctx context.Context, deviceID string, channel 
 	if err := s.store.MarkCoverage(ctx, "event:"+normalizeArchiveEventCode(eventCode), deviceID, channel, startTime, endTime, now); err != nil {
 		return err
 	}
-	if prefetchBudget != nil && *prefetchBudget > 0 {
-		remaining, err := s.prefetchEventAssets(ctx, deviceID, result.Items, *prefetchBudget)
-		if err != nil {
-			return err
-		}
-		*prefetchBudget = remaining
+	if err := s.prefetchEventAssets(ctx, deviceID, result.Items); err != nil {
+		return err
 	}
 	return nil
 }
@@ -544,9 +539,9 @@ func parseArchiveLocalTime(value string) (time.Time, bool) {
 	return parsed, true
 }
 
-func (s *Service) prefetchEventAssets(ctx context.Context, deviceID string, items []dahua.NVRRecording, budget int) (int, error) {
-	if s == nil || s.store == nil || s.clips == nil || budget <= 0 || len(items) == 0 {
-		return budget, nil
+func (s *Service) prefetchEventAssets(ctx context.Context, deviceID string, items []dahua.NVRRecording) error {
+	if s == nil || s.store == nil || s.clips == nil || len(items) == 0 {
+		return nil
 	}
 
 	pending := make([]dahua.NVRRecording, 0, len(items))
@@ -558,16 +553,21 @@ func (s *Service) prefetchEventAssets(ctx context.Context, deviceID string, item
 		pending = append(pending, item)
 	}
 	if len(pending) == 0 {
-		return budget, nil
+		return nil
 	}
 
 	storedAssets, err := s.store.LoadClipAssets(ctx, deviceID, pending)
 	if err != nil {
-		return budget, err
+		return err
 	}
+	activeJobs, err := s.store.CountActiveClipJobs(ctx)
+	if err != nil {
+		return err
+	}
+	maxActiveJobs := max(0, s.cfg.MaxParallelJobs)
 
 	for _, item := range pending {
-		if budget <= 0 {
+		if maxActiveJobs > 0 && activeJobs >= maxActiveJobs {
 			break
 		}
 		stored := storedAssets[archiveRecordKey(item.RecordKind, item.ID)]
@@ -587,9 +587,11 @@ func (s *Service) prefetchEventAssets(ctx context.Context, deviceID string, item
 			s.logger.Warn().Err(err).Str("device_id", deviceID).Str("record_id", item.ID).Str("clip_id", clip.ID).Msg("archive prefetched asset upsert failed")
 			continue
 		}
-		budget--
+		if clip.Status == mediaapi.ClipStatusRecording {
+			activeJobs++
+		}
 	}
-	return budget, nil
+	return nil
 }
 
 func shouldPrefetchArchiveEventClip(item dahua.NVRRecording) bool {

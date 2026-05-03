@@ -67,6 +67,23 @@ export function renderLiveViewport(
   `;
 }
 
+export function renderNativePlaybackViewport(
+  hass: HomeAssistant | undefined,
+  entity: HassEntity | undefined,
+  streamSource: string,
+): TemplateResult {
+  if (!entity) {
+    return html`<div class="viewport empty">Stream entity unavailable.</div>`;
+  }
+
+  return html`
+    <ha-camera-stream
+      .hass=${hass}
+      .stateObj=${overrideStreamSource(entity, streamSource)}
+    ></ha-camera-stream>
+  `;
+}
+
 export function renderSelectedCameraViewport(
   hass: HomeAssistant | undefined,
   camera: CameraViewModel,
@@ -283,6 +300,57 @@ export function cameraImageSrc(
   return typeof fallback === "string" && fallback.trim() ? fallback : "";
 }
 
+export function buildRtspPlaybackUrl({
+  streamUrl,
+  channel,
+  subtype,
+  seekTime,
+  endTime,
+}: {
+  streamUrl: string | null | undefined;
+  channel?: number | null;
+  subtype?: number | null;
+  seekTime: string;
+  endTime: string;
+}): string | null {
+  const normalizedStreamUrl = streamUrl?.trim() ?? "";
+  if (!normalizedStreamUrl) {
+    return null;
+  }
+
+  try {
+    const url = new URL(normalizedStreamUrl);
+    if (url.protocol.toLowerCase() !== "rtsp:") {
+      return null;
+    }
+
+    const start = new Date(seekTime);
+    const end = new Date(endTime);
+    if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || end <= start) {
+      return null;
+    }
+
+    const resolvedChannel =
+      normalizeRtspInteger(channel) ?? normalizeRtspInteger(url.searchParams.get("channel"));
+    const resolvedSubtype =
+      normalizeRtspInteger(subtype) ?? normalizeRtspInteger(url.searchParams.get("subtype"));
+    if (resolvedChannel === null) {
+      return null;
+    }
+
+    url.search = "";
+    url.searchParams.set("channel", String(resolvedChannel));
+    if (resolvedSubtype !== null) {
+      url.searchParams.set("subtype", String(resolvedSubtype));
+    }
+    url.searchParams.set("starttime", formatRtspPlaybackTimestamp(start));
+    url.searchParams.set("endtime", formatRtspPlaybackTimestamp(end));
+    return url.toString();
+  } catch {
+    return null;
+  }
+}
+
 function buildRemoteStreamDescriptor(
   cacheKey: string,
   alt: string,
@@ -313,6 +381,37 @@ function buildRemoteStreamDescriptor(
       return url ? [{ kind, url }] : [];
     }),
   };
+}
+
+function overrideStreamSource(entity: HassEntity, streamSource: string): HassEntity {
+  return {
+    ...entity,
+    attributes: {
+      ...entity.attributes,
+      stream_source: streamSource,
+    },
+  };
+}
+
+function normalizeRtspInteger(value: number | string | null | undefined): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return Math.trunc(value);
+  }
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Number.parseInt(value, 10);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+}
+
+function formatRtspPlaybackTimestamp(value: Date): string {
+  const year = value.getFullYear();
+  const month = String(value.getMonth() + 1).padStart(2, "0");
+  const day = String(value.getDate()).padStart(2, "0");
+  const hours = String(value.getHours()).padStart(2, "0");
+  const minutes = String(value.getMinutes()).padStart(2, "0");
+  const seconds = String(value.getSeconds()).padStart(2, "0");
+  return `${year}_${month}_${day}_${hours}_${minutes}_${seconds}`;
 }
 
 function uniqueSourceOrder(

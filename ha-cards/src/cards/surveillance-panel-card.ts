@@ -20,6 +20,7 @@ import {
   cameraImageSrc,
   availableCameraViewportSources,
   availablePlaybackViewportSources,
+  buildRtspPlaybackUrl,
   availableStreamViewportSources,
   defaultOverviewStreamProfileKey,
   defaultSelectedStreamProfileKey,
@@ -27,6 +28,7 @@ import {
   preserveCameraViewportSourceSelectionOnProfileChange,
   preservePlaybackViewportSourceSelection,
   renderClipPlaybackViewport,
+  renderNativePlaybackViewport,
   renderPlaybackViewport,
   renderSelectedCameraViewport,
   renderSelectedVtoViewport,
@@ -166,6 +168,15 @@ interface SelectedBridgeRecordingPlaybackState {
   recording: BridgeRecordingClipModel;
 }
 
+interface SelectedNativePlaybackState {
+  sourceDeviceId: string;
+  streamSource: string;
+  startTime: string;
+  endTime: string;
+  seekTime: string;
+  profileKey: string | null;
+}
+
 const INITIAL_VTO_MICROPHONE_STATE: BridgeIntercomSnapshot = {
   enabled: false,
   phase: "idle",
@@ -239,6 +250,7 @@ export class DahuaBridgeSurveillancePanelCard
     _selectedVtoMicrophoneState: { state: true },
     _selectedPlayback: { state: true },
     _selectedBridgeRecordingPlayback: { state: true },
+    _selectedNativePlayback: { state: true },
     _auxStateOverrides: { state: true },
     _recordingStateOverrides: { state: true },
   } as const;
@@ -289,6 +301,7 @@ export class DahuaBridgeSurveillancePanelCard
   private _selectedVtoMicrophoneState = INITIAL_VTO_MICROPHONE_STATE;
   private _selectedPlayback: SelectedPlaybackState | null = null;
   private _selectedBridgeRecordingPlayback: SelectedBridgeRecordingPlaybackState | null = null;
+  private _selectedNativePlayback: SelectedNativePlaybackState | null = null;
   private _auxStateOverrides = new Map<string, TimedActionStateOverride>();
   private _recordingStateOverrides = new Map<string, TimedActionStateOverride>();
   private readonly _actions = new SurveillancePanelActions({
@@ -378,6 +391,7 @@ export class DahuaBridgeSurveillancePanelCard
     this._selectedVtoMicrophoneState = INITIAL_VTO_MICROPHONE_STATE;
     this._selectedPlayback = null;
     this._selectedBridgeRecordingPlayback = null;
+    this._selectedNativePlayback = null;
     void this.stopSelectedVtoMicrophone();
     this._auxStateOverrides = new Map();
     this._recordingStateOverrides = new Map();
@@ -1806,6 +1820,7 @@ export class DahuaBridgeSurveillancePanelCard
     this._selectedCameraAudioMuted = true;
     this._selectedPlayback = null;
     this._selectedBridgeRecordingPlayback = null;
+    this._selectedNativePlayback = null;
   }
 
   private clearCameraSelectionState(): void {

@@ -613,12 +613,12 @@ func (c *controller) startDirectNVRRecordingExport(
 	if err != nil {
 		return mediaapi.ClipInfo{}, err
 	}
+	cleanupTemp = false
 	if tracker, ok := c.snapshots.(archiveClipTracker); ok {
 		if err := tracker.TrackNVRArchiveClip(ctx, deviceID, request, clip); err != nil {
 			return mediaapi.ClipInfo{}, err
 		}
 	}
-	cleanupTemp = false
 	return clip, nil
 }
 

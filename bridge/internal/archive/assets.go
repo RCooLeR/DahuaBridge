@@ -194,6 +194,15 @@ func (s *SQLiteStore) DeleteClipAsset(ctx context.Context, recordKind string, re
 	return nil
 }
 
+func (s *SQLiteStore) CountActiveClipJobs(ctx context.Context) (int, error) {
+	var count int
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM transcode_jobs
+		WHERE status IN ('recording', 'transcoding', 'queued', 'downloading')`).Scan(&count); err != nil {
+		return 0, err
+	}
+	return count, nil
+}
+
 func clipURLPaths(clipID string) (string, string, string, string) {
 	clipID = strings.TrimSpace(clipID)
 	if clipID == "" {

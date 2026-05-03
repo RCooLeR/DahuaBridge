@@ -172,10 +172,10 @@ func (r *runtimeServices) EnsureNVRArchiveClip(ctx context.Context, deviceID str
 		}
 		return media.ClipInfo{}, err
 	}
+	cleanupTemp = false
 	if err := r.TrackNVRArchiveClip(ctx, deviceID, request, clip); err != nil {
 		return media.ClipInfo{}, err
 	}
-	cleanupTemp = false
 	return clip, nil
 }
 
