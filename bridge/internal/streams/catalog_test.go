@@ -16,7 +16,6 @@ func TestBuildCatalogForNVRChannel(t *testing.T) {
 			},
 			Media: config.MediaConfig{
 				StableFrameRate:     10,
-				SubstreamFrameRate:  12,
 				WebRTCUplinkTargets: []string{"udp://127.0.0.1:5004"},
 			},
 		},
@@ -100,8 +99,8 @@ func TestBuildCatalogForNVRChannel(t *testing.T) {
 	if entry.Profiles["stable"].FrameRate != 10 {
 		t.Fatalf("unexpected stable frame rate %d", entry.Profiles["stable"].FrameRate)
 	}
-	if entry.Profiles["substream"].FrameRate != 12 {
-		t.Fatalf("unexpected substream frame rate %d", entry.Profiles["substream"].FrameRate)
+	if len(entry.Profiles) != 2 {
+		t.Fatalf("expected 2 profiles, got %+v", entry.Profiles)
 	}
 	if entry.Profiles["stable"].SourceWidth != 704 || entry.Profiles["stable"].SourceHeight != 576 {
 		t.Fatalf("unexpected stable source dimensions %+v", entry.Profiles["stable"])
@@ -154,12 +153,24 @@ func TestBuildCatalogForNVRChannel(t *testing.T) {
 	if len(entry.Controls.ValidationNotes) != 1 || entry.Controls.ValidationNotes[0] != "ptz_capability_query_failed_aux_fallback_used" {
 		t.Fatalf("unexpected control validation notes %+v", entry.Controls.ValidationNotes)
 	}
-	if len(entry.Features) != 5 {
+	if len(entry.Features) != 8 {
 		t.Fatalf("expected deterrence features to hide siren/warning light without IMOU, got %+v", entry.Features)
 	}
 	archiveSearch := findFeatureByKey(entry.Features, "archive_search")
-	if archiveSearch == nil || archiveSearch.Kind != "query" || archiveSearch.URL != "http://bridge.local:8080/api/v1/nvr/west20_nvr/recordings" {
+	if archiveSearch == nil || archiveSearch.Kind != "query" || archiveSearch.URL != "http://bridge.local:8080/api/v1/nvr/west20_nvr/recording-chunks" {
 		t.Fatalf("unexpected archive search feature %+v", archiveSearch)
+	}
+	smdIvs := findFeatureByKey(entry.Features, "archive_smd_ivs")
+	if smdIvs == nil || smdIvs.Kind != "query" || smdIvs.URL != "http://bridge.local:8080/api/v1/nvr/west20_nvr/smd-ivs" {
+		t.Fatalf("unexpected smd/ivs feature %+v", smdIvs)
+	}
+	chunks := findFeatureByKey(entry.Features, "archive_recording_chunks")
+	if chunks == nil || chunks.Kind != "query" || chunks.URL != "http://bridge.local:8080/api/v1/nvr/west20_nvr/recording-chunks" {
+		t.Fatalf("unexpected recording chunks feature %+v", chunks)
+	}
+	archiveCoverage := findFeatureByKey(entry.Features, "archive_coverage")
+	if archiveCoverage == nil || archiveCoverage.Kind != "query" || archiveCoverage.URL != "http://bridge.local:8080/api/v1/nvr/west20_nvr/recordings/coverage?channel=1" {
+		t.Fatalf("unexpected archive coverage feature %+v", archiveCoverage)
 	}
 	light := findFeatureByKey(entry.Features, "light")
 	if light == nil || light.ParameterKey != "output" || light.ParameterValue != "light" || light.Label != "White Light" {
@@ -224,8 +235,7 @@ func TestBuildCatalogFallsBackToMainStreamWhenSubstreamMetadataMissing(t *testin
 	catalog := BuildCatalog(CatalogInput{
 		Config: config.Config{
 			Media: config.MediaConfig{
-				StableFrameRate:    5,
-				SubstreamFrameRate: 5,
+				StableFrameRate: 5,
 			},
 		},
 		ProbeResults: []*dahua.ProbeResult{
@@ -271,8 +281,8 @@ func TestBuildCatalogFallsBackToMainStreamWhenSubstreamMetadataMissing(t *testin
 	if !strings.Contains(entry.Profiles["stable"].StreamURL, "subtype=0") {
 		t.Fatalf("expected stable profile to point at main stream, got %q", entry.Profiles["stable"].StreamURL)
 	}
-	if entry.Profiles["substream"].Subtype != 0 {
-		t.Fatalf("expected substream profile fallback to main subtype, got %+v", entry.Profiles["substream"])
+	if len(entry.Profiles) != 2 {
+		t.Fatalf("expected 2 profiles, got %+v", entry.Profiles)
 	}
 }
 

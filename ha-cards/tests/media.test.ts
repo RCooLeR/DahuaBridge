@@ -127,6 +127,7 @@ function buildCamera(overrides: Partial<CameraViewModel> = {}): CameraViewModel 
     eventCount24h: 0,
     humanCount24h: 0,
     vehicleCount24h: 0,
+    ivsCount24h: 0,
     ...overrides,
   };
 }
@@ -381,6 +382,19 @@ describe("camera media helpers", () => {
       }),
     ).toBe(
       "rtsp://example-user:example-password@192.0.2.10:554/cam/playback?channel=9&subtype=0&starttime=2026_05_01_11_10_00",
+    );
+  });
+
+  it("keeps Dahua playback query order and encodes credentials", () => {
+    expect(
+      buildRtspPlaybackUrl({
+        streamUrl: "rtsp://example-user:example-password@192.0.2.10:554/cam/realmonitor?channel=1&subtype=1",
+        channel: 9,
+        subtype: 0,
+        seekTime: "2026-05-01T06:59:30Z",
+      }),
+    ).toBe(
+      "rtsp://example-user:example-password@192.0.2.10:554/cam/playback?channel=9&subtype=0&starttime=2026_05_01_09_59_30",
     );
   });
 });

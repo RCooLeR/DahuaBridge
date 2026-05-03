@@ -100,6 +100,7 @@ function buildCamera(overrides: Partial<CameraViewModel> = {}): CameraViewModel 
     eventCount24h: 0,
     humanCount24h: 0,
     vehicleCount24h: 0,
+    ivsCount24h: 0,
     ...overrides,
   };
 }

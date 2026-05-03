@@ -167,7 +167,15 @@ class CameraCaptureTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(
             attrs["bridge_archive_recordings_url_template"],
-            "http://bridge.local:8080/api/v1/nvr/west20_nvr/recordings?channel=5&start={start}&end={end}&limit={limit}&event={event}",
+            "http://bridge.local:8080/api/v1/nvr/west20_nvr/recording-chunks?channel=5&start={start}&end={end}&limit={limit}",
+        )
+        self.assertEqual(
+            attrs["bridge_archive_smd_ivs_url_template"],
+            "http://bridge.local:8080/api/v1/nvr/west20_nvr/smd-ivs?channel=5&start={start}&end={end}&limit={limit}&event={event}",
+        )
+        self.assertEqual(
+            attrs["bridge_archive_recording_chunks_url_template"],
+            "http://bridge.local:8080/api/v1/nvr/west20_nvr/recording-chunks?channel=5&start={start}&end={end}&limit={limit}",
         )
 
     async def test_async_start_recording_calls_bridge_capture_service(self) -> None:

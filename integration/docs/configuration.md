@@ -54,13 +54,12 @@ Examples:
 - `auto`
 - `quality`
 - `stable`
-- `substream`
 
 Behavior:
 
 - `auto` follows the bridge `recommended_profile`
 - `quality` prioritizes the bridge main-stream style profiles
-- `stable` and `substream` prefer lower-bandwidth bridge-generated variants when available
+- `stable` prefers lower-bandwidth bridge-generated variants when available
 
 ## Preferred Video Source
 

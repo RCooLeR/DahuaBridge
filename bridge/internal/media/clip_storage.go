@@ -143,3 +143,14 @@ func clipFilePath(clipPath string, fileName string) (string, error) {
 	}
 	return filepath.Join(strings.TrimSpace(clipPath), fileName), nil
 }
+
+func removeClipStorageFile(path string) error {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return nil
+	}
+	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return nil
+}

@@ -60,10 +60,10 @@ Current card surface:
 - TypeScript build output under `ha-cards/dist/`
 - optional browser-side bridge URL override for deployments where Home Assistant and the browser reach the bridge differently
 - selected-camera native HA live view defaults to the main stream and can switch subtype-aware native live sources
-- overview and selected-camera views show daily human and vehicle event counts
-- archive-backed camera event and recording lists use the bridge archive APIs with local-day filtering and playback launch
-- archive seek uses bridge archive coverage plus a dedicated slider component instead of a raw range input
-- bridge MP4 clip browsing and stop/download controls from the surveillance panel
+- overview and selected-camera views show daily human, vehicle, and IVS event counts
+- archive-backed camera event and recording lists use the bridge archive APIs with local-day filtering, native RTSP event playback, and export/download actions
+- archive seek uses bridge archive coverage plus a dedicated slider component and day picker instead of a raw range input
+- bridge MP4 clip browsing with download and delete controls from the surveillance panel
 - stream-profile and stream-source labels aligned with the bridge and integration options
 
 See:

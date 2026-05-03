@@ -15,12 +15,12 @@ Current repo status:
   - `Recordings`
   - `MP4`
   - `Settings`
-- archive-backed camera views support local-day filtering, event-type filtering for event clips, pagination, playback launch, and export/download actions
+- archive-backed camera views support local-day filtering, event-type filtering for event clips, pagination, RTSP event playback, and export/download actions
 - selected-camera live view defaults to the main stream and keeps native HA subtype selection in sync with the selected stream profile
-- overview tiles and selected-camera toolbars show daily human and vehicle event counts
-- archive seek is driven by bridge archive coverage and a dedicated slider widget instead of a plain browser range input
+- overview tiles and selected-camera toolbars show daily human, vehicle, and IVS event counts
+- archive seek is driven by bridge archive coverage, a dedicated slider widget, and a date picker limited to the last 90 days
 - archive playback/export still works when the integration only exposes dedicated archive URL attributes and not full archive feature metadata
-- bridge-owned MP4 clips can be browsed by day and stopped or downloaded from the card
+- bridge-owned MP4 clips can be browsed by day, filtered down to manual clip captures, downloaded, and deleted from the card
 
 ## What The Card Layer Owns
 

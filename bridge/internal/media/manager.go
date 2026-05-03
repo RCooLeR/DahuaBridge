@@ -495,34 +495,11 @@ func (m *Manager) workerStatusesLocked() []WorkerStatus {
 }
 
 func (m *Manager) logWorkerInventoryLocked(action string, focus WorkerStatus) {
-	running := m.workerStatusesLocked()
-	sort.Slice(running, func(i int, j int) bool {
-		return workerStatusSortKey(running[i]) < workerStatusSortKey(running[j])
-	})
-
-	lines := make([]string, 0, len(running)+2)
-	lines = append(lines, "workers:")
-	lines = append(lines, action+": "+workerStatusSummaryLine(focus))
-	if len(running) == 0 {
-		lines = append(lines, "running: none")
-	} else {
-		for _, status := range running {
-			lines = append(lines, "running: "+workerStatusSummaryLine(status))
-		}
-	}
-
-	runningLabels := make([]string, 0, len(running))
-	for _, status := range running {
-		runningLabels = append(runningLabels, workerStatusSummaryLine(status))
-	}
-
 	m.logger.Info().
 		Str("worker_action", action).
 		Str("worker", workerStatusSummaryLine(focus)).
-		Strs("running_workers", runningLabels).
-		Interface("worker_status", focus).
-		Interface("running_statuses", running).
-		Msg(strings.Join(lines, "\n"))
+		Int("active_workers", m.activeWorkerCountLocked()).
+		Msg("media worker inventory updated")
 }
 
 func workerStatusSortKey(status WorkerStatus) string {

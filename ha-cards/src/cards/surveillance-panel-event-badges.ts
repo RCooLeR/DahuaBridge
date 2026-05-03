@@ -8,7 +8,8 @@ export function renderCameraEventCountBadges(
 ): TemplateResult | typeof nothing {
   const humanCount = Math.max(0, Math.trunc(camera.humanCount24h));
   const vehicleCount = Math.max(0, Math.trunc(camera.vehicleCount24h));
-  if (humanCount <= 0 && vehicleCount <= 0) {
+  const ivsCount = Math.max(0, Math.trunc(camera.ivsCount24h));
+  if (humanCount <= 0 && vehicleCount <= 0 && ivsCount <= 0) {
     return nothing;
   }
 
@@ -35,6 +36,18 @@ export function renderCameraEventCountBadges(
             >
               <ha-icon .icon=${"mdi:car"}></ha-icon>
               <span>${vehicleCount}</span>
+            </span>
+          `
+        : nothing}
+      ${ivsCount > 0
+        ? html`
+            <span
+              class="tile-event-count warning"
+              title="${ivsCount} IVS events in the last 24 hours"
+              aria-label="${ivsCount} IVS events in the last 24 hours"
+            >
+              <ha-icon .icon=${"mdi:vector-square"}></ha-icon>
+              <span>${ivsCount}</span>
             </span>
           `
         : nothing}

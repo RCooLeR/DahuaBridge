@@ -79,6 +79,8 @@ export interface NvrArchiveCoverageCapabilityModel {
 export interface CameraArchiveCapabilities {
   supported: boolean;
   search: NvrArchiveSearchCapabilityModel;
+  smdIvsSearch: NvrArchiveSearchCapabilityModel;
+  chunkSearch: NvrArchiveSearchCapabilityModel;
   playback: NvrPlaybackSessionCapabilityModel;
   coverage: NvrArchiveCoverageCapabilityModel;
 }
@@ -167,6 +169,7 @@ export interface BridgeRecordingClipModel {
   downloadUrl: string | null;
   selfUrl: string | null;
   stopUrl: string | null;
+  deleteUrl: string | null;
   error: string | null;
 }
 
@@ -205,12 +208,17 @@ export function buildCameraArchiveCapabilities(
   features: readonly ArchiveFeatureSource[],
 ): CameraArchiveCapabilities {
   const archiveSearch = featureByKey(features, "archive_search");
+  const smdIvsSearch = featureByKey(features, "archive_smd_ivs");
+  const chunkSearch = featureByKey(features, "archive_recording_chunks");
   const archivePlayback = featureByKey(features, "archive_playback");
   const archiveCoverage = featureByKey(features, "archive_coverage");
+  const resolvedChunkSearch = chunkSearch ?? archiveSearch;
 
   return {
     supported:
       archiveSearch?.supported === true ||
+      smdIvsSearch?.supported === true ||
+      chunkSearch?.supported === true ||
       archivePlayback?.supported === true ||
       archiveCoverage?.supported === true,
     search: {
@@ -219,6 +227,36 @@ export function buildCameraArchiveCapabilities(
       kind: "query",
       method: "GET",
       url: archiveSearch?.url ?? null,
+      channel: channelNumber,
+      defaultLimit: DEFAULT_ARCHIVE_SEARCH_LIMIT,
+      requestFields: [
+        buildRequestField("channel", true, "integer", channelNumber),
+        buildRequestField("start_time", true, "datetime"),
+        buildRequestField("end_time", true, "datetime"),
+        buildRequestField("limit", false, "integer", DEFAULT_ARCHIVE_SEARCH_LIMIT),
+      ],
+    },
+    smdIvsSearch: {
+      supported: smdIvsSearch?.supported === true,
+      label: smdIvsSearch?.label ?? "SMD/IVS",
+      kind: "query",
+      method: "GET",
+      url: smdIvsSearch?.url ?? null,
+      channel: channelNumber,
+      defaultLimit: DEFAULT_ARCHIVE_SEARCH_LIMIT,
+      requestFields: [
+        buildRequestField("channel", true, "integer", channelNumber),
+        buildRequestField("start_time", true, "datetime"),
+        buildRequestField("end_time", true, "datetime"),
+        buildRequestField("limit", false, "integer", DEFAULT_ARCHIVE_SEARCH_LIMIT),
+      ],
+    },
+    chunkSearch: {
+      supported: resolvedChunkSearch?.supported === true,
+      label: resolvedChunkSearch?.label ?? "Recording Chunks",
+      kind: "query",
+      method: "GET",
+      url: resolvedChunkSearch?.url ?? null,
       channel: channelNumber,
       defaultLimit: DEFAULT_ARCHIVE_SEARCH_LIMIT,
       requestFields: [

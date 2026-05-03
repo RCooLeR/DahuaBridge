@@ -29,82 +29,77 @@ type storedClipAsset struct {
 	ErrorText  string
 }
 
+type eventClipCandidate struct {
+	DeviceID string
+	Item     dahua.NVRRecording
+}
+
+type activeEventClipAsset struct {
+	RecordKind     string
+	RecordID       string
+	DeviceID       string
+	SourceFilePath string
+	ClipID         string
+}
+
 func (s *SQLiteStore) UpsertClipAsset(ctx context.Context, recordKind string, recordID string, deviceID string, sourceFilePath string, clip mediaapi.ClipInfo) error {
-	recordKind = strings.TrimSpace(recordKind)
+	recordKind = normalizeArchiveRecordKind(recordKind)
 	recordID = strings.TrimSpace(recordID)
 	deviceID = strings.TrimSpace(deviceID)
 	if recordKind == "" || recordID == "" || deviceID == "" || strings.TrimSpace(clip.ID) == "" {
 		return nil
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	assetID := "asset_" + strings.TrimSpace(clip.ID)
-	readyAt := ""
-	if clip.Status == mediaapi.ClipStatusCompleted {
-		readyAt = now
-	}
-	if _, err := s.db.ExecContext(ctx, `INSERT INTO transcoded_assets (
-		asset_id, record_kind, record_id, device_id, format, status, path, size_bytes, created_at, updated_at, ready_at
+	clipPath := filepath.ToSlash(strings.TrimSpace(clip.FileName))
+	if _, err := s.db.ExecContext(ctx, `INSERT INTO bridge_mp4_clips (
+		clip_id, device_id, channel, stream_id, start_time, end_time, file_path, status, error_text, created_at, updated_at
 	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	ON CONFLICT(asset_id) DO UPDATE SET
+	ON CONFLICT(clip_id) DO UPDATE SET
+		device_id=excluded.device_id,
+		channel=excluded.channel,
+		stream_id=excluded.stream_id,
+		start_time=excluded.start_time,
+		end_time=excluded.end_time,
+		file_path=excluded.file_path,
 		status=excluded.status,
-		path=excluded.path,
-		size_bytes=excluded.size_bytes,
-		updated_at=excluded.updated_at,
-		ready_at=excluded.ready_at`,
-		assetID,
-		recordKind,
-		recordID,
-		deviceID,
-		"mp4",
-		string(clip.Status),
-		strings.TrimSpace(clip.FileName),
-		clip.Bytes,
-		now,
-		now,
-		readyAt,
-	); err != nil {
-		return err
-	}
-	jobID := "job_" + recordKind + "_" + recordID
-	outputPath := strings.TrimSpace(clip.FileName)
-	if outputPath != "" {
-		outputPath = filepath.ToSlash(outputPath)
-	}
-	startedAt := ""
-	if !clip.StartedAt.IsZero() {
-		startedAt = clip.StartedAt.UTC().Format(time.RFC3339Nano)
-	}
-	finishedAt := ""
-	if !clip.EndedAt.IsZero() {
-		finishedAt = clip.EndedAt.UTC().Format(time.RFC3339Nano)
-	}
-	if _, err := s.db.ExecContext(ctx, `INSERT INTO transcode_jobs (
-		job_id, record_kind, record_id, device_id, status, source_file_path, output_path, error_text, created_at, updated_at, started_at, finished_at
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	ON CONFLICT(job_id) DO UPDATE SET
-		status=excluded.status,
-		source_file_path=CASE
-			WHEN excluded.source_file_path <> '' THEN excluded.source_file_path
-			ELSE transcode_jobs.source_file_path
-		END,
-		output_path=excluded.output_path,
 		error_text=excluded.error_text,
-		updated_at=excluded.updated_at,
-		started_at=excluded.started_at,
-		finished_at=excluded.finished_at`,
-		jobID,
-		recordKind,
-		recordID,
+		updated_at=excluded.updated_at`,
+		strings.TrimSpace(clip.ID),
 		deviceID,
+		clip.Channel,
+		strings.TrimSpace(clip.StreamID),
+		formatOptionalClipTime(clip.SourceStartAt),
+		formatOptionalClipTime(clip.SourceEndAt),
+		clipPath,
 		string(clip.Status),
-		strings.TrimSpace(sourceFilePath),
-		outputPath,
 		strings.TrimSpace(clip.Error),
 		now,
 		now,
-		startedAt,
-		finishedAt,
 	); err != nil {
+		return err
+	}
+	if recordKind == "smd_ivs" || recordKind == "event" {
+		_, err := s.db.ExecContext(ctx, `UPDATE smd_ivs_events
+			SET mp4_clip_id = ?,
+				mp4_file_path = ?,
+				mp4_status = ?,
+				mp4_error = ?,
+				source_file_path = CASE
+					WHEN ? <> '' THEN ?
+					ELSE source_file_path
+				END,
+				last_seen_at = ?
+			WHERE device_id = ? AND event_id = ?`,
+			strings.TrimSpace(clip.ID),
+			clipPath,
+			string(clip.Status),
+			strings.TrimSpace(clip.Error),
+			strings.TrimSpace(sourceFilePath),
+			strings.TrimSpace(sourceFilePath),
+			now,
+			deviceID,
+			recordID,
+		)
 		return err
 	}
 	return nil
@@ -121,7 +116,7 @@ func (s *SQLiteStore) LoadClipAssets(ctx context.Context, deviceID string, items
 	seen := make(map[string]struct{}, len(items))
 	args = append(args, deviceID)
 	for _, item := range items {
-		recordKind := strings.TrimSpace(item.RecordKind)
+		recordKind := normalizeArchiveRecordKind(item.RecordKind)
 		recordID := strings.TrimSpace(item.ID)
 		if recordKind == "" || recordID == "" {
 			continue
@@ -139,15 +134,14 @@ func (s *SQLiteStore) LoadClipAssets(ctx context.Context, deviceID string, items
 	}
 
 	query := `SELECT
-		a.record_kind,
-		a.record_id,
-		a.asset_id,
-		a.status,
-		COALESCE(j.error_text, '')
-	FROM transcoded_assets a
-	LEFT JOIN transcode_jobs j
-		ON j.record_kind = a.record_kind AND j.record_id = a.record_id
-	WHERE a.device_id = ? AND (a.record_kind || '|' || a.record_id) IN (` + strings.Join(placeholders, ",") + `)`
+		'smd_ivs',
+		event_id,
+		mp4_clip_id,
+		mp4_status,
+		mp4_error
+	FROM smd_ivs_events
+	WHERE device_id = ? AND ('smd_ivs|' || event_id) IN (` + strings.Join(placeholders, ",") + `)
+		AND mp4_clip_id <> ''`
 
 	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -169,38 +163,119 @@ func (s *SQLiteStore) LoadClipAssets(ctx context.Context, deviceID string, items
 }
 
 func (s *SQLiteStore) DeleteClipAsset(ctx context.Context, recordKind string, recordID string, deviceID string) error {
-	recordKind = strings.TrimSpace(recordKind)
+	recordKind = normalizeArchiveRecordKind(recordKind)
 	recordID = strings.TrimSpace(recordID)
 	deviceID = strings.TrimSpace(deviceID)
 	if recordKind == "" || recordID == "" || deviceID == "" {
 		return nil
 	}
-	if _, err := s.db.ExecContext(ctx, `DELETE FROM transcoded_assets
-		WHERE device_id = ? AND record_kind = ? AND record_id = ?`,
-		deviceID,
-		recordKind,
-		recordID,
-	); err != nil {
-		return err
-	}
-	if _, err := s.db.ExecContext(ctx, `DELETE FROM transcode_jobs
-		WHERE device_id = ? AND record_kind = ? AND record_id = ?`,
-		deviceID,
-		recordKind,
-		recordID,
-	); err != nil {
-		return err
+	if recordKind == "smd_ivs" || recordKind == "event" {
+		if _, err := s.db.ExecContext(ctx, `UPDATE smd_ivs_events
+			SET mp4_clip_id = '', mp4_file_path = '', mp4_status = '', mp4_error = ''
+			WHERE device_id = ? AND event_id = ?`,
+			deviceID,
+			recordID,
+		); err != nil {
+			return err
+		}
 	}
 	return nil
 }
 
 func (s *SQLiteStore) CountActiveClipJobs(ctx context.Context) (int, error) {
 	var count int
-	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM transcode_jobs
-		WHERE status IN ('recording', 'transcoding', 'queued', 'downloading')`).Scan(&count); err != nil {
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM smd_ivs_events
+		WHERE LOWER(COALESCE(mp4_status, '')) IN ('recording', 'transcoding', 'queued', 'downloading')`).Scan(&count); err != nil {
 		return 0, err
 	}
 	return count, nil
+}
+
+func (s *SQLiteStore) LoadPendingEventClipCandidates(ctx context.Context, cutoff time.Time, limit int) ([]eventClipCandidate, error) {
+	if limit <= 0 {
+		limit = archiveQueryLimit
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT
+		device_id, event_id, channel, start_time, end_time, source_file_path, event_type, video_stream,
+		rtsp_main_url, rtsp_sub_url, flags_json
+		FROM smd_ivs_events
+		WHERE start_time >= ?
+			AND (
+				mp4_clip_id = ''
+				OR LOWER(COALESCE(mp4_status, '')) NOT IN ('completed', 'ready', 'recording', 'transcoding', 'queued', 'downloading')
+			)
+		ORDER BY start_time DESC
+		LIMIT ?`,
+		cutoff.In(time.Local).Format(archiveTimeLayout),
+		limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	candidates := make([]eventClipCandidate, 0)
+	for rows.Next() {
+		var (
+			deviceID, eventID, startTime, endTime, filePath, recordingType, videoStream, rtspMainURL, rtspSubURL, flagsJSON string
+			channel                                                                                                         int
+		)
+		if err := rows.Scan(&deviceID, &eventID, &channel, &startTime, &endTime, &filePath, &recordingType, &videoStream, &rtspMainURL, &rtspSubURL, &flagsJSON); err != nil {
+			return nil, err
+		}
+		candidates = append(candidates, eventClipCandidate{
+			DeviceID: strings.TrimSpace(deviceID),
+			Item: dahua.NVRRecording{
+				ID:          strings.TrimSpace(eventID),
+				RecordKind:  "smd_ivs",
+				Source:      "smd_ivs",
+				Channel:     channel,
+				StartTime:   startTime,
+				EndTime:     endTime,
+				FilePath:    filePath,
+				Type:        recordingType,
+				VideoStream: videoStream,
+				RTSPMainURL: rtspMainURL,
+				RTSPSubURL:  rtspSubURL,
+				Flags:       parseJSONStringArray(flagsJSON),
+			},
+		})
+	}
+	return candidates, rows.Err()
+}
+
+func (s *SQLiteStore) LoadActiveEventClipAssets(ctx context.Context, limit int) ([]activeEventClipAsset, error) {
+	if limit <= 0 {
+		limit = archiveQueryLimit
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT
+		device_id, event_id, source_file_path, mp4_clip_id
+		FROM smd_ivs_events
+		WHERE mp4_clip_id <> ''
+			AND LOWER(COALESCE(mp4_status, '')) IN ('recording', 'transcoding', 'queued', 'downloading')
+		ORDER BY start_time DESC
+		LIMIT ?`,
+		limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	assets := make([]activeEventClipAsset, 0)
+	for rows.Next() {
+		var asset activeEventClipAsset
+		if err := rows.Scan(&asset.DeviceID, &asset.RecordID, &asset.SourceFilePath, &asset.ClipID); err != nil {
+			return nil, err
+		}
+		asset.RecordKind = "smd_ivs"
+		asset.DeviceID = strings.TrimSpace(asset.DeviceID)
+		asset.RecordID = strings.TrimSpace(asset.RecordID)
+		asset.SourceFilePath = strings.TrimSpace(asset.SourceFilePath)
+		asset.ClipID = strings.TrimSpace(asset.ClipID)
+		assets = append(assets, asset)
+	}
+	return assets, rows.Err()
 }
 
 func clipURLPaths(clipID string) (string, string, string, string) {
@@ -215,7 +290,25 @@ func clipURLPaths(clipID string) (string, string, string, string) {
 }
 
 func archiveRecordKey(recordKind string, recordID string) string {
-	return strings.TrimSpace(recordKind) + "|" + strings.TrimSpace(recordID)
+	return normalizeArchiveRecordKind(recordKind) + "|" + strings.TrimSpace(recordID)
+}
+
+func normalizeArchiveRecordKind(recordKind string) string {
+	switch strings.ToLower(strings.TrimSpace(recordKind)) {
+	case "event", "smd-ivs", "smd_ivs":
+		return "smd_ivs"
+	case "file", "chunk", "recording_chunk", "recording-chunk":
+		return "recording_chunk"
+	default:
+		return strings.TrimSpace(recordKind)
+	}
+}
+
+func formatOptionalClipTime(value time.Time) string {
+	if value.IsZero() {
+		return ""
+	}
+	return value.UTC().Format(time.RFC3339Nano)
 }
 
 func applyStoredArchiveAsset(item *dahua.NVRRecording, asset storedClipAsset) {
@@ -276,5 +369,14 @@ func normalizeArchiveAssetState(value string) string {
 			return archiveAssetStateFailed
 		}
 		return normalized
+	}
+}
+
+func isActiveArchiveAssetState(value string) bool {
+	switch normalizeArchiveAssetState(value) {
+	case archiveAssetStateQueued, archiveAssetStateDownloading, archiveAssetStateTranscoding:
+		return true
+	default:
+		return false
 	}
 }

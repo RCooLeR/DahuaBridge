@@ -113,15 +113,20 @@ Useful attributes commonly exposed on the camera:
 
 For NVR channel cameras, archive workflow attributes can also be exposed:
 
+- `bridge_archive_smd_ivs_url_template`
+- `bridge_archive_recording_chunks_url_template`
 - `bridge_archive_recordings_url_template`
 - `bridge_archive_export_url`
 - `bridge_playback_sessions_url`
 
 Those attributes point to the supported bridge archive APIs for:
 
-- searching recorder footage
+- searching SMD/IVS rows
+- searching normal NVR recording chunks
 - exporting matching archive windows to bridge MP4 clips
 - creating playback sessions for HLS, MJPEG, or WebRTC access
+
+`bridge_archive_recordings_url_template` is kept as a compatibility alias for recording chunks. New automations should use the explicit SMD/IVS and recording chunk templates.
 
 ## Binary Sensors
 

@@ -167,12 +167,21 @@ class DahuaBridgeCamera(DahuaBridgeEntity, Camera):
         if isinstance(channel, int):
             attrs["bridge_channel"] = channel
             if parent_id:
-                attrs["bridge_archive_recordings_url_template"] = (
+                smd_ivs_template = (
                     self.coordinator.api.absolute_url(
-                        f"/api/v1/nvr/{quote(parent_id, safe='')}/recordings"
+                        f"/api/v1/nvr/{quote(parent_id, safe='')}/smd-ivs"
                     )
                     + f"?channel={channel}&start={{start}}&end={{end}}&limit={{limit}}&event={{event}}"
                 )
+                chunks_template = (
+                    self.coordinator.api.absolute_url(
+                        f"/api/v1/nvr/{quote(parent_id, safe='')}/recording-chunks"
+                    )
+                    + f"?channel={channel}&start={{start}}&end={{end}}&limit={{limit}}"
+                )
+                attrs["bridge_archive_smd_ivs_url_template"] = smd_ivs_template
+                attrs["bridge_archive_recording_chunks_url_template"] = chunks_template
+                attrs["bridge_archive_recordings_url_template"] = chunks_template
                 attrs["bridge_archive_export_url"] = self.coordinator.api.absolute_url(
                     f"/api/v1/nvr/{quote(parent_id, safe='')}/recordings/export"
                 )

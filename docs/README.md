@@ -12,8 +12,11 @@ Use these pages in order:
 Then move into the component-specific docs:
 
 - [Bridge docs](../bridge/docs/README.md)
+- [Bridge getting started](../bridge/docs/getting-started.md)
+- [Bridge configuration](../bridge/docs/configuration.md)
 - [Integration docs](../integration/docs/README.md)
 - [HA cards docs](../ha-cards/docs/README.md)
+- [HA cards install](../ha-cards/docs/install.md)
 
 ## What This Section Covers
 
@@ -27,3 +30,13 @@ Then move into the component-specific docs:
 - low-level bridge API reference: see [bridge/docs/api-reference.md](../bridge/docs/api-reference.md)
 - bridge media details: see [bridge/docs/media-and-recording.md](../bridge/docs/media-and-recording.md)
 - integration entities and services: see [integration/docs/entities-and-controls.md](../integration/docs/entities-and-controls.md)
+
+## Current Archive Model
+
+The current bridge separates recorder history into:
+
+- SMD/IVS rows: `GET /api/v1/nvr/{deviceID}/smd-ivs`
+- normal DAV chunks: `GET /api/v1/nvr/{deviceID}/recording-chunks`
+- bridge MP4 clips: `GET /api/v1/media/recordings`
+
+The old mixed archive list is kept only as a compatibility endpoint.

@@ -157,6 +157,7 @@ type stubMediaReader struct {
 	startClip                func(context.Context, mediaapi.ClipStartRequest) (mediaapi.ClipInfo, error)
 	startDirectClip          func(context.Context, mediaapi.DirectClipStartRequest) (mediaapi.ClipInfo, error)
 	stopClip                 func(context.Context, string) (mediaapi.ClipInfo, error)
+	deleteClip               func(context.Context, string) error
 	getClip                  func(string) (mediaapi.ClipInfo, error)
 	findClips                func(mediaapi.ClipQuery) ([]mediaapi.ClipInfo, error)
 	clipFilePath             func(string) (string, error)
@@ -342,6 +343,13 @@ func (s stubMediaReader) StopClip(ctx context.Context, clipID string) (mediaapi.
 		EndedAt:   time.Date(2026, 4, 29, 12, 0, 5, 0, time.UTC),
 		FileName:  clipID + ".mp4",
 	}, nil
+}
+
+func (s stubMediaReader) DeleteClip(ctx context.Context, clipID string) error {
+	if s.deleteClip != nil {
+		return s.deleteClip(ctx, clipID)
+	}
+	return nil
 }
 
 func (s stubMediaReader) GetClip(clipID string) (mediaapi.ClipInfo, error) {
@@ -2353,6 +2361,7 @@ func TestMediaSnapshotEndpoint(t *testing.T) {
 
 func TestMediaRecordingEndpoints(t *testing.T) {
 	startedAt := time.Date(2026, 4, 29, 12, 0, 0, 0, time.UTC)
+	deletedClipID := ""
 	server := newTestServerWithConfig(config.HTTPConfig{
 		ListenAddress: ":0",
 		MetricsPath:   "/metrics",
@@ -2420,6 +2429,10 @@ func TestMediaRecordingEndpoints(t *testing.T) {
 				FileName:  "clip_live.mp4",
 			}, nil
 		},
+		deleteClip: func(_ context.Context, clipID string) error {
+			deletedClipID = clipID
+			return nil
+		},
 	}, stubActionReader{}, stubEventReader{})
 
 	startReq := httptest.NewRequest(http.MethodPost, "/api/v1/media/streams/west20_nvr_channel_05/recordings", strings.NewReader(`{"profile":"stable","duration_seconds":15}`))
@@ -2432,6 +2445,9 @@ func TestMediaRecordingEndpoints(t *testing.T) {
 	}
 	if !strings.Contains(startRec.Body.String(), `"status":"recording"`) || !strings.Contains(startRec.Body.String(), `/api/v1/media/recordings/clip_live/stop`) {
 		t.Fatalf("unexpected start response %s", startRec.Body.String())
+	}
+	if !strings.Contains(startRec.Body.String(), `/api/v1/media/recordings/clip_live`) {
+		t.Fatalf("expected delete url in start response %s", startRec.Body.String())
 	}
 
 	listReq := httptest.NewRequest(http.MethodGet, "/api/v1/media/recordings?stream_id=west20_nvr_channel_05", nil)
@@ -2454,6 +2470,17 @@ func TestMediaRecordingEndpoints(t *testing.T) {
 	}
 	if !strings.Contains(stopRec.Body.String(), `"status":"completed"`) {
 		t.Fatalf("unexpected stop response %s", stopRec.Body.String())
+	}
+
+	deleteReq := httptest.NewRequest(http.MethodDelete, "/api/v1/media/recordings/clip_live", nil)
+	deleteRec := httptest.NewRecorder()
+	server.httpServer.Handler.ServeHTTP(deleteRec, deleteReq)
+
+	if deleteRec.Code != http.StatusOK {
+		t.Fatalf("expected delete status 200, got %d: %s", deleteRec.Code, deleteRec.Body.String())
+	}
+	if deletedClipID != "clip_live" {
+		t.Fatalf("unexpected deleted clip id %q", deletedClipID)
 	}
 }
 
@@ -2587,6 +2614,9 @@ func TestMediaRecordingPlayEndpoint(t *testing.T) {
 	}
 	if !strings.Contains(metaRec.Body.String(), `"playback_url":"http://example.com/api/v1/media/recordings/clip_test/play"`) {
 		t.Fatalf("unexpected metadata response %s", metaRec.Body.String())
+	}
+	if !strings.Contains(metaRec.Body.String(), `"delete_url":"http://example.com/api/v1/media/recordings/clip_test"`) {
+		t.Fatalf("unexpected metadata delete url %s", metaRec.Body.String())
 	}
 	if !strings.Contains(metaRec.Body.String(), `"start_time":"2026-05-01T09:45:00Z"`) ||
 		!strings.Contains(metaRec.Body.String(), `"end_time":"2026-05-01T09:45:04Z"`) {
@@ -3490,6 +3520,54 @@ func TestNVRPlaybackSessionCreateEndpoint(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), `/api/v1/media/hls/nvrpb_test/quality/index.m3u8`) {
 		t.Fatalf("expected hls url in response: %s", rec.Body.String())
+	}
+}
+
+func TestNVRPlaybackSessionCreateEndpointAcceptsLocalWallClockTimes(t *testing.T) {
+	server := newTestServerWithConfig(config.HTTPConfig{
+		ListenAddress: ":0",
+		MetricsPath:   "/metrics",
+		HealthPath:    "/healthz",
+	}, stubSnapshotReader{
+		createNVRPlaybackSession: func(_ context.Context, deviceID string, request dahua.NVRPlaybackSessionRequest) (dahua.NVRPlaybackSession, error) {
+			if deviceID != "west20_nvr" {
+				t.Fatalf("unexpected device id %q", deviceID)
+			}
+			if request.Channel != 2 {
+				t.Fatalf("unexpected channel %d", request.Channel)
+			}
+			if got := request.StartTime.Format("2006-01-02 15:04:05"); got != "2026-05-03 16:11:05" {
+				t.Fatalf("unexpected start wall-clock %s", got)
+			}
+			if got := request.EndTime.Format("2006-01-02 15:04:05"); got != "2026-05-03 16:11:27" {
+				t.Fatalf("unexpected end wall-clock %s", got)
+			}
+			if got := request.SeekTime.Format("2006-01-02 15:04:05"); got != "2026-05-03 16:11:05" {
+				t.Fatalf("unexpected seek wall-clock %s", got)
+			}
+			return dahua.NVRPlaybackSession{
+				ID:             "nvrpb_wall_clock",
+				StreamID:       "nvrpb_wall_clock",
+				DeviceID:       deviceID,
+				SourceStreamID: "west20_nvr_channel_02",
+				Name:           "Lobby",
+				Channel:        2,
+				Profiles:       map[string]dahua.NVRPlaybackProfile{},
+			}, nil
+		},
+	}, nil, stubActionReader{}, stubEventReader{})
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/nvr/west20_nvr/playback/sessions", strings.NewReader(`{"channel":2,"start_time":"2026-05-03 16:11:05","end_time":"2026_05_03_16_11_27","seek_time":"2026-05-03T16:11:05"}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	server.httpServer.Handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"stream_id":"nvrpb_wall_clock"`) {
+		t.Fatalf("expected stream id in response: %s", rec.Body.String())
 	}
 }
 

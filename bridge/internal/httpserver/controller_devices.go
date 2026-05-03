@@ -174,6 +174,15 @@ func (c *controller) registerNVRRoutes(router chi.Router) {
 		attachNVRRecordingExportURLs(r, chi.URLParam(r, "deviceID"), &result)
 		writeJSON(w, http.StatusOK, result)
 	})
+	router.With(rateLimitMiddleware(c.adminLimiter)).Get("/api/v1/nvr/{deviceID}/smd-ivs", func(w http.ResponseWriter, r *http.Request) {
+		c.handleNVRRecordingCollection(w, r, true)
+	})
+	router.With(rateLimitMiddleware(c.adminLimiter)).Get("/api/v1/nvr/{deviceID}/smd_ivs", func(w http.ResponseWriter, r *http.Request) {
+		c.handleNVRRecordingCollection(w, r, true)
+	})
+	router.With(rateLimitMiddleware(c.adminLimiter)).Get("/api/v1/nvr/{deviceID}/recording-chunks", func(w http.ResponseWriter, r *http.Request) {
+		c.handleNVRRecordingCollection(w, r, false)
+	})
 	router.With(rateLimitMiddleware(c.adminLimiter)).Get("/api/v1/nvr/{deviceID}/events/summary", func(w http.ResponseWriter, r *http.Request) {
 		query, err := parseNVREventSummaryQuery(r)
 		if err != nil {
@@ -827,7 +836,41 @@ func shouldUsePlaybackSessionArchiveExport(request dahua.NVRPlaybackSessionReque
 	}
 	source := strings.ToLower(strings.TrimSpace(request.Source))
 	recordingType := strings.ToLower(strings.TrimSpace(request.Type))
-	return source == "nvr_event" || recordingType == "event" || strings.HasPrefix(recordingType, "event.")
+	return source == "smd_ivs" ||
+		source == "smd-ivs" ||
+		source == "nvr_event" ||
+		recordingType == "event" ||
+		strings.HasPrefix(recordingType, "event.")
+}
+
+func (c *controller) handleNVRRecordingCollection(w http.ResponseWriter, r *http.Request, smdIVSOnly bool) {
+	query, err := parseNVRRecordingQuery(r)
+	if err != nil {
+		writeInvalidRequestError(w, err)
+		return
+	}
+	if smdIVSOnly {
+		query.EventOnly = true
+		if strings.TrimSpace(query.EventCode) == "" {
+			query.EventCode = "all"
+		}
+	} else {
+		query.EventOnly = false
+		query.EventCode = ""
+	}
+
+	searchCtx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+
+	result, err := c.snapshots.NVRRecordings(searchCtx, chi.URLParam(r, "deviceID"), query)
+	if err != nil {
+		writeClassifiedActionError(w, err, http.StatusBadGateway)
+		return
+	}
+
+	normalizeNVRRecordingSearchResult(&result)
+	attachNVRRecordingExportURLs(r, chi.URLParam(r, "deviceID"), &result)
+	writeJSON(w, http.StatusOK, result)
 }
 
 func shouldUseOptionalNVRRecordingIFrame(request dahua.NVRPlaybackSessionRequest) bool {
@@ -836,7 +879,11 @@ func shouldUseOptionalNVRRecordingIFrame(request dahua.NVRPlaybackSessionRequest
 	}
 	source := strings.ToLower(strings.TrimSpace(request.Source))
 	recordingType := strings.ToLower(strings.TrimSpace(request.Type))
-	return source == "nvr_event" || recordingType == "event" || strings.HasPrefix(recordingType, "event.")
+	return source == "smd_ivs" ||
+		source == "smd-ivs" ||
+		source == "nvr_event" ||
+		recordingType == "event" ||
+		strings.HasPrefix(recordingType, "event.")
 }
 
 func (c *controller) lookupNVRStreamProfile(deviceID string, channel int, profileName string) (streams.Entry, streams.Profile) {

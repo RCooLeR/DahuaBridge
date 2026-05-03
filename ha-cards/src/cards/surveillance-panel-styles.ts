@@ -1504,45 +1504,6 @@ export const surveillancePanelDetailStyles = css`
     gap: 8px;
   }
 
-  .archive-seek-widget {
-    display: grid;
-    gap: 10px;
-  }
-
-  .archive-seek-group {
-    display: grid;
-    gap: 6px;
-  }
-
-  .archive-seek-slider {
-    margin: 6px 2px;
-  }
-
-  .archive-seek-slider.noUi-target {
-    border: 1px solid rgba(106, 199, 255, 0.18);
-    background: rgba(9, 19, 30, 0.88);
-    box-shadow: none;
-  }
-
-  .archive-seek-slider .noUi-connect {
-    background: rgba(52, 216, 255, 0.68);
-  }
-
-  .archive-seek-slider .noUi-handle {
-    border: 1px solid rgba(255, 255, 255, 0.18);
-    background: #dff8ff;
-    box-shadow: none;
-  }
-
-  .archive-seek-slider .noUi-handle:before,
-  .archive-seek-slider .noUi-handle:after {
-    display: none;
-  }
-
-  .archive-seek-slider [aria-disabled="true"] {
-    opacity: 0.5;
-  }
-
   input[type="range"] {
     width: 100%;
     accent-color: var(--db-cyan);

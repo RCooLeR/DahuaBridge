@@ -345,7 +345,7 @@ func shouldUsePlaybackSessionArchiveExport(request dahua.NVRPlaybackSessionReque
 	}
 	source := strings.ToLower(strings.TrimSpace(request.Source))
 	recordingType := strings.ToLower(strings.TrimSpace(request.Type))
-	return source == "nvr_event" || recordingType == "event" || strings.HasPrefix(recordingType, "event.")
+	return source == "nvr_event" || source == "smd_ivs" || source == "smd-ivs" || recordingType == "event" || strings.HasPrefix(recordingType, "event.")
 }
 
 func shouldUseOptionalArchiveIFrame(request dahua.NVRPlaybackSessionRequest) bool {
@@ -354,7 +354,7 @@ func shouldUseOptionalArchiveIFrame(request dahua.NVRPlaybackSessionRequest) boo
 	}
 	source := strings.ToLower(strings.TrimSpace(request.Source))
 	recordingType := strings.ToLower(strings.TrimSpace(request.Type))
-	return source == "nvr_event" || recordingType == "event" || strings.HasPrefix(recordingType, "event.")
+	return source == "nvr_event" || source == "smd_ivs" || source == "smd-ivs" || recordingType == "event" || strings.HasPrefix(recordingType, "event.")
 }
 
 func clipMatchesWindow(clip media.ClipInfo, startTime time.Time, endTime time.Time) bool {

@@ -70,13 +70,11 @@ export function audioSemanticLabel(semantic: string | null): string {
 export function streamProfileLabel(value: string | null | undefined): string {
   switch (value?.trim().toLowerCase()) {
     case "quality":
-      return "Quality (Main Stream)";
     case "default":
-      return "Default (Main Stream)";
+      return "Quality (Main Stream)";
     case "stable":
-      return "Stable (Substream)";
     case "substream":
-      return "Substream (Native)";
+      return "Stable (Substream)";
     default:
       return value?.trim() || "unknown";
   }

@@ -2,7 +2,6 @@ package archive
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -51,9 +50,9 @@ func (s *SQLiteStore) SearchRecordings(ctx context.Context, deviceID string, que
 
 func (s *SQLiteStore) searchFileRows(ctx context.Context, deviceID string, query dahua.NVRRecordingQuery) ([]dahua.NVRRecording, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT
-		file_id, channel, start_time, end_time, file_path, video_stream, disk, partition, cluster,
+		chunk_id, channel, start_time, end_time, file_path, video_stream, disk, partition, cluster,
 		length_bytes, cut_length_bytes, flags_json
-		FROM archive_files
+		FROM nvr_recording_chunks
 		WHERE device_id = ? AND channel = ? AND end_time >= ? AND start_time <= ?
 		ORDER BY start_time DESC
 		LIMIT ?`,
@@ -80,7 +79,7 @@ func (s *SQLiteStore) searchFileRows(ctx context.Context, deviceID string, query
 		}
 		item := dahua.NVRRecording{
 			ID:             fileID,
-			RecordKind:     "file",
+			RecordKind:     "recording_chunk",
 			Source:         "nvr",
 			Channel:        channel,
 			StartTime:      startTime,
@@ -104,8 +103,9 @@ func (s *SQLiteStore) searchFileRows(ctx context.Context, deviceID string, query
 
 func (s *SQLiteStore) searchEventRows(ctx context.Context, deviceID string, query dahua.NVRRecordingQuery) ([]dahua.NVRRecording, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT
-		event_id, channel, start_time, end_time, file_path, source, type, video_stream, rtsp_main_url, rtsp_sub_url, flags_json
-		FROM archive_events
+		event_id, channel, start_time, end_time, source_file_path, event_type, video_stream,
+		rtsp_main_url, rtsp_sub_url, flags_json, mp4_clip_id, mp4_status, mp4_error
+		FROM smd_ivs_events
 		WHERE device_id = ? AND channel = ? AND end_time >= ? AND start_time <= ?
 		ORDER BY start_time DESC
 		LIMIT ?`,
@@ -123,16 +123,17 @@ func (s *SQLiteStore) searchEventRows(ctx context.Context, deviceID string, quer
 	items := make([]dahua.NVRRecording, 0)
 	for rows.Next() {
 		var (
-			eventID, startTime, endTime, filePath, source, recordingType, videoStream, rtspMainURL, rtspSubURL, flagsJSON string
-			channel                                                                                                       int
+			eventID, startTime, endTime, filePath, recordingType, videoStream, rtspMainURL, rtspSubURL, flagsJSON string
+			mp4ClipID, mp4Status, mp4Error                                                                        string
+			channel                                                                                               int
 		)
-		if err := rows.Scan(&eventID, &channel, &startTime, &endTime, &filePath, &source, &recordingType, &videoStream, &rtspMainURL, &rtspSubURL, &flagsJSON); err != nil {
+		if err := rows.Scan(&eventID, &channel, &startTime, &endTime, &filePath, &recordingType, &videoStream, &rtspMainURL, &rtspSubURL, &flagsJSON, &mp4ClipID, &mp4Status, &mp4Error); err != nil {
 			return nil, err
 		}
 		item := dahua.NVRRecording{
 			ID:          eventID,
-			RecordKind:  "event",
-			Source:      source,
+			RecordKind:  "smd_ivs",
+			Source:      "smd_ivs",
 			Channel:     channel,
 			StartTime:   startTime,
 			EndTime:     endTime,
@@ -142,6 +143,15 @@ func (s *SQLiteStore) searchEventRows(ctx context.Context, deviceID string, quer
 			RTSPMainURL: rtspMainURL,
 			RTSPSubURL:  rtspSubURL,
 			Flags:       parseJSONStringArray(flagsJSON),
+		}
+		if mp4ClipID != "" {
+			item.AssetClipID = mp4ClipID
+		}
+		if mp4Status != "" {
+			item.AssetStatus = normalizeArchiveAssetState(mp4Status)
+		}
+		if mp4Error != "" {
+			item.AssetError = mp4Error
 		}
 		if !matchesArchiveEventQuery(item, query.EventCode) {
 			continue
@@ -155,55 +165,11 @@ func (s *SQLiteStore) searchEventRows(ctx context.Context, deviceID string, quer
 }
 
 func (s *SQLiteStore) MarkCoverage(ctx context.Context, scope string, deviceID string, channel int, startTime time.Time, endTime time.Time, syncedAt time.Time) error {
-	scope = strings.TrimSpace(scope)
-	deviceID = strings.TrimSpace(deviceID)
-	if scope == "" || deviceID == "" || channel <= 0 {
-		return nil
-	}
-	_, err := s.db.ExecContext(ctx, `INSERT INTO archive_sync_coverage (
-		scope, device_id, channel, window_start, window_end, synced_at
-	) VALUES (?, ?, ?, ?, ?, ?)
-	ON CONFLICT(scope, device_id, channel, window_start, window_end) DO UPDATE SET
-		synced_at=excluded.synced_at`,
-		scope,
-		deviceID,
-		channel,
-		startTime.In(time.Local).Format(archiveTimeLayout),
-		endTime.In(time.Local).Format(archiveTimeLayout),
-		syncedAt.UTC().Format(time.RFC3339Nano),
-	)
-	return err
+	return nil
 }
 
 func (s *SQLiteStore) IsCoverageComplete(ctx context.Context, scope string, deviceID string, channel int, windows [][2]time.Time) (bool, error) {
-	scope = strings.TrimSpace(scope)
-	deviceID = strings.TrimSpace(deviceID)
-	if scope == "" || deviceID == "" || channel <= 0 || len(windows) == 0 {
-		return false, nil
-	}
-	var count int
-	for _, window := range windows {
-		if window[0].IsZero() || window[1].IsZero() {
-			return false, nil
-		}
-		if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM archive_sync_coverage
-			WHERE scope = ? AND device_id = ? AND channel = ? AND window_start = ? AND window_end = ?`,
-			scope,
-			deviceID,
-			channel,
-			window[0].In(time.Local).Format(archiveTimeLayout),
-			window[1].In(time.Local).Format(archiveTimeLayout),
-		).Scan(&count); err != nil {
-			if err == sql.ErrNoRows {
-				return false, nil
-			}
-			return false, err
-		}
-		if count == 0 {
-			return false, nil
-		}
-	}
-	return true, nil
+	return false, nil
 }
 
 func shouldSearchEventScope(query dahua.NVRRecordingQuery) bool {
@@ -215,6 +181,8 @@ func archiveScopeForQuery(query dahua.NVRRecordingQuery) (string, bool) {
 	eventCode := normalizeArchiveEventCode(query.EventCode)
 	if query.EventOnly || eventCode != "" {
 		switch eventCode {
+		case "":
+			return "event:all", true
 		case "human", "vehicle", "animal", "tripwire", "intrusion":
 			return "event:" + eventCode, true
 		default:
@@ -272,16 +240,44 @@ func parseJSONStringArray(raw string) []string {
 }
 
 func archiveRecordID(deviceID string, item dahua.NVRRecording) (string, string) {
-	if strings.EqualFold(strings.TrimSpace(item.RecordKind), "event") || shouldTreatAsEvent(item) {
-		return archiveEventID(deviceID, item), "event"
+	recordKind := strings.ToLower(strings.TrimSpace(item.RecordKind))
+	if recordKind == "smd_ivs" || recordKind == "event" || shouldTreatAsEvent(item) {
+		return archiveEventID(deviceID, item), "smd_ivs"
 	}
-	return archiveFileID(deviceID, item), "file"
+	return archiveFileID(deviceID, item), "recording_chunk"
 }
 
 func shouldTreatAsEvent(item dahua.NVRRecording) bool {
 	source := strings.ToLower(strings.TrimSpace(item.Source))
+	recordKind := strings.ToLower(strings.TrimSpace(item.RecordKind))
 	recordingType := strings.ToLower(strings.TrimSpace(item.Type))
-	return source == "nvr_event" || recordingType == "event" || strings.HasPrefix(recordingType, "event.")
+	return recordKind == "smd_ivs" ||
+		recordKind == "event" ||
+		source == "smd_ivs" ||
+		source == "nvr_event" ||
+		recordingType == "event" ||
+		strings.HasPrefix(recordingType, "event.")
+}
+
+func isSMDIVSRecording(item dahua.NVRRecording) bool {
+	if !shouldTreatAsEvent(item) {
+		return false
+	}
+	code := normalizeArchiveEventCode(item.Type)
+	if code == "" {
+		for _, flag := range item.Flags {
+			code = normalizeArchiveEventCode(flag)
+			if code != "" {
+				break
+			}
+		}
+	}
+	switch code {
+	case "human", "vehicle", "animal", "tripwire", "intrusion":
+		return true
+	default:
+		return false
+	}
 }
 
 func buildCoverageWindows(startTime time.Time, endTime time.Time, windowSize time.Duration) [][2]time.Time {
@@ -306,8 +302,13 @@ func ensureArchiveRecordIdentity(deviceID string, item *dahua.NVRRecording) {
 	id, kind := archiveRecordID(deviceID, *item)
 	item.ID = id
 	item.RecordKind = kind
-	if strings.TrimSpace(item.Source) == "" && kind == "file" {
-		item.Source = "nvr"
+	if strings.TrimSpace(item.Source) == "" {
+		switch kind {
+		case "recording_chunk":
+			item.Source = "nvr"
+		case "smd_ivs":
+			item.Source = "smd_ivs"
+		}
 	}
 }
 

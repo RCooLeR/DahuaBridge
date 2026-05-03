@@ -282,7 +282,15 @@ export class DahuaBridgeSurveillanceTileCard
     this._eventSummaryRefreshedAt = 0;
     this._eventSummaryCameraKey = "";
     this.cancelEventSummaryRefresh();
+    this.scheduleEventSummaryRefresh(0);
     void this.stopVtoMicrophone();
+  }
+
+  connectedCallback(): void {
+    super.connectedCallback();
+    if (this._config) {
+      this.scheduleEventSummaryRefresh(0);
+    }
   }
 
   disconnectedCallback(): void {
@@ -321,7 +329,7 @@ export class DahuaBridgeSurveillanceTileCard
   }
 
   protected updated(changedProperties: Map<PropertyKey, unknown>): void {
-    if (this.shouldRefreshEventSummary(changedProperties)) {
+    if (this.shouldRefreshEventSummary()) {
       void this.refreshEventSummary();
     }
     this.scheduleRemoteStreamStyleSync();
@@ -423,12 +431,12 @@ export class DahuaBridgeSurveillanceTileCard
                   <div class="tile-title-banner">
                     <div class="tile-name">${title}</div>
                   </div>
-                  ${renderCameraEventCountBadges(camera, "inline")}
                 </div>
               </div>
               <div class="media-overlay">
                 <div class="media-bottom">
                   <div class="tile-overlay-badges">
+                    ${renderCameraEventCountBadges(camera, "inline")}
                     ${camera.bridgeRecordingActive
                       ? html`<span class="badge warning">MP4</span>`
                       : nothing}
@@ -869,13 +877,11 @@ export class DahuaBridgeSurveillanceTileCard
     return html`<ha-icon .icon=${icon}></ha-icon>`;
   }
 
-  private shouldRefreshEventSummary(
-    changedProperties: Map<PropertyKey, unknown>,
-  ): boolean {
+  private shouldRefreshEventSummary(): boolean {
     if (!this.hass || !this._config) {
       return false;
     }
-    if (!changedProperties.has("_config") && !changedProperties.has("hass")) {
+    if (this._eventSummaryAbort) {
       return false;
     }
 
@@ -888,15 +894,24 @@ export class DahuaBridgeSurveillanceTileCard
       return true;
     }
     if (!this._eventSummary) {
-      return true;
+      return Date.now() - this._eventSummaryRefreshedAt >= 5_000;
     }
     return Date.now() - this._eventSummaryRefreshedAt >= 60_000;
   }
 
   private async refreshEventSummary(): Promise<void> {
+    if (!this.hass || !this._config) {
+      this.scheduleEventSummaryRefresh(1_000);
+      return;
+    }
+
     const camera = this.resolveSummaryCamera();
     if (!camera) {
       this.cancelEventSummaryRefresh();
+      this.logMedia("card tile event summary skipped", {
+        device_id: this._config.device_id,
+        reason: "nvr_channel_not_found",
+      });
       this._eventSummary = null;
       this._eventSummaryCameraKey = "";
       this._eventSummaryRefreshedAt = Date.now();
@@ -906,9 +921,17 @@ export class DahuaBridgeSurveillanceTileCard
     const summaryUrl = buildNvrEventSummaryUrl(camera.bridgeBaseUrl, camera.rootDeviceId);
     if (!summaryUrl) {
       this.cancelEventSummaryRefresh();
+      this.logMedia("card tile event summary skipped", {
+        device_id: camera.deviceId,
+        root_device_id: camera.rootDeviceId,
+        channel: camera.channelNumber,
+        reason: "summary_url_unavailable",
+        bridge_base_url: camera.bridgeBaseUrl,
+      });
       this._eventSummary = null;
       this._eventSummaryCameraKey = `${camera.rootDeviceId}:${camera.channelNumber}`;
       this._eventSummaryRefreshedAt = Date.now();
+      this.scheduleEventSummaryRefresh(15_000);
       return;
     }
 
@@ -920,6 +943,14 @@ export class DahuaBridgeSurveillanceTileCard
     const startTime = new Date(endTime.getTime() - (24 * 60 * 60 * 1000));
 
     try {
+      this.logMedia("card tile event summary request", {
+        device_id: camera.deviceId,
+        root_device_id: camera.rootDeviceId,
+        channel: camera.channelNumber,
+        url: redactUrlForLog(summaryUrl),
+        start_time: startTime.toISOString(),
+        end_time: endTime.toISOString(),
+      });
       const summary = await fetchNvrEventSummary(
         summaryUrl,
         {
@@ -942,7 +973,13 @@ export class DahuaBridgeSurveillanceTileCard
         [summary],
       );
       this._eventSummaryCameraKey = `${camera.rootDeviceId}:${camera.channelNumber}`;
-    } catch {
+      this.logMedia("card tile event summary completed", {
+        device_id: camera.deviceId,
+        root_device_id: camera.rootDeviceId,
+        channel: camera.channelNumber,
+        total_count: summary.totalCount,
+      });
+    } catch (error) {
       if (
         controller.signal.aborted ||
         this._eventSummaryAbort !== controller ||
@@ -950,6 +987,13 @@ export class DahuaBridgeSurveillanceTileCard
       ) {
         return;
       }
+      this.logMedia("card tile event summary failed", {
+        device_id: camera.deviceId,
+        root_device_id: camera.rootDeviceId,
+        channel: camera.channelNumber,
+        url: redactUrlForLog(summaryUrl),
+        error: error instanceof Error ? error.message : String(error),
+      });
     } finally {
       if (
         this._eventSummaryAbort === controller &&

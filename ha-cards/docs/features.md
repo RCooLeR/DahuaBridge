@@ -44,15 +44,18 @@ The panel supports:
 
 The panel supports:
 
-- NVR archive search
-- archive search fallback from integration camera attributes when `bridge_features` metadata is incomplete
-- event type and date window filters for archive searches
+- SMD/IVS browsing from `/api/v1/nvr/{deviceID}/smd-ivs`
+- normal recording chunk browsing from `/api/v1/nvr/{deviceID}/recording-chunks`
+- SMD/IVS type and date filters
 - selected-camera archive browsing
-- inline playback session creation
-- archive coverage-driven seek with a dedicated slider component
-- playback seek and playback source switching
-- native NVR archive export to bridge MP4, followed by download when the export clip completes
-- daily human and vehicle counters on overview tiles and in the selected-camera toolbar
+- direct native RTSP playback for SMD/IVS rows
+- direct native RTSP seek from a date picker and visible time-of-day slider, up to 90 days back
+- SMD/IVS MP4 export through the bridge, followed by download when the export clip completes
+- direct original DAV download for recording chunks
+- manual bridge MP4 clip browsing with download and delete actions
+- daily human, vehicle, and IVS counters on overview tiles and in the selected-camera toolbar
+
+The card does not call archive coverage before seek playback. It recreates the native Home Assistant camera player with a Dahua `/cam/playback` RTSP URL.
 
 Browser viewport playback currently uses:
 

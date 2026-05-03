@@ -1,27 +1,21 @@
-# 🌉 Bridge Documentation
+# Bridge Documentation
 
-This section documents the Go bridge on its own.
+This section documents the Go bridge.
 
-Use these pages in order:
+Read in this order:
 
 1. [Getting Started](getting-started.md)
 2. [Configuration](configuration.md)
 3. [Features](features.md)
 4. [Media And Recording](media-and-recording.md)
 5. [API Reference](api-reference.md)
-6. [Device And Stream Model](device-and-stream-model.md)
+6. [Dahua API Notes](dahua-api.md)
+7. [Device And Stream Model](device-and-stream-model.md)
 
-## 📚 What This Section Covers
+The current archive model is split:
 
-- how to run the bridge
-- what the bridge does
-- how configuration is structured
-- what the HTTP surface provides
-- how media, snapshots, playback, and clip recording work
-- which device-side Dahua APIs are actually used and verified
-- how the bridge models devices and streams
+- `smd_ivs_events`: SMD/IVS detections and MP4 backup state
+- `nvr_recording_chunks`: normal NVR DAV chunks
+- `bridge_mp4_clips`: bridge-owned MP4 archive/export clips
 
-## 🔗 Related Docs
-
-- root docs: [../../docs/README.md](../../docs/README.md)
-- integration docs: [../../integration/docs/README.md](../../integration/docs/README.md)
+New clients should call `/smd-ivs` and `/recording-chunks` instead of relying on the compatibility `/recordings` endpoint.

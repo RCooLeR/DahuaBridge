@@ -59,6 +59,12 @@ export function redactUrlForLog(targetUrl: string): string {
         ? window.location.origin
         : "http://localhost";
     const parsed = new URL(targetUrl, origin);
+    if (parsed.username) {
+      parsed.username = "[redacted]";
+    }
+    if (parsed.password) {
+      parsed.password = "[redacted]";
+    }
     for (const key of [...parsed.searchParams.keys()]) {
       if (shouldRedactUrlParam(key)) {
         parsed.searchParams.set(key, "[redacted]");
@@ -77,6 +83,8 @@ function shouldRedactUrlParam(key: string): boolean {
     normalized.includes("passwd") ||
     normalized.includes("pwd") ||
     normalized.includes("token") ||
+    normalized === "authsig" ||
+    normalized === "signature" ||
     normalized.includes("secret")
   );
 }

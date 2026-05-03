@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	archiveapi "RCooLeR/DahuaBridge/internal/archive"
 	"RCooLeR/DahuaBridge/internal/config"
 	"RCooLeR/DahuaBridge/internal/dahua"
 	"RCooLeR/DahuaBridge/internal/media"
@@ -34,6 +35,43 @@ type stubSnapshotProvider struct {
 
 type stubRecordingSearcher struct {
 	find func(context.Context, dahua.NVRRecordingQuery) (dahua.NVRRecordingSearchResult, error)
+}
+
+type stubRuntimeArchiveReader struct {
+	search func(context.Context, string, dahua.NVRRecordingQuery, func(context.Context, string, dahua.NVRRecordingQuery) (dahua.NVRRecordingSearchResult, error)) (dahua.NVRRecordingSearchResult, error)
+}
+
+func (s stubRuntimeArchiveReader) SearchRecordings(ctx context.Context, deviceID string, query dahua.NVRRecordingQuery, fallback func(context.Context, string, dahua.NVRRecordingQuery) (dahua.NVRRecordingSearchResult, error)) (dahua.NVRRecordingSearchResult, error) {
+	if s.search != nil {
+		return s.search(ctx, deviceID, query, fallback)
+	}
+	return dahua.NVRRecordingSearchResult{}, nil
+}
+
+func (s stubRuntimeArchiveReader) EnrichRecordings(context.Context, string, *dahua.NVRRecordingSearchResult, archiveapi.ClipFinder) error {
+	return nil
+}
+
+func (s stubRuntimeArchiveReader) TrackClipExport(context.Context, string, dahua.NVRPlaybackSessionRequest, media.ClipInfo) error {
+	return nil
+}
+
+func (s stubRuntimeArchiveReader) EventSummary(_ context.Context, deviceID string, startTime time.Time, endTime time.Time, _ string) (dahua.NVREventSummary, error) {
+	return dahua.NVREventSummary{
+		DeviceID:  deviceID,
+		StartTime: startTime.Format(time.RFC3339),
+		EndTime:   endTime.Format(time.RFC3339),
+		Items:     []dahua.NVREventSummaryItem{},
+		Channels:  []dahua.NVREventChannelSummary{},
+	}, nil
+}
+
+func (s stubRuntimeArchiveReader) ArchiveCoverage(_ context.Context, deviceID string, channel int) (dahua.NVRArchiveCoverage, error) {
+	return dahua.NVRArchiveCoverage{
+		DeviceID: deviceID,
+		Channel:  channel,
+		Chunks:   []dahua.NVRArchiveCoverageChunk{},
+	}, nil
 }
 
 func (s *stubSnapshotProvider) Snapshot(ctx context.Context, channel int) ([]byte, string, error) {
@@ -128,6 +166,68 @@ func TestRuntimeServicesNVRSnapshotDedupesConcurrentMisses(t *testing.T) {
 
 	if provider.callCount() != 1 {
 		t.Fatalf("expected one backend snapshot call, got %d", provider.callCount())
+	}
+}
+
+func TestArchiveExportUsesPlaybackSessionForSMDIVS(t *testing.T) {
+	request := dahua.NVRPlaybackSessionRequest{
+		Channel:   1,
+		StartTime: time.Date(2026, 5, 1, 8, 10, 42, 0, time.UTC),
+		EndTime:   time.Date(2026, 5, 1, 8, 11, 2, 0, time.UTC),
+		Source:    "smd_ivs",
+		Type:      "Event.smdTypeHuman",
+	}
+	if !shouldUsePlaybackSessionArchiveExport(request) {
+		t.Fatal("expected smd_ivs archive export to use playback session RTSP source")
+	}
+}
+
+func TestArchiveLiveSearcherBypassesAttachedArchive(t *testing.T) {
+	services := newRuntimeServices(config.Config{}, store.NewProbeStore())
+	liveCalls := 0
+	archiveCalls := 0
+	services.RegisterNVR("west20_nvr", nil, stubRecordingSearcher{
+		find: func(_ context.Context, query dahua.NVRRecordingQuery) (dahua.NVRRecordingSearchResult, error) {
+			liveCalls++
+			return dahua.NVRRecordingSearchResult{
+				DeviceID: "west20_nvr",
+				Channel:  query.Channel,
+				Items: []dahua.NVRRecording{{
+					Source:    "nvr_event",
+					Channel:   query.Channel,
+					StartTime: "2026-05-01 11:00:00",
+					EndTime:   "2026-05-01 11:00:20",
+					Type:      "Event.smdTypeHuman",
+				}},
+			}, nil
+		},
+	}, config.DeviceConfig{ID: "west20_nvr", ChannelAllowlist: []int{1}})
+	services.AttachArchive(stubRuntimeArchiveReader{
+		search: func(context.Context, string, dahua.NVRRecordingQuery, func(context.Context, string, dahua.NVRRecordingQuery) (dahua.NVRRecordingSearchResult, error)) (dahua.NVRRecordingSearchResult, error) {
+			archiveCalls++
+			return dahua.NVRRecordingSearchResult{Items: []dahua.NVRRecording{}}, nil
+		},
+	})
+
+	result, err := (archiveLiveSearcher{runtime: services}).NVRRecordings(context.Background(), "west20_nvr", dahua.NVRRecordingQuery{
+		Channel:   1,
+		StartTime: time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC),
+		EndTime:   time.Date(2026, 5, 2, 0, 0, 0, 0, time.UTC),
+		Limit:     10,
+		EventOnly: true,
+		EventCode: "human",
+	})
+	if err != nil {
+		t.Fatalf("live archive search returned error: %v", err)
+	}
+	if liveCalls != 1 {
+		t.Fatalf("live search calls = %d, want 1", liveCalls)
+	}
+	if archiveCalls != 0 {
+		t.Fatalf("attached archive search calls = %d, want 0", archiveCalls)
+	}
+	if len(result.Items) != 1 {
+		t.Fatalf("expected live NVR item, got %+v", result.Items)
 	}
 }
 
@@ -618,8 +718,7 @@ func TestRuntimeServicesCreateNVRPlaybackSessionResolvesPlaybackStream(t *testin
 			PublicBaseURL: "http://bridge.local:8080",
 		},
 		Media: config.MediaConfig{
-			StableFrameRate:    5,
-			SubstreamFrameRate: 7,
+			StableFrameRate: 5,
 		},
 	}, probes)
 	services.RegisterNVR("west20_nvr", nil, nil, config.DeviceConfig{
@@ -665,6 +764,12 @@ func TestRuntimeServicesCreateNVRPlaybackSessionResolvesPlaybackStream(t *testin
 	if !strings.Contains(profile.StreamURL, "assistant:secret@") {
 		t.Fatalf("expected credentialed playback stream url, got %q", profile.StreamURL)
 	}
+	if _, ok := session.Profiles["default"]; ok {
+		t.Fatalf("unexpected default playback alias %+v", session.Profiles)
+	}
+	if _, ok := session.Profiles["substream"]; ok {
+		t.Fatalf("unexpected substream playback alias %+v", session.Profiles)
+	}
 	_, stableProfile, ok := services.GetStream(session.StreamID, "stable", true)
 	if !ok {
 		t.Fatal("expected stable playback stream to resolve")
@@ -674,6 +779,14 @@ func TestRuntimeServicesCreateNVRPlaybackSessionResolvesPlaybackStream(t *testin
 	}
 	if stableProfile.SourceWidth != 704 || stableProfile.SourceHeight != 576 {
 		t.Fatalf("expected stable playback profile to use substream source size, got %dx%d", stableProfile.SourceWidth, stableProfile.SourceHeight)
+	}
+	_, stableAlias, ok := services.GetStream(session.StreamID, "substream", true)
+	if !ok || stableAlias.StreamURL != stableProfile.StreamURL {
+		t.Fatalf("expected substream alias to resolve to stable profile, got ok=%v profile=%+v", ok, stableAlias)
+	}
+	_, qualityAlias, ok := services.GetStream(session.StreamID, "default", true)
+	if !ok || qualityAlias.StreamURL != profile.StreamURL {
+		t.Fatalf("expected default alias to resolve to quality profile, got ok=%v profile=%+v", ok, qualityAlias)
 	}
 }
 

@@ -106,6 +106,7 @@ func (r *runtimeServices) getPlaybackStream(streamID string, profileName string,
 	}
 
 	entry := buildPlaybackEntry(r.cfg, cfg, session, includeCredentials)
+	profileName = normalizeRequestedProfileName(profileName)
 	if strings.TrimSpace(profileName) == "" {
 		profileName = "stable"
 	}
@@ -239,8 +240,8 @@ func (r *runtimeServices) cleanupExpiredPlaybackSessionsLocked(now time.Time) {
 }
 
 func (r *runtimeServices) playbackSessionResponse(session playbackSession) dahua.NVRPlaybackSession {
-	profiles := make(map[string]dahua.NVRPlaybackProfile, 4)
-	for _, profileName := range []string{"quality", "default", "stable", "substream"} {
+	profiles := make(map[string]dahua.NVRPlaybackProfile, 2)
+	for _, profileName := range []string{"quality", "stable"} {
 		profiles[profileName] = dahua.NVRPlaybackProfile{
 			Name:           profileName,
 			DASHURL:        playbackDASHURL(r.cfg.HomeAssistant.PublicBaseURL, session.ID, profileName),
@@ -299,14 +300,10 @@ func buildPlaybackProfiles(cfg config.Config, deviceCfg config.DeviceConfig, ses
 	}
 	mainSubtype := 0
 	stableSubtype := 1
-	substreamSubtype := 1
 	stableWidth, stableHeight := subWidth, subHeight
-	substreamWidth, substreamHeight := subWidth, subHeight
 	if strings.TrimSpace(session.SubResolution) == "" {
 		stableSubtype = mainSubtype
 		stableWidth, stableHeight = mainWidth, mainHeight
-		substreamSubtype = mainSubtype
-		substreamWidth, substreamHeight = mainWidth, mainHeight
 	}
 
 	mainPlaybackURL := buildPlaybackRTSPURL(
@@ -325,36 +322,11 @@ func buildPlaybackProfiles(cfg config.Config, deviceCfg config.DeviceConfig, ses
 		session.EndTime,
 		includeCredentials,
 	)
-	substreamPlaybackURL := buildPlaybackRTSPURL(
-		deviceCfg,
-		session.Channel,
-		substreamSubtype,
-		session.SeekTime,
-		session.EndTime,
-		includeCredentials,
-	)
 	useWallclock := true
 	fileSeekOffset := time.Duration(0)
 	filePlaybackDuration := time.Duration(0)
 
 	return map[string]streams.Profile{
-		"default": {
-			Name:                     "default",
-			StreamURL:                mainPlaybackURL,
-			LocalMJPEGURL:            playbackMJPEGURL(cfg.HomeAssistant.PublicBaseURL, session.ID, "default"),
-			LocalHLSURL:              playbackHLSURL(cfg.HomeAssistant.PublicBaseURL, session.ID, "default"),
-			LocalDASHURL:             playbackDASHURL(cfg.HomeAssistant.PublicBaseURL, session.ID, "default"),
-			LocalWebRTCURL:           playbackWebRTCPageURL(cfg.HomeAssistant.PublicBaseURL, session.ID, "default"),
-			Subtype:                  mainSubtype,
-			VideoCodec:               session.MainCodec,
-			AudioCodec:               session.AudioCodec,
-			SourceWidth:              mainWidth,
-			SourceHeight:             mainHeight,
-			UseWallclockAsTimestamps: useWallclock,
-			InputSeekOffset:          int64(fileSeekOffset),
-			InputDuration:            int64(filePlaybackDuration),
-			Recommended:              recommended == "default",
-		},
 		"quality": {
 			Name:                     "quality",
 			StreamURL:                mainPlaybackURL,
@@ -391,25 +363,6 @@ func buildPlaybackProfiles(cfg config.Config, deviceCfg config.DeviceConfig, ses
 			InputSeekOffset:          int64(fileSeekOffset),
 			InputDuration:            int64(filePlaybackDuration),
 			Recommended:              recommended == "stable",
-		},
-		"substream": {
-			Name:                     "substream",
-			StreamURL:                substreamPlaybackURL,
-			LocalMJPEGURL:            playbackMJPEGURL(cfg.HomeAssistant.PublicBaseURL, session.ID, "substream"),
-			LocalHLSURL:              playbackHLSURL(cfg.HomeAssistant.PublicBaseURL, session.ID, "substream"),
-			LocalDASHURL:             playbackDASHURL(cfg.HomeAssistant.PublicBaseURL, session.ID, "substream"),
-			LocalWebRTCURL:           playbackWebRTCPageURL(cfg.HomeAssistant.PublicBaseURL, session.ID, "substream"),
-			Subtype:                  substreamSubtype,
-			RTSPTransport:            "tcp",
-			FrameRate:                cfg.Media.SubstreamFrameRate,
-			VideoCodec:               firstNonEmptyPlayback(session.SubCodec, session.MainCodec),
-			AudioCodec:               session.AudioCodec,
-			SourceWidth:              substreamWidth,
-			SourceHeight:             substreamHeight,
-			UseWallclockAsTimestamps: useWallclock,
-			InputSeekOffset:          int64(fileSeekOffset),
-			InputDuration:            int64(filePlaybackDuration),
-			Recommended:              recommended == "substream",
 		},
 	}
 }

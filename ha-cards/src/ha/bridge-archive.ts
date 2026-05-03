@@ -143,6 +143,7 @@ const bridgeRecordingSchema = z.object({
   download_url: z.string().optional().nullable(),
   self_url: z.string().optional().nullable(),
   stop_url: z.string().optional().nullable(),
+  delete_url: z.string().optional().nullable(),
   error: z.string().optional().nullable(),
 });
 
@@ -460,6 +461,7 @@ function mapBridgeRecording(
     downloadUrl: rewriteBridgeUrl(item.download_url ?? null, browserBridgeUrl),
     selfUrl: rewriteBridgeUrl(item.self_url ?? null, browserBridgeUrl),
     stopUrl: rewriteBridgeUrl(item.stop_url ?? null, browserBridgeUrl),
+    deleteUrl: rewriteBridgeUrl(item.delete_url ?? null, browserBridgeUrl),
     error: item.error ?? null,
   };
 }

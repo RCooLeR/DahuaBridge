@@ -9,6 +9,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .bridge_api import DahuaBridgeAPI, DahuaBridgeAPIError
+from .catalog import normalize_profile_name
 from .const import (
     CONF_PREFERRED_VIDEO_PROFILE,
     CONF_PREFERRED_VIDEO_SOURCE,
@@ -40,11 +41,11 @@ class DahuaBridgeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     @property
     def preferred_video_profile(self) -> str:
-        return str(
+        return normalize_profile_name(
             self.config_entry.options.get(
                 CONF_PREFERRED_VIDEO_PROFILE, DEFAULT_PREFERRED_VIDEO_PROFILE
             )
-        ).strip() or DEFAULT_PREFERRED_VIDEO_PROFILE
+        ) or DEFAULT_PREFERRED_VIDEO_PROFILE
 
     @property
     def preferred_video_source(self) -> str:

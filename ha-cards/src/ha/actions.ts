@@ -2,7 +2,7 @@ import type { HomeAssistant } from "../types/home-assistant";
 import { logCardInfo, redactUrlForLog } from "../utils/logging";
 
 export interface BridgeRequestOptions {
-  method?: "POST" | "GET";
+  method?: "POST" | "GET" | "DELETE";
   body?: Record<string, unknown>;
 }
 

@@ -26,9 +26,7 @@ _LOGGER = logging.getLogger(__name__)
 VIDEO_PROFILE_OPTIONS = {
     "auto": "Auto (Bridge Recommended)",
     "quality": "Quality (Main Stream)",
-    "default": "Default (Main Stream)",
     "stable": "Stable (Substream)",
-    "substream": "Substream (Native)",
 }
 VIDEO_PROFILE_VALUES = tuple(VIDEO_PROFILE_OPTIONS.keys())
 
@@ -211,6 +209,12 @@ def normalize_choice(raw: object, mapping: dict[str, str], default: str) -> str:
         return value
 
     lowered = value.lower()
+    if mapping is VIDEO_PROFILE_OPTIONS:
+        if lowered in {"default", "main"}:
+            return "quality"
+        if lowered in {"substream", "sub"}:
+            return "stable"
+
     for key, label in mapping.items():
         if lowered == str(label).strip().lower():
             return key

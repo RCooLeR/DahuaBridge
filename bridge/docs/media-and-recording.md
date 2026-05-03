@@ -1,165 +1,124 @@
 # Media And Recording
 
-This page focuses on the bridge media subsystem.
+This file describes the current media and archive model.
 
-## Media Profiles
+## Profiles
 
-The bridge exposes stream helpers around named profiles such as:
+The bridge publishes two user-facing profiles:
 
-- `quality`
-- `default`
-- `stable`
-- `substream`
+- `quality`: main stream, normally `subtype=0`
+- `stable`: low-bandwidth stream, normally `subtype=1`
 
-The exact profile set depends on the stream and discovered metadata.
+Legacy names such as `default` and `substream` are accepted and normalized, but new code should use `quality` and `stable`.
 
-## Live Media Outputs
+## Live Outputs
 
-The bridge can provide:
+The bridge can expose stream-backed:
 
+- snapshots
 - MJPEG
 - HLS
-- preview pages
 - WebRTC helper pages and answers
+- HTML previews
 
-These are derived from the stream catalog and generated URLs.
+These outputs are generated from the stream catalog. The bridge does not toggle camera or NVR audio settings for normal viewing.
 
-### Audio Handling
+## Bridge MP4 Clips
 
-- The bridge no longer toggles NVR or camera stream-audio settings for normal viewing.
-- Source audio is detected per stream/profile at transcode start.
-- If source audio is present, the bridge can include transcoded audio in outputs that support it.
-- If source audio is absent, the bridge emits video-only output instead of forcing a broken audio track.
-- NVR channel catalog entries still publish discovered source-audio state for higher layers.
-
-## Stream-Backed Snapshots
-
-The bridge supports generic stream-backed snapshots:
-
-- `GET /api/v1/media/snapshot/{streamID}`
-
-Behavior:
-
-- if a compatible worker already exists, the bridge can reuse it
-- if no worker is active, the bridge can start one, capture a frame, and stop it when idle
-- identical snapshot requests are cached briefly and coalesced in-flight so bursty callers do not stampede the upstream NVR, VTO, or IPC device
-
-Device-specific snapshot endpoints now use the stream path first where possible:
-
-- NVR channel snapshot
-- VTO snapshot
-- IPC snapshot
-
-## Bridge-Owned Clip Recording
-
-The bridge can record clips directly from streams into its own storage.
-
-This is designed for:
-
-- NVR channels
-- IPC cameras
-- VTO streams
-- other stream-backed sources known to the bridge
-
-It is intentionally separate from device-side NVR manual recording mode control.
-
-### Clip Lifecycle
-
-1. client starts a clip for a `stream_id`
-2. the bridge resolves the stream and profile
-3. ffmpeg records an MP4 into the configured clip path
-4. the bridge persists clip metadata
-5. clients can query, stop, and download the clip
-
-For finite archive playback clips, the bridge now derives the playback duration from the archive RTSP window and lets FFmpeg exit naturally at end-of-file.
-
-### Clip APIs
+Bridge-owned MP4 clips are separate from the NVR archive. They are stored under `media.clip_path` and are controlled through:
 
 - `POST /api/v1/media/streams/{streamID}/recordings`
 - `GET /api/v1/media/recordings`
 - `GET /api/v1/media/recordings/{clipID}`
-- `POST /api/v1/media/recordings/{clipID}/stop`
+- `GET /api/v1/media/recordings/{clipID}/play`
 - `GET /api/v1/media/recordings/{clipID}/download`
+- `POST /api/v1/media/recordings/{clipID}/stop`
+- `DELETE /api/v1/media/recordings/{clipID}`
 
-### Storage
+The archive database has a separate `bridge_mp4_clips` table for MP4 assets produced from SMD/IVS exports.
 
-The output path is controlled by:
+## Archive Tables
 
-- `media.clip_path`
+The archive service intentionally keeps SMD/IVS and normal recorder chunks separate.
 
-Clips are stored on the bridge side, typically under the mounted `/data` volume in container deployments.
+### `smd_ivs_events`
 
-### Relationship To NVR Recordings Search
+Stores SMD/IVS detections:
 
-Bridge-owned clips are merged into:
+- device ID
+- channel
+- event type
+- start and end time
+- generated main/sub RTSP playback URLs
+- source DAV path when the NVR reports one
+- MP4 backup clip ID, file path, status, and error
 
-- `GET /api/v1/nvr/{deviceID}/recordings`
+The card uses these rows for the SMD/IVS list. Play uses direct RTSP native Home Assistant playback. Export creates or reuses an MP4 clip.
 
-That final result can include:
+### `nvr_recording_chunks`
 
-- native NVR archive items
-- bridge MP4 clip items
+Stores normal NVR recording chunks:
 
-Native NVR archive items are playable through archive playback sessions. Bridge-owned MP4 clips can include direct download URLs. Native NVR archive items are file-backed when the recorder returns `file_path`. For those items, the bridge can retrieve the real `.dav` file through `RPC_Loadfile`, and non-event items can expose direct raw `download_url` values through the bridge.
+- device ID
+- channel
+- start and end time
+- original DAV `file_path`
+- NVR file metadata and flags
 
-Native NVR archive items expose `export_url`. Calling that URL with `POST` makes the bridge export recorder footage as a bridge-owned MP4 clip. When `file_path` is present, the bridge downloads the recorder file first and transcodes from that file. When `file_path` is absent, the bridge falls back to the archive playback-session flow. Clients should poll the returned clip `self_url` until the clip is `completed`, then open its `download_url`.
+The card uses these rows for the recordings list. Chunks expose raw DAV download when `file_path` is available.
 
-The bridge also caches identical archive-search queries briefly and coalesces concurrent misses so repeated UI polling does not issue duplicate recorder searches.
+### `bridge_mp4_clips`
 
-For event-backed archive items such as SMD and IVS hits, the supported bridge workflow is the same:
+Stores archive MP4 export metadata owned by the bridge. SMD/IVS rows point at these clips when export backup exists.
 
-1. search archive items
-2. use the returned `export_url` or playback session flow
-3. record the archive playback RTSP stream into a bridge-owned MP4 clip when a file export is needed
+The bridge drops and recreates the archive schema for this model; no migration is kept for the old mixed tables.
 
-Important distinction:
+## Background Archive Jobs
 
-- non-event archive rows can still export directly from recorder `.dav` content when `file_path` is present
-- event-backed archive rows are SQLite-backed and exported from archive RTSP playback even if a `file_path` is available on the row
-- raw direct-download URLs are intentionally not exposed for event items
+There are two archive indexing flows:
 
-When `archive.enabled` is on, the background archive service also keeps a SQLite index of SMD/IVS rows, stores generated archive RTSP URLs for them, checks for recent changes every 5 minutes, and queues missing MP4 assets for extraction.
+- recording chunk sync fills `nvr_recording_chunks`
+- SMD/IVS sync fills `smd_ivs_events` and queues MP4 backup export when enabled
 
-## Playback Sessions
+API reads use SQLite only. SMD/IVS list requests do not call the NVR, and recording chunk list requests do not call the NVR.
 
-For NVR archive playback, the bridge supports:
+## Native Historical Playback
 
-- session creation
-- session lookup
-- session seek
-- playback stream helpers
-- MP4 export by recording an archive playback stream
+The cards build Dahua RTSP playback URLs directly for native Home Assistant playback. No coverage lookup is required for seek.
 
-These are for archive playback, not for bridge clip capture.
+Event playback uses the selected SMD/IVS row:
 
-Playback-specific worker behavior:
+```text
+rtsp://user:pass@host:554/cam/playback?channel=1&subtype=0&starttime=2026_05_03_14_11_22&endtime=2026_05_03_14_11_48
+```
 
-- playback HLS, MJPEG, and WebRTC workers enforce the requested archive window duration
-- playback RTSP inputs use wallclock timestamps so finite archive windows terminate cleanly
-- playback RTSP URLs use Dahua's `/cam/playback` path with ordered query parameters: `channel`, `subtype`, `starttime`, optional `endtime`
-- playback HLS output can remain addressable after FFmpeg exits, while the worker entry stays visible until idle-timeout cleanup runs
-- live validation on May 2, 2026 confirmed near-end seek playback on a 24/7 archive window exited FFmpeg at EOF while the retained HLS playlist stayed fetchable
+Seek playback uses the selected date and second-of-day:
 
-## Worker Visibility
+```text
+rtsp://user:pass@host:554/cam/playback?channel=9&subtype=0&starttime=2026_05_01_09_59_30
+```
 
-The bridge exposes current media workers at:
+The required Dahua query order is:
 
-- `GET /api/v1/media/workers`
+1. `channel`
+2. `subtype`
+3. `starttime`
+4. `endtime` when an end time is known
 
-Use this for diagnostics and operational visibility.
+## Export Paths
 
-Important detail:
+SMD/IVS export:
 
-- a worker entry represents bridge runtime state, not only a live FFmpeg child process
-- retained playback HLS workers can still appear in `/api/v1/media/workers` after FFmpeg has already exited, until idle-timeout cleanup runs
+1. read row from `smd_ivs_events`
+2. build/play the NVR archive RTSP URL
+3. record the finite window with FFmpeg
+4. store MP4 metadata in `bridge_mp4_clips`
+5. update the SMD/IVS row with MP4 backup fields
 
-## Practical Guidance
+Recording chunk export:
 
-- use bridge clip recording when you want ad-hoc MP4 capture owned by the bridge
-- use NVR archive search when you want historical recorder footage
-- use the generic stream snapshot endpoint when you want a frame from the actual stream path
+1. read row from `nvr_recording_chunks`
+2. use the original DAV path when available
+3. transcode to MP4 through the bridge media layer
 
-## Related Docs
-
-- [features.md](features.md)
-- [api-reference.md](api-reference.md)
+Raw DAV download is for recording chunks only.

@@ -27,11 +27,10 @@ import (
 )
 
 const (
-	archiveQueryLimit                = 128
-	archiveSyncWindow                = time.Hour
-	archiveRecentEventSyncInterval   = 5 * time.Minute
-	archiveRecentEventLookbackWindow = 2 * time.Hour
-	archivePlaybackRTSPTimeLayout    = "2006_01_02_15_04_05"
+	archiveQueryLimit             = 128
+	archiveSyncWindow             = time.Hour
+	archiveSMDIVSSyncInterval     = 5 * time.Minute
+	archivePlaybackRTSPTimeLayout = "2006_01_02_15_04_05"
 )
 
 var (
@@ -48,6 +47,10 @@ type ClipFinder interface {
 	GetClip(string) (mediaapi.ClipInfo, error)
 }
 
+type ClipStatusReader interface {
+	GetClip(string) (mediaapi.ClipInfo, error)
+}
+
 type ClipPrefetcher interface {
 	EnsureNVRArchiveClip(context.Context, string, dahua.NVRRecording) (mediaapi.ClipInfo, error)
 }
@@ -56,7 +59,7 @@ type syncRequest int
 
 const (
 	syncRequestFull syncRequest = iota
-	syncRequestRecentEvents
+	syncRequestSMDIVS
 )
 
 type Service struct {
@@ -65,6 +68,7 @@ type Service struct {
 	searcher Searcher
 	probes   *store.ProbeStore
 	clips    ClipPrefetcher
+	clipInfo ClipStatusReader
 	logger   zerolog.Logger
 
 	db      *sql.DB
@@ -72,9 +76,34 @@ type Service struct {
 	store   *SQLiteStore
 	trigger chan syncRequest
 
-	running int32
-	started bool
-	mu      sync.Mutex
+	chunkRunning  int32
+	smdIVSRunning int32
+	started       bool
+	mu            sync.Mutex
+}
+
+type smdIVSSyncStats struct {
+	QueryCount   int
+	ReturnedRows int
+	AcceptedRows int
+}
+
+type archiveChunkSyncStats struct {
+	QueryCount   int
+	ReturnedRows int
+	AcceptedRows int
+}
+
+func (stats *smdIVSSyncStats) add(other smdIVSSyncStats) {
+	stats.QueryCount += other.QueryCount
+	stats.ReturnedRows += other.ReturnedRows
+	stats.AcceptedRows += other.AcceptedRows
+}
+
+func (stats *archiveChunkSyncStats) add(other archiveChunkSyncStats) {
+	stats.QueryCount += other.QueryCount
+	stats.ReturnedRows += other.ReturnedRows
+	stats.AcceptedRows += other.AcceptedRows
 }
 
 func New(cfg config.ArchiveConfig, devices []config.DeviceConfig, searcher Searcher, probes *store.ProbeStore, logger zerolog.Logger) (*Service, error) {
@@ -112,6 +141,7 @@ func New(cfg config.ArchiveConfig, devices []config.DeviceConfig, searcher Searc
 		searcher: searcher,
 		probes:   probes,
 		clips:    resolveClipPrefetcher(searcher),
+		clipInfo: resolveClipStatusReader(searcher),
 		logger:   logger.With().Str("component", "archive").Logger(),
 		db:       db,
 		store:    store,
@@ -137,11 +167,24 @@ func (s *Service) Start(ctx context.Context) error {
 	}); err != nil {
 		return fmt.Errorf("configure archive cron %q: %w", s.cfg.Cron, err)
 	}
+	s.logger.Info().
+		Str("db_path", s.cfg.DBPath).
+		Str("cache_dir", s.cfg.CacheDir).
+		Str("temp_dir", s.cfg.TempDir).
+		Int("device_count", len(s.devices)).
+		Int("prefetch_days", s.cfg.PrefetchDays).
+		Int("retain_days", s.cfg.RetainDays).
+		Int("max_parallel_jobs", s.cfg.MaxParallelJobs).
+		Bool("prefetch_smd", s.cfg.PrefetchSMD).
+		Bool("prefetch_ivs", s.cfg.PrefetchIVS).
+		Str("cron", s.cfg.Cron).
+		Msg("archive service configured")
 	s.cron.Start()
 	s.started = true
 
 	go s.runLoop(ctx)
-	go s.recentEventLoop(ctx)
+	go s.smdIVSLoop(ctx)
+	s.queueSMDIVSSync()
 	s.QueueSync()
 	return nil
 }
@@ -180,12 +223,12 @@ func (s *Service) QueueSync() {
 	}
 }
 
-func (s *Service) queueRecentEventSync() {
+func (s *Service) queueSMDIVSSync() {
 	if s == nil {
 		return
 	}
 	select {
-	case s.trigger <- syncRequestRecentEvents:
+	case s.trigger <- syncRequestSMDIVS:
 	default:
 	}
 }
@@ -194,11 +237,11 @@ func (s *Service) SyncNow(ctx context.Context) error {
 	if s == nil {
 		return nil
 	}
-	if !atomic.CompareAndSwapInt32(&s.running, 0, 1) {
-		s.logger.Debug().Msg("archive sync already running")
+	if !atomic.CompareAndSwapInt32(&s.chunkRunning, 0, 1) {
+		s.logger.Debug().Msg("archive recording chunk sync already running")
 		return nil
 	}
-	defer atomic.StoreInt32(&s.running, 0)
+	defer atomic.StoreInt32(&s.chunkRunning, 0)
 
 	startedAt := time.Now().UTC()
 	s.logger.Info().
@@ -206,7 +249,7 @@ func (s *Service) SyncNow(ctx context.Context) error {
 		Int("prefetch_days", s.cfg.PrefetchDays).
 		Int("retain_days", s.cfg.RetainDays).
 		Str("cron", s.cfg.Cron).
-		Msg("archive sync started")
+		Msg("archive recording chunk sync started")
 
 	var firstErr error
 	for _, device := range s.devices {
@@ -218,6 +261,10 @@ func (s *Service) SyncNow(ctx context.Context) error {
 			s.logger.Warn().Str("device_id", device.ID).Msg("archive sync skipped device with no resolved channels")
 			continue
 		}
+		s.logger.Info().
+			Str("device_id", device.ID).
+			Ints("channels", channels).
+			Msg("archive recording chunk device channels resolved")
 		for _, channel := range channels {
 			if err := s.syncChannel(ctx, device, channel); err != nil {
 				s.logger.Error().Err(err).Str("device_id", device.ID).Int("channel", channel).Msg("archive sync channel failed")
@@ -239,7 +286,7 @@ func (s *Service) SyncNow(ctx context.Context) error {
 
 	s.logger.Info().
 		Dur("duration", time.Since(startedAt)).
-		Msg("archive sync completed")
+		Msg("archive recording chunk sync completed")
 	return nil
 }
 
@@ -254,70 +301,26 @@ func (s *Service) SearchRecordings(
 	}
 
 	scope, covered := archiveScopeForQuery(query)
-	if strings.HasPrefix(scope, "event:") {
-		result, err := s.store.SearchRecordings(ctx, deviceID, query)
-		if err == nil {
-			for index := range result.Items {
-				ensureArchiveRecordIdentity(deviceID, &result.Items[index])
-			}
-			if covered {
-				windows := buildCoverageWindows(query.StartTime, query.EndTime, archiveSyncWindow)
-				complete, coverageErr := s.store.IsCoverageComplete(ctx, scope, deviceID, query.Channel, windows)
-				if coverageErr == nil && complete {
-					return result, nil
-				}
-			}
-			if len(result.Items) > 0 {
-				return result, nil
-			}
-		} else {
-			s.logger.Warn().Err(err).Str("device_id", deviceID).Int("channel", query.Channel).Str("scope", scope).Msg("archive sqlite event search failed")
-		}
-	}
 	if covered {
-		windows := buildCoverageWindows(query.StartTime, query.EndTime, archiveSyncWindow)
-		complete, err := s.store.IsCoverageComplete(ctx, scope, deviceID, query.Channel, windows)
+		result, err := s.store.SearchRecordings(ctx, deviceID, query)
 		if err != nil {
-			s.logger.Warn().Err(err).Str("device_id", deviceID).Int("channel", query.Channel).Str("scope", scope).Msg("archive coverage lookup failed")
-		} else if complete {
-			result, err := s.store.SearchRecordings(ctx, deviceID, query)
-			if err == nil {
-				for index := range result.Items {
-					ensureArchiveRecordIdentity(deviceID, &result.Items[index])
-				}
-				return result, nil
-			}
 			s.logger.Warn().Err(err).Str("device_id", deviceID).Int("channel", query.Channel).Str("scope", scope).Msg("archive sqlite search failed")
+			return dahua.NVRRecordingSearchResult{}, err
 		}
+		for index := range result.Items {
+			ensureArchiveRecordIdentity(deviceID, &result.Items[index])
+		}
+		return result, nil
 	}
 
-	result, err := fallback(ctx, deviceID, query)
-	if err != nil {
-		return dahua.NVRRecordingSearchResult{}, err
-	}
-	now := time.Now().UTC()
-	if scope == "archive" {
-		if err := s.store.UpsertArchiveFiles(ctx, deviceID, result.Items, now); err != nil {
-			s.logger.Warn().Err(err).Str("device_id", deviceID).Int("channel", query.Channel).Msg("archive file upsert after fallback failed")
-		}
-	} else if strings.HasPrefix(scope, "event:") {
-		s.populateArchiveEventRTSPURLs(deviceID, result.Items)
-		if err := s.store.UpsertArchiveEvents(ctx, deviceID, result.Items, now); err != nil {
-			s.logger.Warn().Err(err).Str("device_id", deviceID).Int("channel", query.Channel).Str("scope", scope).Msg("archive event upsert after fallback failed")
-		}
-	}
-	if covered {
-		for _, window := range buildCoverageWindows(query.StartTime, query.EndTime, archiveSyncWindow) {
-			if err := s.store.MarkCoverage(ctx, scope, deviceID, query.Channel, window[0], window[1], now); err != nil {
-				s.logger.Warn().Err(err).Str("device_id", deviceID).Int("channel", query.Channel).Str("scope", scope).Msg("archive coverage mark failed")
-				break
-			}
-		}
-	}
-	for index := range result.Items {
-		ensureArchiveRecordIdentity(deviceID, &result.Items[index])
-	}
-	return result, nil
+	return dahua.NVRRecordingSearchResult{
+		DeviceID:  strings.TrimSpace(deviceID),
+		Channel:   query.Channel,
+		StartTime: query.StartTime.In(time.Local).Format(archiveTimeLayout),
+		EndTime:   query.EndTime.In(time.Local).Format(archiveTimeLayout),
+		Limit:     query.Limit,
+		Items:     []dahua.NVRRecording{},
+	}, nil
 }
 
 func (s *Service) EnrichRecordings(ctx context.Context, deviceID string, result *dahua.NVRRecordingSearchResult, clips ClipFinder) error {
@@ -516,21 +519,29 @@ func (s *Service) runLoop(ctx context.Context) {
 			return
 		case request := <-s.trigger:
 			switch request {
-			case syncRequestRecentEvents:
-				if err := s.SyncRecentEventsNow(ctx); err != nil {
-					s.logger.Error().Err(err).Msg("archive recent event sync failed")
-				}
+			case syncRequestSMDIVS:
+				go s.runSMDIVSSync(ctx)
 			default:
-				if err := s.SyncNow(ctx); err != nil {
-					s.logger.Error().Err(err).Msg("archive sync failed")
-				}
+				go s.runChunkSync(ctx)
 			}
 		}
 	}
 }
 
-func (s *Service) recentEventLoop(ctx context.Context) {
-	ticker := time.NewTicker(archiveRecentEventSyncInterval)
+func (s *Service) runChunkSync(ctx context.Context) {
+	if err := s.SyncNow(ctx); err != nil {
+		s.logger.Error().Err(err).Msg("archive sync failed")
+	}
+}
+
+func (s *Service) runSMDIVSSync(ctx context.Context) {
+	if err := s.SyncRecentEventsNow(ctx); err != nil {
+		s.logger.Error().Err(err).Msg("archive smd_ivs sync failed")
+	}
+}
+
+func (s *Service) smdIVSLoop(ctx context.Context) {
+	ticker := time.NewTicker(archiveSMDIVSSyncInterval)
 	defer ticker.Stop()
 
 	for {
@@ -538,42 +549,83 @@ func (s *Service) recentEventLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			s.queueRecentEventSync()
+			s.queueSMDIVSSync()
 		}
 	}
 }
 
 func (s *Service) SyncRecentEventsNow(ctx context.Context) error {
+	return s.SyncSMDIVSNow(ctx)
+}
+
+func (s *Service) SyncSMDIVSNow(ctx context.Context) error {
 	if s == nil {
 		return nil
 	}
-	if !atomic.CompareAndSwapInt32(&s.running, 0, 1) {
-		s.logger.Debug().Msg("archive sync already running")
+	if !atomic.CompareAndSwapInt32(&s.smdIVSRunning, 0, 1) {
+		s.logger.Debug().Msg("archive smd_ivs sync already running")
 		return nil
 	}
-	defer atomic.StoreInt32(&s.running, 0)
+	defer atomic.StoreInt32(&s.smdIVSRunning, 0)
 
 	if !s.cfg.PrefetchSMD && !s.cfg.PrefetchIVS {
 		return nil
 	}
 
+	startedAt := time.Now().UTC()
+	s.logger.Info().
+		Int("device_count", len(s.devices)).
+		Int("prefetch_days", s.cfg.PrefetchDays).
+		Int("max_parallel_jobs", s.cfg.MaxParallelJobs).
+		Bool("prefetch_smd", s.cfg.PrefetchSMD).
+		Bool("prefetch_ivs", s.cfg.PrefetchIVS).
+		Str("db_path", s.cfg.DBPath).
+		Msg("archive smd_ivs sync started")
+
 	var firstErr error
+	enabledDevices := 0
+	scannedChannels := 0
 	for _, device := range s.devices {
 		if !device.EnabledValue() {
+			s.logger.Debug().Str("device_id", device.ID).Msg("archive smd_ivs sync skipped disabled device")
 			continue
 		}
+		enabledDevices++
 		channels := s.channelsForDevice(device)
 		if len(channels) == 0 {
+			s.logger.Warn().
+				Str("device_id", device.ID).
+				Int("allowlist_count", len(device.ChannelAllowlist)).
+				Bool("probe_store_configured", s.probes != nil).
+				Msg("archive smd_ivs sync skipped device with no resolved channels")
 			continue
 		}
+		scannedChannels += len(channels)
+		s.logger.Info().
+			Str("device_id", device.ID).
+			Ints("channels", channels).
+			Msg("archive smd_ivs device channels resolved")
 		for _, channel := range channels {
-			if err := s.syncRecentEventChannel(ctx, device.ID, channel); err != nil {
-				s.logger.Error().Err(err).Str("device_id", device.ID).Int("channel", channel).Msg("archive recent event sync failed")
+			if err := s.syncSMDIVSChannel(ctx, device.ID, channel); err != nil {
+				s.logger.Error().Err(err).Str("device_id", device.ID).Int("channel", channel).Msg("archive smd_ivs sync failed")
 				if firstErr == nil {
 					firstErr = err
 				}
 			}
 		}
+	}
+	if err := s.prefetchPendingEventAssets(ctx); err != nil {
+		s.logger.Error().Err(err).Msg("archive smd_ivs pending mp4 prefetch failed")
+		if firstErr == nil {
+			firstErr = err
+		}
+	}
+	if firstErr == nil {
+		s.logger.Info().
+			Int("enabled_device_count", enabledDevices).
+			Int("channel_count", scannedChannels).
+			Dur("duration", time.Since(startedAt)).
+			Msg("archive smd_ivs sync completed")
 	}
 	return firstErr
 }
@@ -582,34 +634,35 @@ func (s *Service) syncChannel(ctx context.Context, device config.DeviceConfig, c
 	now := time.Now().In(time.Local)
 	windowStart := now.AddDate(0, 0, -s.cfg.PrefetchDays).Truncate(archiveSyncWindow)
 	windowEnd := now
+	startedAt := time.Now()
+	windowCount := 0
+	stats := archiveChunkSyncStats{}
 
-	for from := windowStart; from.Before(windowEnd); from = from.Add(archiveSyncWindow) {
-		to := from.Add(archiveSyncWindow)
-		if to.After(windowEnd) {
-			to = windowEnd
-		}
-		if err := s.syncArchiveWindow(ctx, device.ID, channel, from, to); err != nil {
-			return err
-		}
-		if s.cfg.PrefetchSMD {
-			for _, code := range smdEventCodes {
-				if err := s.syncEventWindow(ctx, device.ID, channel, code, from, to); err != nil {
-					return err
-				}
-			}
-		}
-		if s.cfg.PrefetchIVS {
-			for _, code := range ivsEventCodes {
-				if err := s.syncEventWindow(ctx, device.ID, channel, code, from, to); err != nil {
-					return err
-				}
-			}
-		}
+	err := forArchiveSyncWindows(windowStart, windowEnd, func(from, to time.Time) error {
+		windowCount++
+		windowStats, err := s.syncArchiveWindow(ctx, device.ID, channel, from, to)
+		stats.add(windowStats)
+		return err
+	})
+	if err != nil {
+		return err
 	}
+	s.logger.Info().
+		Str("device_id", device.ID).
+		Int("channel", channel).
+		Str("window_start", windowStart.In(time.Local).Format(archiveTimeLayout)).
+		Str("window_end", windowEnd.In(time.Local).Format(archiveTimeLayout)).
+		Int("window_count", windowCount).
+		Int("query_count", stats.QueryCount).
+		Int("returned_rows", stats.ReturnedRows).
+		Int("accepted_rows", stats.AcceptedRows).
+		Dur("duration", time.Since(startedAt)).
+		Msg("archive recording chunk channel sync completed")
 	return nil
 }
 
-func (s *Service) syncArchiveWindow(ctx context.Context, deviceID string, channel int, startTime time.Time, endTime time.Time) error {
+func (s *Service) syncArchiveWindow(ctx context.Context, deviceID string, channel int, startTime time.Time, endTime time.Time) (archiveChunkSyncStats, error) {
+	stats := archiveChunkSyncStats{QueryCount: 1}
 	result, err := s.searcher.NVRRecordings(ctx, deviceID, dahua.NVRRecordingQuery{
 		Channel:   channel,
 		StartTime: startTime,
@@ -617,16 +670,36 @@ func (s *Service) syncArchiveWindow(ctx context.Context, deviceID string, channe
 		Limit:     archiveQueryLimit,
 	})
 	if err != nil {
-		return fmt.Errorf("search archive files: %w", err)
+		return stats, fmt.Errorf("search archive files: %w", err)
 	}
+	stats.ReturnedRows = len(result.Items)
+	stats.AcceptedRows = countArchiveChunkRecordings(result.Items)
 	now := time.Now().UTC()
 	if err := s.store.UpsertArchiveFiles(ctx, deviceID, result.Items, now); err != nil {
-		return err
+		return stats, err
 	}
-	return s.store.MarkCoverage(ctx, "archive", deviceID, channel, startTime, endTime, now)
+	if stats.ReturnedRows > 0 || stats.AcceptedRows > 0 {
+		s.logger.Info().
+			Str("device_id", deviceID).
+			Int("channel", channel).
+			Str("window_start", startTime.In(time.Local).Format(archiveTimeLayout)).
+			Str("window_end", endTime.In(time.Local).Format(archiveTimeLayout)).
+			Int("returned_rows", stats.ReturnedRows).
+			Int("accepted_rows", stats.AcceptedRows).
+			Msg("archive recording chunk query stored rows")
+	} else {
+		s.logger.Debug().
+			Str("device_id", deviceID).
+			Int("channel", channel).
+			Str("window_start", startTime.In(time.Local).Format(archiveTimeLayout)).
+			Str("window_end", endTime.In(time.Local).Format(archiveTimeLayout)).
+			Msg("archive recording chunk query returned no rows")
+	}
+	return stats, nil
 }
 
-func (s *Service) syncEventWindow(ctx context.Context, deviceID string, channel int, eventCode string, startTime time.Time, endTime time.Time) error {
+func (s *Service) syncEventWindow(ctx context.Context, deviceID string, channel int, eventCode string, startTime time.Time, endTime time.Time) (smdIVSSyncStats, error) {
+	stats := smdIVSSyncStats{QueryCount: 1}
 	result, err := s.searcher.NVRRecordings(ctx, deviceID, dahua.NVRRecordingQuery{
 		Channel:   channel,
 		StartTime: startTime,
@@ -636,44 +709,98 @@ func (s *Service) syncEventWindow(ctx context.Context, deviceID string, channel 
 		EventOnly: true,
 	})
 	if err != nil {
-		return fmt.Errorf("search archive events %q: %w", eventCode, err)
+		return stats, fmt.Errorf("search archive events %q: %w", eventCode, err)
 	}
+	stats.ReturnedRows = len(result.Items)
+	stats.AcceptedRows = countSMDIVSRecordings(result.Items)
 	now := time.Now().UTC()
 	s.populateArchiveEventRTSPURLs(deviceID, result.Items)
 	if err := s.store.UpsertArchiveEvents(ctx, deviceID, result.Items, now); err != nil {
-		return err
-	}
-	if err := s.store.MarkCoverage(ctx, "event:"+normalizeArchiveEventCode(eventCode), deviceID, channel, startTime, endTime, now); err != nil {
-		return err
+		return stats, err
 	}
 	if err := s.prefetchEventAssets(ctx, deviceID, result.Items); err != nil {
-		return err
+		return stats, err
 	}
-	return nil
+	if stats.ReturnedRows > 0 || stats.AcceptedRows > 0 {
+		s.logger.Info().
+			Str("device_id", deviceID).
+			Int("channel", channel).
+			Str("event_code", eventCode).
+			Str("window_start", startTime.In(time.Local).Format(archiveTimeLayout)).
+			Str("window_end", endTime.In(time.Local).Format(archiveTimeLayout)).
+			Int("returned_rows", stats.ReturnedRows).
+			Int("accepted_rows", stats.AcceptedRows).
+			Msg("archive smd_ivs event query stored rows")
+	} else {
+		s.logger.Debug().
+			Str("device_id", deviceID).
+			Int("channel", channel).
+			Str("event_code", eventCode).
+			Str("window_start", startTime.In(time.Local).Format(archiveTimeLayout)).
+			Str("window_end", endTime.In(time.Local).Format(archiveTimeLayout)).
+			Msg("archive smd_ivs event query returned no rows")
+	}
+	return stats, nil
 }
 
-func (s *Service) syncRecentEventChannel(ctx context.Context, deviceID string, channel int) error {
+func (s *Service) syncSMDIVSChannel(ctx context.Context, deviceID string, channel int) error {
 	windowEnd := time.Now().In(time.Local)
-	windowStart := windowEnd.Add(-archiveRecentEventLookbackWindow).Truncate(archiveSyncWindow)
-	for from := windowStart; from.Before(windowEnd); from = from.Add(archiveSyncWindow) {
-		to := from.Add(archiveSyncWindow)
-		if to.After(windowEnd) {
-			to = windowEnd
-		}
+	windowStart := windowEnd.AddDate(0, 0, -s.cfg.PrefetchDays).Truncate(archiveSyncWindow)
+	startedAt := time.Now()
+	windowCount := 0
+	stats := smdIVSSyncStats{}
+	err := forArchiveSyncWindows(windowStart, windowEnd, func(from, to time.Time) error {
+		windowCount++
 		if s.cfg.PrefetchSMD {
 			for _, code := range smdEventCodes {
-				if err := s.syncEventWindow(ctx, deviceID, channel, code, from, to); err != nil {
+				windowStats, err := s.syncEventWindow(ctx, deviceID, channel, code, from, to)
+				stats.add(windowStats)
+				if err != nil {
 					return err
 				}
 			}
 		}
 		if s.cfg.PrefetchIVS {
 			for _, code := range ivsEventCodes {
-				if err := s.syncEventWindow(ctx, deviceID, channel, code, from, to); err != nil {
+				windowStats, err := s.syncEventWindow(ctx, deviceID, channel, code, from, to)
+				stats.add(windowStats)
+				if err != nil {
 					return err
 				}
 			}
 		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	s.logger.Info().
+		Str("device_id", deviceID).
+		Int("channel", channel).
+		Str("window_start", windowStart.In(time.Local).Format(archiveTimeLayout)).
+		Str("window_end", windowEnd.In(time.Local).Format(archiveTimeLayout)).
+		Int("window_count", windowCount).
+		Int("query_count", stats.QueryCount).
+		Int("returned_rows", stats.ReturnedRows).
+		Int("accepted_rows", stats.AcceptedRows).
+		Dur("duration", time.Since(startedAt)).
+		Msg("archive smd_ivs channel sync completed")
+	return nil
+}
+
+func forArchiveSyncWindows(windowStart time.Time, windowEnd time.Time, fn func(time.Time, time.Time) error) error {
+	if !windowEnd.After(windowStart) {
+		return nil
+	}
+	for to := windowEnd; to.After(windowStart); {
+		from := to.Add(-archiveSyncWindow)
+		if from.Before(windowStart) {
+			from = windowStart
+		}
+		if err := fn(from, to); err != nil {
+			return err
+		}
+		to = from
 	}
 	return nil
 }
@@ -789,6 +916,14 @@ func resolveClipPrefetcher(searcher Searcher) ClipPrefetcher {
 	return prefetcher
 }
 
+func resolveClipStatusReader(searcher Searcher) ClipStatusReader {
+	reader, ok := searcher.(ClipStatusReader)
+	if !ok {
+		return nil
+	}
+	return reader
+}
+
 func parseArchiveLocalTime(value string) (time.Time, bool) {
 	parsed, err := time.ParseInLocation(archiveTimeLayout, strings.TrimSpace(value), time.Local)
 	if err != nil {
@@ -814,6 +949,9 @@ func (s *Service) prefetchEventAssets(ctx context.Context, deviceID string, item
 		return nil
 	}
 
+	if err := s.refreshActiveClipAssets(ctx); err != nil {
+		s.logger.Warn().Err(err).Msg("archive event active clip refresh failed")
+	}
 	storedAssets, err := s.store.LoadClipAssets(ctx, deviceID, pending)
 	if err != nil {
 		return err
@@ -845,15 +983,128 @@ func (s *Service) prefetchEventAssets(ctx context.Context, deviceID string, item
 			s.logger.Warn().Err(err).Str("device_id", deviceID).Str("record_id", item.ID).Str("clip_id", clip.ID).Msg("archive prefetched asset upsert failed")
 			continue
 		}
-		if clip.Status == mediaapi.ClipStatusRecording {
+		if isActiveArchiveAssetState(string(clip.Status)) {
 			activeJobs++
 		}
 	}
 	return nil
 }
 
+func (s *Service) prefetchPendingEventAssets(ctx context.Context) error {
+	if s == nil || s.store == nil || s.clips == nil {
+		return nil
+	}
+	if err := s.refreshActiveClipAssets(ctx); err != nil {
+		s.logger.Warn().Err(err).Msg("archive event active clip refresh failed")
+	}
+	activeJobs, err := s.store.CountActiveClipJobs(ctx)
+	if err != nil {
+		return err
+	}
+	maxActiveJobs := max(0, s.cfg.MaxParallelJobs)
+	limit := archiveQueryLimit
+	if maxActiveJobs > 0 {
+		if activeJobs >= maxActiveJobs {
+			s.logger.Info().
+				Int("active_jobs", activeJobs).
+				Int("max_parallel_jobs", maxActiveJobs).
+				Msg("archive smd_ivs pending mp4 prefetch waiting for active jobs")
+			return nil
+		}
+		limit = maxActiveJobs - activeJobs
+	}
+	cutoff := time.Now().In(time.Local).AddDate(0, 0, -s.cfg.PrefetchDays)
+	candidates, err := s.store.LoadPendingEventClipCandidates(ctx, cutoff, limit)
+	if err != nil {
+		return err
+	}
+	s.logger.Info().
+		Int("active_jobs", activeJobs).
+		Int("max_parallel_jobs", maxActiveJobs).
+		Int("candidate_limit", limit).
+		Int("candidate_count", len(candidates)).
+		Str("cutoff", cutoff.Format(archiveTimeLayout)).
+		Msg("archive smd_ivs pending mp4 candidates loaded")
+	if len(candidates) == 0 {
+		return nil
+	}
+
+	itemsByDevice := make(map[string][]dahua.NVRRecording)
+	deviceOrder := make([]string, 0)
+	for _, candidate := range candidates {
+		deviceID := strings.TrimSpace(candidate.DeviceID)
+		if deviceID == "" {
+			continue
+		}
+		if _, ok := itemsByDevice[deviceID]; !ok {
+			deviceOrder = append(deviceOrder, deviceID)
+		}
+		itemsByDevice[deviceID] = append(itemsByDevice[deviceID], candidate.Item)
+	}
+	for _, deviceID := range deviceOrder {
+		if err := s.prefetchEventAssets(ctx, deviceID, itemsByDevice[deviceID]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Service) refreshActiveClipAssets(ctx context.Context) error {
+	if s == nil || s.store == nil || s.clipInfo == nil {
+		return nil
+	}
+	limit := max(archiveQueryLimit, max(1, s.cfg.MaxParallelJobs)*4)
+	assets, err := s.store.LoadActiveEventClipAssets(ctx, limit)
+	if err != nil {
+		return err
+	}
+	for _, asset := range assets {
+		clip, err := s.clipInfo.GetClip(asset.ClipID)
+		if err != nil {
+			if deleteErr := s.store.DeleteClipAsset(ctx, asset.RecordKind, asset.RecordID, asset.DeviceID); deleteErr != nil {
+				s.logger.Warn().Err(deleteErr).Str("device_id", asset.DeviceID).Str("record_id", asset.RecordID).Str("clip_id", asset.ClipID).Msg("archive stale active clip cleanup failed")
+			}
+			continue
+		}
+		if strings.TrimSpace(clip.ID) == "" {
+			continue
+		}
+		if err := s.store.UpsertClipAsset(ctx, asset.RecordKind, asset.RecordID, asset.DeviceID, asset.SourceFilePath, clip); err != nil {
+			s.logger.Warn().Err(err).Str("device_id", asset.DeviceID).Str("record_id", asset.RecordID).Str("clip_id", asset.ClipID).Msg("archive active clip refresh upsert failed")
+		}
+	}
+	return nil
+}
+
+func countSMDIVSRecordings(items []dahua.NVRRecording) int {
+	count := 0
+	for _, item := range items {
+		if isSMDIVSRecording(item) {
+			count++
+		}
+	}
+	return count
+}
+
+func countArchiveChunkRecordings(items []dahua.NVRRecording) int {
+	count := 0
+	for _, item := range items {
+		if shouldTreatAsEvent(item) {
+			continue
+		}
+		if strings.TrimSpace(item.FilePath) == "" || item.Channel <= 0 {
+			continue
+		}
+		if strings.TrimSpace(item.StartTime) == "" || strings.TrimSpace(item.EndTime) == "" {
+			continue
+		}
+		count++
+	}
+	return count
+}
+
 func shouldPrefetchArchiveEventClip(item dahua.NVRRecording) bool {
-	if !strings.EqualFold(strings.TrimSpace(item.RecordKind), "event") {
+	if normalizeArchiveRecordKind(item.RecordKind) != "smd_ivs" {
 		return false
 	}
 	if item.Channel <= 0 {

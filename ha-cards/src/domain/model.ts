@@ -113,6 +113,7 @@ export interface CameraViewModel {
   eventCount24h: number;
   humanCount24h: number;
   vehicleCount24h: number;
+  ivsCount24h: number;
 }
 
 export interface CameraAuxTargetViewModel {
@@ -147,6 +148,8 @@ export interface CameraRecordingViewModel {
 export interface CameraArchiveViewModel {
   supported: boolean;
   searchUrl: string | null;
+  smdIvsUrl: string | null;
+  chunksUrl: string | null;
   playbackUrl: string | null;
   coverageUrl: string | null;
   channel: number | null;
@@ -601,6 +604,7 @@ function buildCameraViewModel(
     eventCount24h: eventSummary?.totalCount ?? 0,
     humanCount24h: eventSummary?.humanCount ?? 0,
     vehicleCount24h: eventSummary?.vehicleCount ?? 0,
+    ivsCount24h: eventSummary?.ivsCount ?? 0,
   };
 }
 
@@ -739,13 +743,11 @@ function buildCameraStreamViewModel(
 function streamProfileDisplayName(key: string, fallback: string | null): string {
   switch (key.trim().toLowerCase()) {
     case "quality":
-      return "Quality (Main Stream)";
     case "default":
-      return "Default (Main Stream)";
+      return "Quality (Main Stream)";
     case "stable":
-      return "Stable (Substream)";
     case "substream":
-      return "Substream (Native)";
+      return "Stable (Substream)";
     default:
       return fallback?.trim() || key.trim();
   }
@@ -754,15 +756,13 @@ function streamProfileDisplayName(key: string, fallback: string | null): string 
 function streamProfileSortRank(key: string): number {
   switch (key.trim().toLowerCase()) {
     case "quality":
-      return 0;
     case "default":
-      return 1;
+      return 0;
     case "stable":
-      return 2;
     case "substream":
-      return 3;
+      return 1;
     default:
-      return 4;
+      return 2;
   }
 }
 
@@ -837,9 +837,11 @@ function buildCameraArchiveViewModel(
   return {
     supported: archive.supported,
     searchUrl: rewriteBridgeUrl(archive.search.url, browserBridgeUrl),
+    smdIvsUrl: rewriteBridgeUrl(archive.smdIvsSearch.url, browserBridgeUrl),
+    chunksUrl: rewriteBridgeUrl(archive.chunkSearch.url, browserBridgeUrl),
     playbackUrl: rewriteBridgeUrl(archive.playback.url, browserBridgeUrl),
     coverageUrl: rewriteBridgeUrl(archive.coverage.url, browserBridgeUrl),
-    channel: archive.search.channel ?? archive.playback.channel,
+    channel: archive.search.channel ?? archive.smdIvsSearch.channel ?? archive.chunkSearch.channel ?? archive.playback.channel,
     defaultLimit: archive.search.defaultLimit,
   };
 }

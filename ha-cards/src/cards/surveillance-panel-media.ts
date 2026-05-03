@@ -84,6 +84,28 @@ export function renderNativePlaybackViewport(
   `;
 }
 
+export function renderTimeframePlaybackViewport(
+  playbackUrl: string,
+  label: string,
+  muted: boolean,
+): TemplateResult {
+  const normalizedUrl = playbackUrl.trim();
+  if (!normalizedUrl) {
+    return html`<div class="viewport empty">Archive stream unavailable.</div>`;
+  }
+
+  return renderRemoteStream(
+    {
+      cacheKey: `archive-timeframe:${normalizedUrl}`,
+      alt: label,
+      fallbackImageUrl: null,
+      className: "playback-stream archive-timeframe-stream",
+      sources: [{ kind: "mjpeg", url: normalizedUrl }],
+    },
+    { muted, controls: true, preload: "auto" },
+  );
+}
+
 export function renderSelectedCameraViewport(
   hass: HomeAssistant | undefined,
   camera: CameraViewModel,

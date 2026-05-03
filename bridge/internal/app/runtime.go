@@ -327,6 +327,16 @@ func (r *runtimeServices) NVRDownloadRecordingIFrame(ctx context.Context, device
 	return downloader.DownloadRecordingIFrame(ctx, request)
 }
 
+func (r *runtimeServices) GetClip(clipID string) (media.ClipInfo, error) {
+	r.mu.RLock()
+	mediaReader := r.media
+	r.mu.RUnlock()
+	if mediaReader == nil {
+		return media.ClipInfo{}, fmt.Errorf("media layer is not configured")
+	}
+	return mediaReader.GetClip(clipID)
+}
+
 func (r *runtimeServices) TrackNVRArchiveClip(ctx context.Context, deviceID string, request dahua.NVRPlaybackSessionRequest, clip media.ClipInfo) error {
 	r.mu.RLock()
 	archiveReader := r.archive
@@ -593,6 +603,7 @@ func (r *runtimeServices) ListStreams(includeCredentials bool) []streams.Entry {
 }
 
 func (r *runtimeServices) GetStream(streamID string, profileName string, includeCredentials bool) (streams.Entry, streams.Profile, bool) {
+	profileName = normalizeRequestedProfileName(profileName)
 	if entry, profile, ok := r.getPlaybackStream(streamID, profileName, includeCredentials); ok {
 		return entry, profile, true
 	}
@@ -607,7 +618,7 @@ func (r *runtimeServices) GetStream(streamID string, profileName string, include
 			return entry, profile, true
 		}
 		if profileName == "" {
-			profile, ok = entry.Profiles["stable"]
+			profile, ok = entry.Profiles[firstNonEmptyProfile(entry.RecommendedProfile, "stable")]
 			return entry, profile, ok
 		}
 		return streams.Entry{}, streams.Profile{}, false
@@ -748,8 +759,8 @@ func buildMediaRecordingStopURL(publicBaseURL string, clipID string) string {
 
 func firstNonEmptyProfile(values ...string) string {
 	for _, value := range values {
-		if strings.TrimSpace(value) != "" {
-			return value
+		if normalized := normalizeRequestedProfileName(value); normalized != "" {
+			return normalized
 		}
 	}
 	return "stable"
@@ -757,7 +768,7 @@ func firstNonEmptyProfile(values ...string) string {
 
 func bestCaptureProfile(entry streams.Entry) string {
 	if len(entry.Profiles) == 0 {
-		return firstNonEmptyProfile(entry.RecommendedProfile, "quality", "default", "stable", "substream")
+		return firstNonEmptyProfile(entry.RecommendedProfile, "quality", "stable")
 	}
 
 	bestName := ""
@@ -778,7 +789,7 @@ func bestCaptureProfile(entry streams.Entry) string {
 		}
 	}
 
-	for _, name := range []string{"quality", "default", "stable", "substream"} {
+	for _, name := range []string{"quality", "stable"} {
 		if profile, ok := entry.Profiles[name]; ok {
 			consider(name, profile)
 		}
@@ -787,7 +798,7 @@ func bestCaptureProfile(entry streams.Entry) string {
 	extraNames := make([]string, 0, len(entry.Profiles))
 	for name := range entry.Profiles {
 		switch name {
-		case "quality", "default", "stable", "substream":
+		case "quality", "stable":
 			continue
 		default:
 			extraNames = append(extraNames, name)
@@ -798,7 +809,7 @@ func bestCaptureProfile(entry streams.Entry) string {
 		consider(name, entry.Profiles[name])
 	}
 
-	return firstNonEmptyProfile(bestName, entry.RecommendedProfile, "quality", "default", "stable", "substream")
+	return firstNonEmptyProfile(bestName, entry.RecommendedProfile, "quality", "stable")
 }
 
 func profileArea(profile streams.Profile) int {
@@ -812,17 +823,26 @@ func captureProfileRank(name string, recommended string) int {
 	switch strings.ToLower(strings.TrimSpace(name)) {
 	case "quality":
 		return 0
-	case "default":
-		return 1
 	case "stable":
-		return 2
-	case "substream":
-		return 3
+		return 1
 	}
 	if strings.EqualFold(strings.TrimSpace(name), strings.TrimSpace(recommended)) {
-		return 4
+		return 2
 	}
-	return 5
+	return 3
+}
+
+func normalizeRequestedProfileName(profileName string) string {
+	switch strings.ToLower(strings.TrimSpace(profileName)) {
+	case "", "quality", "stable":
+		return strings.TrimSpace(profileName)
+	case "default", "main":
+		return "quality"
+	case "substream", "sub":
+		return "stable"
+	default:
+		return strings.TrimSpace(profileName)
+	}
 }
 
 func firstNonEmptyTime(values ...time.Time) time.Time {

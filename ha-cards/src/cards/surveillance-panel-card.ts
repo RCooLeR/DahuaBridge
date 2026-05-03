@@ -1,9 +1,9 @@
 import { html, LitElement, nothing } from "lit";
+import { keyed } from "lit/directives/keyed.js";
 import { repeat } from "lit/directives/repeat.js";
 import type { TemplateResult } from "lit";
 
 import { createSurveillancePanelStubConfig } from "./surveillance-panel-card-editor";
-import "./surveillance-panel-archive-seek";
 import { SurveillancePanelActions } from "./surveillance-panel-actions";
 import { SurveillancePanelRuntime } from "./surveillance-panel-runtime";
 import { surveillancePanelStyles } from "./surveillance-panel-styles";
@@ -30,7 +30,7 @@ import {
   preserveCameraViewportSourceSelectionOnProfileChange,
   preservePlaybackViewportSourceSelection,
   renderClipPlaybackViewport,
-  renderNativePlaybackViewport,
+  renderTimeframePlaybackViewport,
   renderPlaybackViewport,
   renderSelectedCameraViewport,
   renderSelectedVtoViewport,
@@ -51,7 +51,6 @@ import {
 } from "./surveillance-panel-primitives";
 import type { BridgeEvent } from "../ha/bridge-events";
 import type {
-  NvrArchiveCoverageModel,
   NvrArchiveExportClipModel,
   BridgeRecordingClipListModel,
   BridgeRecordingClipModel,
@@ -61,7 +60,6 @@ import type {
 } from "../domain/archive";
 import {
   exportArchiveRecording,
-  fetchArchiveCoverage,
   fetchArchiveRecordings,
   fetchBridgeRecordings,
   waitForArchiveExportCompletion,
@@ -139,17 +137,14 @@ const EVENT_WINDOW_OPTIONS = [
 const ARCHIVE_PAGE_SIZE = 20;
 const MP4_PAGE_SIZE = 20;
 const ARCHIVE_SEEK_MAX_LOOKBACK_DAYS = 90;
-const DEFAULT_ARCHIVE_SEEK_WINDOW_HOURS = 24;
 
 const ARCHIVE_EVENT_TYPE_OPTIONS = [
-  { value: EVENT_FILTER_ALL, label: "All event types" },
+  { value: EVENT_FILTER_ALL, label: "All SMD/IVS" },
   { value: "smdTypeHuman", label: "Human" },
   { value: "smdTypeVehicle", label: "Vehicle" },
   { value: "smdTypeAnimal", label: "Animal" },
   { value: "CrossLineDetection", label: "Cross Line" },
   { value: "CrossRegionDetection", label: "Cross Region" },
-  { value: "LeftDetection", label: "Left Detection" },
-  { value: "MoveDetection", label: "Motion Detection" },
 ] as const;
 
 const ACTION_STATE_OVERRIDE_TTL_MS = 10_000;
@@ -194,8 +189,6 @@ export class DahuaBridgeSurveillancePanelCard
   private _remoteStreamSyncTimer: number | null = null;
   private _archiveAbort?: AbortController;
   private _archiveRequestVersion = 0;
-  private _archiveCoverageAbort?: AbortController;
-  private _archiveCoverageRequestVersion = 0;
   private _mp4Abort?: AbortController;
   private _mp4RequestVersion = 0;
   private _todayEventSummaryAbort?: AbortController;
@@ -224,6 +217,7 @@ export class DahuaBridgeSurveillancePanelCard
     _eventCodeFilter: { state: true },
     _archiveEventCodeFilter: { state: true },
     _archiveDate: { state: true },
+    _archiveSeekSecond: { state: true },
     _archivePage: { state: true },
     _selection: { state: true },
     _sidebarFilter: { state: true },
@@ -238,11 +232,6 @@ export class DahuaBridgeSurveillancePanelCard
     _archiveRecordings: { state: true },
     _archiveLoading: { state: true },
     _archiveError: { state: true },
-    _archiveCoverage: { state: true },
-    _archiveCoverageLoading: { state: true },
-    _archiveCoverageError: { state: true },
-    _archiveSeekWindowStartIndex: { state: true },
-    _archiveSeekWindowEndIndex: { state: true },
     _bridgeRecordings: { state: true },
     _bridgeRecordingsLoading: { state: true },
     _bridgeRecordingsError: { state: true },
@@ -280,6 +269,7 @@ export class DahuaBridgeSurveillancePanelCard
   private _eventCodeFilter = defaultTimelineEventFilters().eventCode;
   private _archiveEventCodeFilter = defaultTimelineEventFilters().eventCode;
   private _archiveDate = todayDateInputValue();
+  private _archiveSeekSecond = archiveCurrentTimeOfDaySecond();
   private _archivePage = 0;
   private _selection: PanelSelection = { kind: "overview" };
   private _sidebarFilter: SidebarFilter = "all";
@@ -294,11 +284,6 @@ export class DahuaBridgeSurveillancePanelCard
   private _archiveRecordings: NvrArchiveSearchResultModel | null = null;
   private _archiveLoading = false;
   private _archiveError = "";
-  private _archiveCoverage: NvrArchiveCoverageModel | null = null;
-  private _archiveCoverageLoading = false;
-  private _archiveCoverageError = "";
-  private _archiveSeekWindowStartIndex: number | null = null;
-  private _archiveSeekWindowEndIndex: number | null = null;
   private _bridgeRecordings: BridgeRecordingClipListModel | null = null;
   private _bridgeRecordingsLoading = false;
   private _bridgeRecordingsError = "";
@@ -367,7 +352,6 @@ export class DahuaBridgeSurveillancePanelCard
 
   setConfig(config: LovelaceCardConfig): void {
     this.cancelArchiveRefresh();
-    this.cancelArchiveCoverageRefresh();
     this.cancelMp4Refresh();
     this.cancelTodayEventSummaryRefresh();
     this._config = parseConfig(config);
@@ -380,6 +364,7 @@ export class DahuaBridgeSurveillancePanelCard
     this.resetEventFilters();
     this._archiveEventCodeFilter = defaultTimelineEventFilters().eventCode;
     this._archiveDate = todayDateInputValue();
+    this._archiveSeekSecond = archiveCurrentTimeOfDaySecond();
     this._archivePage = 0;
     this._selection = { kind: "overview" };
     this._detailTab = "overview";
@@ -389,11 +374,6 @@ export class DahuaBridgeSurveillancePanelCard
     this._archiveRecordings = null;
     this._archiveLoading = false;
     this._archiveError = "";
-    this._archiveCoverage = null;
-    this._archiveCoverageLoading = false;
-    this._archiveCoverageError = "";
-    this._archiveSeekWindowStartIndex = null;
-    this._archiveSeekWindowEndIndex = null;
     this._bridgeRecordings = null;
     this._bridgeRecordingsLoading = false;
     this._bridgeRecordingsError = "";
@@ -429,7 +409,6 @@ export class DahuaBridgeSurveillancePanelCard
       this._remoteStreamSyncTimer = null;
     }
     this.cancelArchiveRefresh();
-    this.cancelArchiveCoverageRefresh();
     this.cancelMp4Refresh();
     this.cancelTodayEventSummaryRefresh();
     void this.stopSelectedVtoMicrophone();
@@ -448,14 +427,6 @@ export class DahuaBridgeSurveillancePanelCard
       (changedProperties.has("hass") && this._runtime.needsPollingRestartAfterHassChange())
     ) {
       this._runtime.handleEventContextChanged();
-    }
-    if (
-      changedProperties.has("_selection") ||
-      changedProperties.has("_config") ||
-      changedProperties.has("hass") ||
-      changedProperties.has("_nvrArchiveChannelNumber")
-    ) {
-      void this.refreshArchiveCoverage();
     }
     if (
       changedProperties.has("_selection") ||
@@ -625,7 +596,7 @@ export class DahuaBridgeSurveillancePanelCard
       const selectedStreamSource =
         selectedPlayback === null
           ? selectedNativePlayback !== null
-            ? "native"
+            ? "mjpeg"
             : resolveSelectedCameraViewportSource(
                 camera,
                 this._selectedCameraStreamSource,
@@ -639,7 +610,7 @@ export class DahuaBridgeSurveillancePanelCard
       const availableStreamSources =
         selectedPlayback === null
           ? selectedNativePlayback !== null
-            ? (["native"] satisfies CameraViewportSource[])
+            ? (["mjpeg"] satisfies CameraViewportSource[])
             : availableCameraViewportSources(camera, selectedStreamProfileKey)
           : availablePlaybackViewportSources(
               selectedPlayback.session,
@@ -814,11 +785,14 @@ export class DahuaBridgeSurveillancePanelCard
                         displayCameraLabel(camera),
                         this._selectedCameraAudioMuted,
                       )
-                  : selectedNativePlayback?.streamSource && camera.cameraEntity
-                    ? renderNativePlaybackViewport(
-                        this.hass,
-                        camera.cameraEntity,
+                  : selectedNativePlayback?.streamSource
+                    ? keyed(
                         selectedNativePlayback.streamSource,
+                        renderTimeframePlaybackViewport(
+                          selectedNativePlayback.streamSource,
+                          displayCameraLabel(camera),
+                          this._selectedCameraAudioMuted,
+                        ),
                       )
                   : renderSelectedCameraViewport(
                       this.hass,
@@ -1047,7 +1021,7 @@ export class DahuaBridgeSurveillancePanelCard
                       `}
                 </div>
               </div>
-              ${this.renderArchiveSeekPanel(camera, selectedPlayback, selectedNativePlayback)}
+              ${this.renderArchiveSeekPanel(camera)}
             </div>
           </div>
         </section>
@@ -1456,7 +1430,7 @@ export class DahuaBridgeSurveillancePanelCard
     const page = boundedPageIndex(this._archivePage, pageCount);
 
     return renderArchiveRecordings({
-      title: "Events",
+      title: "SMD/IVS",
       archiveRecordings: this._archiveRecordings,
       archiveLoading: this._archiveLoading,
       archiveError: this._archiveError,
@@ -1543,6 +1517,8 @@ export class DahuaBridgeSurveillancePanelCard
       isPlaybackActive: (recording) => this.isBridgeRecordingPlaybackActive(recording),
       isDownloadingRecording: (recording) =>
         this.isBusy(this.bridgeRecordingDownloadBusyKey(recording)),
+      isDeletingRecording: (recording) =>
+        this.isBusy(this.bridgeRecordingDeleteBusyKey(recording)),
       onSelectDate: (value) => this.selectArchiveDate(value),
       onSelectPage: (nextPage) => this.selectMp4Page(nextPage),
       onPlayRecording: (recording) => {
@@ -1550,6 +1526,9 @@ export class DahuaBridgeSurveillancePanelCard
       },
       onDownloadRecording: (recording) => {
         this.downloadBridgeRecording(recording);
+      },
+      onDeleteRecording: (recording) => {
+        void this.deleteBridgeRecording(recording);
       },
       renderIcon: (icon) => this.renderIcon(icon),
     });
@@ -1900,8 +1879,6 @@ export class DahuaBridgeSurveillancePanelCard
   private clearCameraSelectionState(): void {
     this._selectedCameraStreamProfile = null;
     this._selectedCameraStreamSource = null;
-    this._archiveSeekWindowStartIndex = null;
-    this._archiveSeekWindowEndIndex = null;
   }
 
   private clearVtoSelectionState(): void {
@@ -2031,6 +2008,10 @@ export class DahuaBridgeSurveillancePanelCard
     }
     const previousDate = this._archiveDate;
     this._archiveDate = nextDate;
+    this._archiveSeekSecond = Math.min(
+      this._archiveSeekSecond,
+      archiveMaxSecondForDate(nextDate),
+    );
     this._archivePage = 0;
     this._mp4Page = 0;
     this.requestUpdate("_archiveDate", previousDate);
@@ -2056,98 +2037,6 @@ export class DahuaBridgeSurveillancePanelCard
     const previousPage = this._mp4Page;
     this._mp4Page = nextPage;
     this.requestUpdate("_mp4Page", previousPage);
-  }
-
-  private async refreshArchiveCoverage(): Promise<void> {
-    if (!this.hass || !this._config) {
-      this.cancelArchiveCoverageRefresh();
-      this._archiveCoverage = null;
-      this._archiveCoverageLoading = false;
-      this._archiveCoverageError = "";
-      this._archiveSeekWindowStartIndex = null;
-      this._archiveSeekWindowEndIndex = null;
-      return;
-    }
-
-    if (this._selection.kind !== "camera" && this._selection.kind !== "nvr") {
-      this.cancelArchiveCoverageRefresh();
-      this._archiveCoverage = null;
-      this._archiveCoverageLoading = false;
-      this._archiveCoverageError = "";
-      this._archiveSeekWindowStartIndex = null;
-      this._archiveSeekWindowEndIndex = null;
-      return;
-    }
-
-    const model = buildPanelModel(
-      this.hass,
-      this._config,
-      this._selection,
-      this._bridgeEvents,
-      this._eventWindowHours,
-      this._registrySnapshot,
-    );
-    const archiveSource = this.resolveArchiveSource(model);
-    if (!archiveSource?.archive?.coverageUrl || archiveSource.archive.channel === null) {
-      this.cancelArchiveCoverageRefresh();
-      this._archiveCoverage = null;
-      this._archiveCoverageLoading = false;
-      this._archiveCoverageError = "";
-      this._archiveSeekWindowStartIndex = null;
-      this._archiveSeekWindowEndIndex = null;
-      return;
-    }
-
-    this.cancelArchiveCoverageRefresh();
-    const controller = new AbortController();
-    this._archiveCoverageAbort = controller;
-    const requestVersion = ++this._archiveCoverageRequestVersion;
-    this._archiveCoverageLoading = true;
-    this._archiveCoverageError = "";
-
-    try {
-      const coverage = await fetchArchiveCoverage(
-        archiveSource.archive.coverageUrl,
-        archiveSource.archive.channel,
-        controller.signal,
-      );
-      if (
-        controller.signal.aborted ||
-        this._archiveCoverageAbort !== controller ||
-        requestVersion !== this._archiveCoverageRequestVersion
-      ) {
-        return;
-      }
-
-      this._archiveCoverage = coverage;
-      this._archiveCoverageError = "";
-    } catch (error) {
-      if (
-        controller.signal.aborted ||
-        this._archiveCoverageAbort !== controller ||
-        requestVersion !== this._archiveCoverageRequestVersion
-      ) {
-        return;
-      }
-      this._archiveCoverage = null;
-      this._archiveCoverageError =
-        error instanceof Error ? error.message : "Archive coverage request failed.";
-      this._archiveSeekWindowStartIndex = null;
-      this._archiveSeekWindowEndIndex = null;
-    } finally {
-      if (
-        this._archiveCoverageAbort === controller &&
-        requestVersion === this._archiveCoverageRequestVersion
-      ) {
-        this._archiveCoverageAbort = undefined;
-        this._archiveCoverageLoading = false;
-      }
-    }
-  }
-
-  private cancelArchiveCoverageRefresh(): void {
-    this._archiveCoverageAbort?.abort();
-    this._archiveCoverageAbort = undefined;
   }
 
   private async refreshArchiveRecordings(): Promise<void> {
@@ -2195,7 +2084,11 @@ export class DahuaBridgeSurveillancePanelCard
             this._nvrArchiveChannelNumber = resolvedArchiveCamera.nextChannelNumber;
             return resolvedArchiveCamera.camera;
           })();
-    if (!archiveSource?.archive?.searchUrl || archiveSource.archive.channel === null) {
+    const eventOnly = this._selection.kind === "camera" && this._detailTab === "events";
+    const archiveSearchUrl = eventOnly
+      ? archiveSource?.archive?.smdIvsUrl ?? null
+      : archiveSource?.archive?.chunksUrl ?? archiveSource?.archive?.searchUrl ?? null;
+    if (!archiveSource?.archive || !archiveSearchUrl || archiveSource.archive.channel === null) {
       this.cancelArchiveRefresh();
       this._archiveRecordings = null;
       this._archiveLoading = false;
@@ -2215,7 +2108,6 @@ export class DahuaBridgeSurveillancePanelCard
       this._selection.kind === "camera" && this._detailTab === "events"
         ? this._archiveEventCodeFilter
         : EVENT_FILTER_ALL;
-    const eventOnly = this._selection.kind === "camera" && this._detailTab === "events";
 
     try {
       this.logMedia("card panel archive recordings refresh started", {
@@ -2227,7 +2119,7 @@ export class DahuaBridgeSurveillancePanelCard
         event_only: eventOnly,
       });
       const recordings = await fetchArchiveRecordings(
-        archiveSource.archive.searchUrl,
+        archiveSearchUrl,
         {
           channel: archiveSource.archive.channel,
           startTime,
@@ -2348,6 +2240,9 @@ export class DahuaBridgeSurveillancePanelCard
         },
         controller.signal,
       );
+      const filteredItems = recordings.items.filter(
+        (item) => !item.streamId.trim().toLowerCase().startsWith("nvr_export_"),
+      );
       if (
         controller.signal.aborted ||
         this._mp4Abort !== controller ||
@@ -2355,11 +2250,15 @@ export class DahuaBridgeSurveillancePanelCard
       ) {
         return;
       }
-      this._bridgeRecordings = recordings;
+      this._bridgeRecordings = {
+        ...recordings,
+        returnedCount: filteredItems.length,
+        items: filteredItems,
+      };
       this._bridgeRecordingsError = "";
       this.logMedia("card panel bridge recordings refresh completed", {
         device_id: camera.deviceId,
-        count: recordings.items.length,
+        count: filteredItems.length,
       });
     } catch (error) {
       if (
@@ -2566,10 +2465,22 @@ export class DahuaBridgeSurveillancePanelCard
     return `bridge-recording-download:${recording.id}`;
   }
 
+  private bridgeRecordingDeleteBusyKey(recording: { id: string }): string {
+    return `bridge-recording-delete:${recording.id}`;
+  }
+
   private async launchPlaybackSession(
     model: PanelModel,
     recording: NvrArchiveRecordingModel,
   ): Promise<void> {
+    if (this.isArchiveEventRecording(recording)) {
+      const archiveSource = this.resolveArchiveSource(model);
+      if (archiveSource) {
+        this.activateArchiveSourceForPlayback(archiveSource);
+        await this.startNativeArchiveEventPlayback(archiveSource, recording);
+        return;
+      }
+    }
     if (this.isArchiveEventRecording(recording) && recording.assetPlaybackUrl) {
       const archiveSource = this.resolveArchiveSource(model);
       this.playIndexedArchiveRecording(model, recording, archiveSource?.deviceId ?? null, archiveSource?.rootDeviceId ?? null);
@@ -2739,6 +2650,7 @@ export class DahuaBridgeSurveillancePanelCard
           fileName: null,
           playbackUrl: completedClip.playbackUrl,
           downloadUrl: completedClip.downloadUrl,
+          deleteUrl: null,
           selfUrl: completedClip.selfUrl,
           stopUrl: null,
           error: completedClip.error,
@@ -2817,6 +2729,71 @@ export class DahuaBridgeSurveillancePanelCard
     });
   }
 
+  private activateArchiveSourceForPlayback(archiveSource: CameraViewModel): void {
+    const previousSelection = this._selection;
+    const nextState = selectCameraState(archiveSource);
+    const detailTab =
+      this._detailTab === "events" || this._detailTab === "recordings"
+        ? this._detailTab
+        : nextState.detailTab;
+    const cameraProfile =
+      this._selectedCameraStreamProfile ??
+      defaultSelectedStreamProfileKey(archiveSource.stream) ??
+      null;
+    this.resetSharedSelectionViewState();
+    this.clearVtoSelectionState();
+    this.applySelectionTransition(
+      {
+        ...nextState,
+        detailTab,
+      },
+      {
+        openInspector: true,
+        cameraProfile,
+        cameraSource: "native",
+      },
+    );
+    this.requestUpdate("_selection", previousSelection);
+  }
+
+  private async deleteBridgeRecording(recording: BridgeRecordingClipModel): Promise<void> {
+    if (!recording.deleteUrl) {
+      return;
+    }
+
+    const busyKey = this.bridgeRecordingDeleteBusyKey(recording);
+    if (this.isBusy(busyKey)) {
+      return;
+    }
+
+    const nextBusy = new Set(this._busyActions);
+    nextBusy.add(busyKey);
+    this._busyActions = nextBusy;
+    this._errorMessage = "";
+
+    try {
+      this.logMedia("card panel bridge recording delete request", {
+        recording_id: recording.id,
+        url: redactUrlForLog(recording.deleteUrl),
+      });
+      await postBridgeRequest(recording.deleteUrl, { method: "DELETE" });
+      if (this._selectedBridgeRecordingPlayback?.recording.id === recording.id) {
+        this._selectedBridgeRecordingPlayback = null;
+      }
+      await this.refreshBridgeRecordings();
+      this.logMedia("card panel bridge recording delete completed", {
+        recording_id: recording.id,
+      });
+    } catch (error) {
+      this._errorMessage =
+        error instanceof Error ? error.message : "Bridge MP4 delete request failed.";
+    } finally {
+      const reducedBusy = new Set(this._busyActions);
+      reducedBusy.delete(busyKey);
+      this._busyActions = reducedBusy;
+    }
+  }
+
   private async stopBridgeRecording(recording: BridgeRecordingClipModel): Promise<void> {
     if (!recording.stopUrl) {
       return;
@@ -2891,6 +2868,13 @@ export class DahuaBridgeSurveillancePanelCard
 
   private isPlaybackActive(recording: NvrArchiveRecordingModel): boolean {
     if (recording.assetClipId && this._selectedBridgeRecordingPlayback?.recording.id === recording.assetClipId) {
+      return true;
+    }
+    if (
+      this._selectedNativePlayback &&
+      this._selectedNativePlayback.startTime === recording.startTime &&
+      this._selectedNativePlayback.endTime === recording.endTime
+    ) {
       return true;
     }
     if (!this._selectedPlayback) {
@@ -3073,6 +3057,7 @@ export class DahuaBridgeSurveillancePanelCard
         fileName: null,
         playbackUrl: recording.assetPlaybackUrl ?? null,
         downloadUrl: recording.assetDownloadUrl ?? null,
+        deleteUrl: null,
         selfUrl: recording.assetSelfUrl ?? null,
         stopUrl: recording.assetStopUrl ?? null,
         error: recording.assetError ?? null,
@@ -3087,96 +3072,88 @@ export class DahuaBridgeSurveillancePanelCard
     });
   }
 
-  private renderArchiveSeekPanel(
-    camera: CameraViewModel,
-    selectedPlayback: SelectedPlaybackState | null,
-    selectedNativePlayback: SelectedNativePlaybackState | null,
-  ): TemplateResult | typeof nothing {
-    const coverage = this._archiveCoverage;
-    const recentChunks = limitCoverageChunksToLookback(
-      coverage?.chunks ?? [],
-      ARCHIVE_SEEK_MAX_LOOKBACK_DAYS,
-    );
-    if (!camera.archive?.coverageUrl && !coverage && !this._archiveCoverageLoading) {
+  private renderArchiveSeekPanel(camera: CameraViewModel): TemplateResult | typeof nothing {
+    if (!camera.cameraEntityId || camera.channelNumber === null) {
       return nothing;
     }
-
-    const activeSeekTime =
-      selectedNativePlayback?.seekTime ??
-      selectedPlayback?.session.seekTime ??
-      recentChunks[recentChunks.length - 1]?.startTime ??
-      null;
-    const activeIndex = resolveCoverageChunkIndex(recentChunks, activeSeekTime);
-    const [windowStartIndex, windowEndIndex] = resolveArchiveSeekWindowRange(
-      recentChunks,
-      this._archiveSeekWindowStartIndex,
-      this._archiveSeekWindowEndIndex,
-      activeIndex,
+    const maxSeekSecond = archiveMaxSecondForDate(this._archiveDate);
+    const seekSecond = Math.min(
+      parseArchiveSeekSecond(String(this._archiveSeekSecond)),
+      maxSeekSecond,
     );
-    const selectedChunk =
-      recentChunks[activeIndex] ??
-      (recentChunks.length > 0 ? recentChunks[recentChunks.length - 1] : null);
+    const seekDateBounds = archiveSeekDateBounds();
+    const seekLabel = formatSeekSecondLabel(this._archiveDate, seekSecond);
 
     return html`
       <div class="slider-wrap archive-seek-panel">
         <div class="split-row">
           <span class="badge info">Archive seek</span>
-          <span class="muted">
-            ${selectedChunk ? formatSeekPanelDateTime(selectedChunk.startTime) : "No indexed archive"}
-          </span>
+          <span class="muted">${seekLabel}</span>
         </div>
-        <dahuabridge-archive-seek
-          .chunks=${recentChunks}
-          .windowStartIndex=${windowStartIndex}
-          .windowEndIndex=${windowEndIndex}
-          .activeIndex=${activeIndex}
-          .disabled=${recentChunks.length === 0 || this._archiveCoverageLoading}
-          @archive-window-change=${(event: CustomEvent<{ startIndex: number; endIndex: number }>) => {
-            this._archiveSeekWindowStartIndex = event.detail.startIndex;
-            this._archiveSeekWindowEndIndex = event.detail.endIndex;
+        <label class="event-filter archive-date-filter">
+          <span class="event-filter-label">Seek date</span>
+          <input
+            class="event-filter-select archive-date-input"
+            type="date"
+            .value=${this._archiveDate}
+            min=${seekDateBounds.min}
+            max=${seekDateBounds.max}
+            @change=${(event: Event) =>
+              this.selectArchiveDate((event.currentTarget as HTMLInputElement).value)}
+          />
+        </label>
+        <input
+          class="archive-seek-range"
+          type="range"
+          min="0"
+          max=${String(maxSeekSecond)}
+          step="1"
+          .value=${String(seekSecond)}
+          @input=${(event: Event) => {
+            const second = parseArchiveSeekSecond((event.currentTarget as HTMLInputElement).value);
+            this._archiveSeekSecond = second;
           }}
-          @archive-seek-change=${(event: CustomEvent<{ index: number }>) => {
-            const chunk = recentChunks[event.detail.index];
-            if (chunk) {
-              void this.startNativeArchivePlayback(camera, chunk.startTime);
+          @change=${(event: Event) => {
+            const second = parseArchiveSeekSecond((event.currentTarget as HTMLInputElement).value);
+            const seekTime = archiveSeekDateTimeFromSecond(this._archiveDate, second);
+            if (seekTime) {
+              void this.startNativeArchivePlayback(camera, seekTime);
             }
           }}
-        ></dahuabridge-archive-seek>
+        />
         <div class="split-row muted">
-          <span>${coverage?.startTime ? `Coverage ${formatSeekPanelDateTime(coverage.startTime)}` : "No archive"}</span>
-          <span>${coverage?.endTime ? formatSeekPanelDateTime(coverage.endTime) : ""}</span>
+          <span>00:00</span>
+          <span>23:59</span>
         </div>
-        ${this._archiveCoverageError
-          ? html`<div class="muted">${this._archiveCoverageError}</div>`
-          : nothing}
       </div>
     `;
   }
 
   private async startNativeArchivePlayback(
     camera: CameraViewModel,
-    seekTime: string,
+    seekTime: Date,
   ): Promise<void> {
-    const coverage = this._archiveCoverage;
-    const chunk = resolveCoverageChunkByStartTime(coverage?.chunks ?? [], seekTime);
-    if (!chunk) {
-      return;
-    }
-
-    const selectedProfile = this.resolveArchivePlaybackProfile(camera);
+    const selectedProfile = this.resolveMainArchivePlaybackProfile(camera);
     const entityStreamSource =
       typeof camera.cameraEntity?.attributes.stream_source === "string"
         ? camera.cameraEntity.attributes.stream_source
         : null;
-    const streamSource = buildRtspPlaybackUrl({
+    const rtspSource = buildRtspPlaybackUrl({
       streamUrl: entityStreamSource ?? selectedProfile?.streamUrl,
       channel: camera.channelNumber,
       subtype: selectedProfile?.subtype ?? null,
-      seekTime: chunk.startTime,
+      seekTime: seekTime.toISOString(),
       endTime: null,
     });
+    const endTime = archiveDefaultTimeframeEndTime(seekTime);
+    const streamSource = await this.buildArchiveTimeframeProxyUrl(
+      camera,
+      seekTime,
+      endTime,
+      selectedProfile?.key ?? null,
+    );
     if (!streamSource) {
-      this._errorMessage = "Historical RTSP playback URL could not be built for this camera.";
+      this._errorMessage = "Historical archive playback proxy URL could not be built for this camera.";
       return;
     }
 
@@ -3187,27 +3164,107 @@ export class DahuaBridgeSurveillancePanelCard
     this._selectedNativePlayback = {
       sourceDeviceId: camera.deviceId,
       streamSource,
-      startTime: chunk.startTime,
-      endTime: chunk.endTime,
-      seekTime: chunk.startTime,
+      startTime: seekTime.toISOString(),
+      endTime: endTime.toISOString(),
+      seekTime: seekTime.toISOString(),
       profileKey: selectedProfile?.key ?? null,
     };
-    this._archiveSeekWindowStartIndex = null;
-    this._archiveSeekWindowEndIndex = null;
-    const seekDate = new Date(chunk.startTime);
-    if (!Number.isNaN(seekDate.getTime())) {
-      this._archiveDate = toDateInputValue(seekDate);
-      this._archivePage = 0;
-      this._mp4Page = 0;
-    }
+    this._archiveDate = toDateInputValue(seekTime);
+    this._archiveSeekSecond = secondsSinceLocalMidnight(seekTime);
+    this._archivePage = 0;
+    this._mp4Page = 0;
     this._selectedCameraAudioMuted = true;
     this.logMedia("card panel native archive playback selected", {
       device_id: camera.deviceId,
       channel: camera.channelNumber,
-      seek_time: chunk.startTime,
-      end_time: chunk.endTime,
+      seek_time: seekTime.toISOString(),
       stream_source: redactUrlForLog(streamSource),
+      rtsp_source: rtspSource ? redactUrlForLog(rtspSource) : null,
     });
+  }
+
+  private async startNativeArchiveEventPlayback(
+    camera: CameraViewModel,
+    recording: NvrArchiveRecordingModel,
+  ): Promise<void> {
+    const selectedProfile = this.resolveMainArchivePlaybackProfile(camera);
+    const entityStreamSource =
+      typeof camera.cameraEntity?.attributes.stream_source === "string"
+        ? camera.cameraEntity.attributes.stream_source
+        : null;
+    const startTime = new Date(recording.startTime);
+    const endTime = new Date(recording.endTime);
+    if (
+      Number.isNaN(startTime.getTime()) ||
+      Number.isNaN(endTime.getTime()) ||
+      endTime <= startTime
+    ) {
+      this._errorMessage = "Historical archive event timeframe is invalid.";
+      return;
+    }
+    const preferredStreamSource = buildRtspPlaybackUrl({
+      streamUrl: entityStreamSource ?? selectedProfile?.streamUrl,
+      channel: camera.channelNumber,
+      subtype: selectedProfile?.subtype ?? null,
+      seekTime: recording.startTime,
+      endTime: recording.endTime,
+    });
+    const fallbackStreamSource =
+      selectedProfile?.key === "stable"
+        ? recording.rtspSubUrl ?? recording.rtspMainUrl
+        : recording.rtspMainUrl ?? recording.rtspSubUrl;
+    const rtspSource = preferredStreamSource ?? fallbackStreamSource ?? null;
+    const streamSource = await this.buildArchiveTimeframeProxyUrl(
+      camera,
+      startTime,
+      endTime,
+      selectedProfile?.key ?? null,
+    );
+    if (!streamSource) {
+      this._errorMessage = "Historical archive event proxy URL could not be built.";
+      return;
+    }
+
+    this._selectedPlayback = null;
+    this._selectedPlaybackStreamProfile = null;
+    this._selectedPlaybackStreamSource = null;
+    this._selectedBridgeRecordingPlayback = null;
+    this._selectedNativePlayback = {
+      sourceDeviceId: camera.deviceId,
+      streamSource,
+      startTime: recording.startTime,
+      endTime: recording.endTime,
+      seekTime: recording.startTime,
+      profileKey: selectedProfile?.key ?? null,
+    };
+    const eventStart = new Date(recording.startTime);
+    if (!Number.isNaN(eventStart.getTime())) {
+      this._archiveDate = toDateInputValue(eventStart);
+      this._archiveSeekSecond = secondsSinceLocalMidnight(eventStart);
+    }
+    this._selectedCameraAudioMuted = true;
+    this.logMedia("card panel native event playback selected", {
+      ...this.archiveRecordingLogContext(recording),
+      device_id: camera.deviceId,
+      stream_url: redactUrlForLog(streamSource),
+      rtsp_source: rtspSource ? redactUrlForLog(rtspSource) : null,
+      profile_key: selectedProfile?.key ?? null,
+    });
+  }
+
+  private async buildArchiveTimeframeProxyUrl(
+    camera: CameraViewModel,
+    startTime: Date,
+    endTime: Date,
+    profileKey: string | null,
+  ): Promise<string | null> {
+    const entityID = (camera.cameraEntityId || camera.cameraEntity?.entity_id || "").trim();
+    if (!entityID || camera.channelNumber === null) {
+      return null;
+    }
+
+    const path = buildArchiveTimeframeProxyPath(entityID, startTime, endTime, profileKey);
+    return await signHomeAssistantPath(this.hass, path);
   }
 
   private resolveArchivePlaybackProfile(camera: CameraViewModel) {
@@ -3216,18 +3273,28 @@ export class DahuaBridgeSurveillancePanelCard
       this._selectedCameraStreamProfile,
     );
     return (
-      camera.stream.profiles.find((profile) => profile.subtype === 0 && Boolean(profile.streamUrl)) ??
+      (selectedProfile?.streamUrl ? selectedProfile : null) ??
       camera.stream.profiles.find(
         (profile) => profile.key === "quality" && Boolean(profile.streamUrl),
       ) ??
       camera.stream.profiles.find(
-        (profile) => profile.key === "default" && Boolean(profile.streamUrl),
+        (profile) => profile.key === "stable" && Boolean(profile.streamUrl),
       ) ??
-      (selectedProfile?.streamUrl ? selectedProfile : null) ??
+      camera.stream.profiles.find((profile) => profile.subtype === 0 && Boolean(profile.streamUrl)) ??
       camera.stream.profiles.find((profile) => Boolean(profile.streamUrl)) ??
       selectedProfile ??
       camera.stream.profiles[0] ??
       null
+    );
+  }
+
+  private resolveMainArchivePlaybackProfile(camera: CameraViewModel) {
+    return (
+      camera.stream.profiles.find((profile) => profile.subtype === 0 && Boolean(profile.streamUrl)) ??
+      camera.stream.profiles.find(
+        (profile) => profile.key === "quality" && Boolean(profile.streamUrl),
+      ) ??
+      this.resolveArchivePlaybackProfile(camera)
     );
   }
 
@@ -3246,13 +3313,15 @@ export class DahuaBridgeSurveillancePanelCard
 
   private isArchiveEventRecording(recording: NvrArchiveRecordingModel): boolean {
     const recordKind = recording.recordKind?.trim().toLowerCase() ?? "";
-    if (recordKind === "event") {
+    if (recordKind === "event" || recordKind === "smd_ivs" || recordKind === "smd-ivs") {
       return true;
     }
     const source = recording.source?.trim().toLowerCase() ?? "";
     const recordingType = recording.type?.trim().toLowerCase() ?? "";
     return (
       source === "nvr_event" ||
+      source === "smd_ivs" ||
+      source === "smd-ivs" ||
       recordingType === "event" ||
       recordingType.startsWith("event.")
     );
@@ -3708,125 +3777,132 @@ function toDateInputValue(value: Date): string {
   return `${year}-${month}-${day}`;
 }
 
-function resolveCoverageChunkIndex(
-  chunks: ReadonlyArray<NvrArchiveCoverageModel["chunks"][number]>,
-  seekTime: string | null,
-): number {
-  if (chunks.length === 0) {
+function archiveSeekDateBounds(): { min: string; max: string } {
+  const max = new Date();
+  const min = new Date(max);
+  min.setDate(max.getDate() - ARCHIVE_SEEK_MAX_LOOKBACK_DAYS);
+  return {
+    min: toDateInputValue(min),
+    max: toDateInputValue(max),
+  };
+}
+
+function parseArchiveSeekSecond(value: string): number {
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isFinite(parsed)) {
     return 0;
   }
-  if (!seekTime?.trim()) {
-    return chunks.length - 1;
-  }
-  const target = new Date(seekTime);
-  if (Number.isNaN(target.getTime())) {
-    return chunks.length - 1;
-  }
-
-  let bestIndex = chunks.length - 1;
-  let bestDelta = Number.POSITIVE_INFINITY;
-  chunks.forEach((chunk, index) => {
-    const candidate = new Date(chunk.startTime);
-    if (Number.isNaN(candidate.getTime())) {
-      return;
-    }
-    const delta = Math.abs(candidate.getTime() - target.getTime());
-    if (delta < bestDelta) {
-      bestDelta = delta;
-      bestIndex = index;
-    }
-  });
-  return bestIndex;
+  return Math.min(Math.max(parsed, 0), 86_399);
 }
 
-function resolveCoverageChunkByStartTime(
-  chunks: ReadonlyArray<NvrArchiveCoverageModel["chunks"][number]>,
-  seekTime: string,
-): NvrArchiveCoverageModel["chunks"][number] | null {
-  if (chunks.length === 0) {
+function archiveCurrentTimeOfDaySecond(): number {
+  return secondsSinceLocalMidnight(new Date());
+}
+
+function archiveMaxSecondForDate(archiveDate: string): number {
+  return normalizeArchiveDateInput(archiveDate) === todayDateInputValue()
+    ? archiveCurrentTimeOfDaySecond()
+    : 86_399;
+}
+
+function archiveSeekDateTimeFromSecond(archiveDate: string, second: number): Date | null {
+  const normalizedDate = normalizeArchiveDateInput(archiveDate);
+  const [year, month, day] = normalizedDate
+    .split("-")
+    .map((part) => Number.parseInt(part, 10));
+  if (!year || !month || !day) {
     return null;
   }
-  const exactMatch = chunks.find((chunk) => chunk.startTime === seekTime);
-  if (exactMatch) {
-    return exactMatch;
-  }
-  return chunks[resolveCoverageChunkIndex(chunks, seekTime)] ?? null;
+  const boundedSecond = Math.min(parseArchiveSeekSecond(String(second)), archiveMaxSecondForDate(normalizedDate));
+  const hours = Math.floor(boundedSecond / 3600);
+  const minutes = Math.floor((boundedSecond % 3600) / 60);
+  const seconds = boundedSecond % 60;
+  return new Date(year, month - 1, day, hours, minutes, seconds, 0);
 }
 
-function limitCoverageChunksToLookback(
-  chunks: ReadonlyArray<NvrArchiveCoverageModel["chunks"][number]>,
-  maxLookbackDays: number,
-): NvrArchiveCoverageModel["chunks"] {
-  if (chunks.length === 0) {
-    return [];
-  }
-  const latestChunk = chunks[chunks.length - 1];
-  const latestTime = new Date(latestChunk.endTime || latestChunk.startTime);
-  if (Number.isNaN(latestTime.getTime())) {
-    return [...chunks];
-  }
-  const threshold = latestTime.getTime() - maxLookbackDays * 24 * 60 * 60 * 1000;
-  return chunks.filter((chunk) => {
-    const candidate = new Date(chunk.endTime || chunk.startTime);
-    return !Number.isNaN(candidate.getTime()) && candidate.getTime() >= threshold;
-  });
+function secondsSinceLocalMidnight(value: Date): number {
+  return value.getHours() * 3600 + value.getMinutes() * 60 + value.getSeconds();
 }
 
-function resolveArchiveSeekWindowRange(
-  chunks: ReadonlyArray<NvrArchiveCoverageModel["chunks"][number]>,
-  requestedStartIndex: number | null,
-  requestedEndIndex: number | null,
-  activeIndex: number,
-): [number, number] {
-  if (chunks.length === 0) {
-    return [0, 0];
-  }
+function archiveDefaultTimeframeEndTime(startTime: Date): Date {
+  return new Date(startTime.getTime() + 30 * 60 * 1000);
+}
 
-  const maxIndex = chunks.length - 1;
-  const safeActiveIndex = Math.min(Math.max(activeIndex, 0), maxIndex);
-  const safeRequestedStart =
-    typeof requestedStartIndex === "number" ? Math.min(Math.max(Math.trunc(requestedStartIndex), 0), maxIndex) : null;
-  const safeRequestedEnd =
-    typeof requestedEndIndex === "number" ? Math.min(Math.max(Math.trunc(requestedEndIndex), 0), maxIndex) : null;
-  if (
-    safeRequestedStart !== null &&
-    safeRequestedEnd !== null &&
-    safeRequestedEnd >= safeRequestedStart
-  ) {
-    return [
-      Math.min(safeRequestedStart, safeActiveIndex),
-      Math.max(safeRequestedEnd, safeActiveIndex),
-    ];
+function buildArchiveTimeframeProxyPath(
+  entityID: string,
+  startTime: Date,
+  endTime: Date,
+  profileKey: string | null,
+): string {
+  const params = new URLSearchParams();
+  params.set("starttime", formatArchiveProxyTimestamp(startTime));
+  params.set("endtime", formatArchiveProxyTimestamp(endTime));
+  if (profileKey?.trim()) {
+    params.set("profile", profileKey.trim());
   }
+  return `/api/camera_proxy/${encodeURIComponent(entityID)}/timeframe/?${params.toString()}`;
+}
 
-  const activeChunk = chunks[safeActiveIndex] ?? chunks[maxIndex];
-  const activeTime = new Date(activeChunk.startTime);
-  if (Number.isNaN(activeTime.getTime())) {
-    return [0, maxIndex];
-  }
+function formatArchiveProxyTimestamp(value: Date): string {
+  const parts = [
+    value.getFullYear(),
+    value.getMonth() + 1,
+    value.getDate(),
+    value.getHours(),
+    value.getMinutes(),
+    value.getSeconds(),
+  ];
+  return parts
+    .map((part, index) => (index === 0 ? String(part) : String(part).padStart(2, "0")))
+    .join("_");
+}
 
-  const windowStartThreshold = activeTime.getTime() - DEFAULT_ARCHIVE_SEEK_WINDOW_HOURS * 60 * 60 * 1000;
-  let windowStartIndex = safeActiveIndex;
-  while (windowStartIndex > 0) {
-    const candidate = new Date(chunks[windowStartIndex - 1]?.startTime ?? "");
-    if (Number.isNaN(candidate.getTime()) || candidate.getTime() < windowStartThreshold) {
-      break;
+async function signHomeAssistantPath(
+  hass: HomeAssistant | undefined,
+  path: string,
+): Promise<string> {
+  const message = {
+    type: "auth/sign_path",
+    path,
+    expires: 300,
+  };
+
+  try {
+    const callWS = hass?.callWS?.bind(hass);
+    if (callWS) {
+      const response = await callWS<{ path?: string }>(message);
+      return response.path?.trim() || path;
     }
-    windowStartIndex--;
+
+    const sendMessage = hass?.connection?.sendMessagePromise?.bind(hass.connection);
+    if (sendMessage) {
+      const response = await sendMessage<{ path?: string }>(message);
+      return response.path?.trim() || path;
+    }
+  } catch (error) {
+    logCardInfo("card panel archive proxy signing failed", {
+      path,
+      error: error instanceof Error ? error.message : String(error),
+    });
   }
-  return [windowStartIndex, safeActiveIndex];
+
+  return path;
 }
 
-function formatSeekPanelDateTime(value: string): string {
-  const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) {
-    return value;
+function formatSeekSecondLabel(archiveDate: string, second: number): string {
+  const seekTime = archiveSeekDateTimeFromSecond(archiveDate, second);
+  if (!seekTime) {
+    return "";
   }
-  return parsed.toLocaleString();
+  return seekTime.toLocaleString();
 }
 
 function hasCameraEventCounts(camera: CameraViewModel): boolean {
-  return camera.humanCount24h > 0 || camera.vehicleCount24h > 0;
+  return (
+    camera.humanCount24h > 0 ||
+    camera.vehicleCount24h > 0 ||
+    camera.ivsCount24h > 0
+  );
 }
 
 function pageCountForItems(totalItems: number, pageSize: number): number {

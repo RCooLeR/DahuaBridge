@@ -55,6 +55,7 @@ type MediaReader interface {
 	StartClip(context.Context, mediaapi.ClipStartRequest) (mediaapi.ClipInfo, error)
 	StartDirectClip(context.Context, mediaapi.DirectClipStartRequest) (mediaapi.ClipInfo, error)
 	StopClip(context.Context, string) (mediaapi.ClipInfo, error)
+	DeleteClip(context.Context, string) error
 	GetClip(string) (mediaapi.ClipInfo, error)
 	FindClips(mediaapi.ClipQuery) ([]mediaapi.ClipInfo, error)
 	ClipFilePath(string) (string, error)
@@ -1019,6 +1020,7 @@ func parseFlexibleTimestamp(raw string, field string) (time.Time, error) {
 		time.RFC3339,
 		"2006-01-02 15:04:05",
 		"2006-01-02T15:04:05",
+		"2006_01_02_15_04_05",
 	}
 	for _, layout := range layouts {
 		var (
@@ -1026,7 +1028,7 @@ func parseFlexibleTimestamp(raw string, field string) (time.Time, error) {
 			err    error
 		)
 		switch layout {
-		case "2006-01-02 15:04:05", "2006-01-02T15:04:05":
+		case "2006-01-02 15:04:05", "2006-01-02T15:04:05", "2006_01_02_15_04_05":
 			parsed, err = time.ParseInLocation(layout, raw, time.Local)
 		default:
 			parsed, err = time.Parse(layout, raw)
@@ -1073,6 +1075,7 @@ func clipAPIResponse(r *http.Request, clip mediaapi.ClipInfo) map[string]any {
 	if clip.Status == mediaapi.ClipStatusRecording {
 		payload["stop_url"] = buildAbsoluteRequestURL(r, "/api/v1/media/recordings/"+url.PathEscape(clip.ID)+"/stop")
 	}
+	payload["delete_url"] = buildAbsoluteRequestURL(r, "/api/v1/media/recordings/"+url.PathEscape(clip.ID))
 	return payload
 }
 
@@ -1142,9 +1145,17 @@ func attachNVRRecordingAssetURLs(r *http.Request, item *dahua.NVRRecording) {
 }
 
 func isEventRecordingItem(item dahua.NVRRecording) bool {
+	recordKind := strings.ToLower(strings.TrimSpace(item.RecordKind))
 	source := strings.ToLower(strings.TrimSpace(item.Source))
 	recordingType := strings.ToLower(strings.TrimSpace(item.Type))
-	return source == "nvr_event" || recordingType == "event" || strings.HasPrefix(recordingType, "event.")
+	return recordKind == "smd_ivs" ||
+		recordKind == "smd-ivs" ||
+		recordKind == "event" ||
+		source == "smd_ivs" ||
+		source == "smd-ivs" ||
+		source == "nvr_event" ||
+		recordingType == "event" ||
+		strings.HasPrefix(recordingType, "event.")
 }
 
 func normalizeNVRRecordingSearchResult(result *dahua.NVRRecordingSearchResult) {
@@ -1196,7 +1207,11 @@ func conditionalArchiveExportFilePath(item dahua.NVRRecording) string {
 func isArchiveEventSource(source string, recordingType string) bool {
 	normalizedSource := strings.ToLower(strings.TrimSpace(source))
 	normalizedType := strings.ToLower(strings.TrimSpace(recordingType))
-	return normalizedSource == "nvr_event" || normalizedType == "event" || strings.HasPrefix(normalizedType, "event.")
+	return normalizedSource == "smd_ivs" ||
+		normalizedSource == "smd-ivs" ||
+		normalizedSource == "nvr_event" ||
+		normalizedType == "event" ||
+		strings.HasPrefix(normalizedType, "event.")
 }
 
 func buildAbsoluteRequestURL(r *http.Request, path string) string {

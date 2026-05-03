@@ -15,7 +15,7 @@ type coverageChunk struct {
 
 func (s *SQLiteStore) LoadArchiveCoverage(ctx context.Context, deviceID string, channel int) ([]coverageChunk, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT DISTINCT start_time, end_time
-		FROM archive_files
+		FROM nvr_recording_chunks
 		WHERE device_id = ? AND channel = ?
 		ORDER BY start_time ASC, end_time ASC`,
 		strings.TrimSpace(deviceID),
@@ -55,8 +55,8 @@ func (s *SQLiteStore) LoadEventSummaryCounts(
 	endTime time.Time,
 	eventCode string,
 ) (map[int]map[string]int, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT channel, type, flags_json
-		FROM archive_events
+	rows, err := s.db.QueryContext(ctx, `SELECT channel, event_type, flags_json
+		FROM smd_ivs_events
 		WHERE device_id = ? AND end_time >= ? AND start_time <= ?
 		ORDER BY channel ASC, start_time ASC`,
 		strings.TrimSpace(deviceID),

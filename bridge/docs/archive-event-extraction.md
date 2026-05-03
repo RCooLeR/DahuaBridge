@@ -1,176 +1,101 @@
-# Archive Event Extraction
+# Archive SMD/IVS Extraction
 
-This document describes the bridge archive flow for SMD/IVS events end to end.
+This page documents the current archive extraction flow.
 
-## Scope
+## Goal
 
-In bridge terminology:
+The bridge keeps SMD/IVS detections separate from normal NVR recording chunks:
 
-- `recordings` means recorder-backed archive rows from the NVR
-- event-backed archive rows such as SMD and IVS are also returned by `GET /api/v1/nvr/{deviceID}/recordings`, typically with `event_only=true`
+- SMD/IVS rows are used for event Play and MP4 export.
+- Recording chunks are used for direct original DAV download and optional MP4 export.
 
-## Source of Truth
+API reads come from SQLite. The UI does not call the NVR when listing SMD/IVS or recording chunks.
 
-For SMD/IVS video, the bridge searches the recorder archive directly and stores the normalized event rows in SQLite:
+## Tables
 
-- `GET /api/v1/nvr/{deviceID}/recordings?...event_only=true&event=<code>`
+### `smd_ivs_events`
 
-Each returned event row may contain:
+Stores one row per SMD/IVS detection:
 
-- event start/end time
-- channel
-- event type / flags
-- optional `file_path`
-- bridge-generated `rtsp_main_url`
-- bridge-generated `rtsp_sub_url`
+- `event_id`
+- `device_id`
+- `channel`
+- `event_type`
+- `start_time`
+- `end_time`
+- `rtsp_main_url`
+- `rtsp_sub_url`
+- `source_file_path`
+- `mp4_clip_id`
+- `mp4_file_path`
+- `mp4_status`
+- `mp4_error`
 
-The current playback and export path for event rows is the archive RTSP window, not direct DAV download by `file_path`.
+### `nvr_recording_chunks`
 
-## What the Bridge Plays And Exports
+Stores normal recorder DAV chunks:
 
-For an archive event clip, the bridge does this:
+- `chunk_id`
+- `device_id`
+- `channel`
+- `start_time`
+- `end_time`
+- `file_path`
+- NVR file metadata
 
-1. Search archive event rows from the NVR.
-2. Normalize and store those rows in SQLite.
-3. Generate archive RTSP playback URLs for the row:
-   - main stream: `/cam/playback?channel=...&subtype=0&starttime=...&endtime=...`
-   - sub stream: `/cam/playback?channel=...&subtype=1&starttime=...&endtime=...`
-4. When a clip is exported or prefetched, create an archive playback session for that exact event window.
-5. Record that playback RTSP stream into a bridge-owned MP4 clip.
+### `bridge_mp4_clips`
 
-The bridge does not rely on any live/recent event buffer for archive video extraction.
+Stores bridge-owned MP4 export metadata:
 
-## RTSP Constraints
+- `clip_id`
+- `device_id`
+- `channel`
+- `stream_id`
+- `start_time`
+- `end_time`
+- `file_path`
+- `status`
+- `error_text`
 
-Tested Dahua recorders are sensitive to archive RTSP query parameter order.
+The current schema is recreated without migration when the schema version changes.
 
-The bridge emits:
+## NVR APIs Used
 
-1. `channel`
-2. `subtype`
-3. `starttime`
-4. optional `endtime`
+Normal chunk search uses Dahua recorder file search:
 
-Using the wrong order can return `404 Not Found` from the recorder.
+- primary: RPC2 `mediaFileFind.factory.create/findFile/findNextFile/close/destroy`
+- fallback: CGI `mediaFileFind.cgi`
 
-The current bridge playback path is:
+SMD/IVS search uses event-specific Dahua flows:
+
+- SMD finder for human, vehicle, and animal detections
+- event/log search paths for IVS tripwire and intrusion windows where available
+
+Video playback/export uses Dahua RTSP playback:
 
 ```text
-rtsp://<nvr>:554/cam/playback?channel=<1-based-channel>&subtype=<0-or-1>&starttime=YYYY_MM_DD_HH_mm_ss&endtime=YYYY_MM_DD_HH_mm_ss
+/cam/playback?channel=<channel>&subtype=<subtype>&starttime=YYYY_MM_DD_HH_mm_ss&endtime=YYYY_MM_DD_HH_mm_ss
 ```
 
-## Transcoding Isolation
+The query order is significant and must remain `channel`, `subtype`, `starttime`, optional `endtime`.
 
-Every archive event export/prefetch job is isolated by archive record identity:
+Original DAV download for recording chunks uses the NVR file path through the bridge download endpoint.
 
-- device
-- channel
-- event start/end
-- source/type/video stream
+## Background Jobs
 
-The bridge generates a unique export stream ID from that identity.
+The archive service has two logical sync flows:
 
-This prevents one event extraction from blocking another event window.
+- chunk sync fills `nvr_recording_chunks`
+- SMD/IVS sync fills `smd_ivs_events` and can queue missing MP4 backups
 
-## Playback vs Download
+SMD/IVS MP4 is for export/download backup. Card playback uses direct native RTSP playback.
 
-There are two separate archive behaviors:
+## Bridge APIs
 
-### Event rows
+- `GET /api/v1/nvr/{deviceID}/smd-ivs`
+- `GET /api/v1/nvr/{deviceID}/recording-chunks`
+- `POST /api/v1/nvr/{deviceID}/recordings/export`
+- `GET /api/v1/nvr/{deviceID}/recordings/download`
+- `GET /api/v1/media/recordings`
 
-- Playback uses archive playback sessions and bridge-hosted media helpers.
-- Export uses archive playback RTSP and produces a bridge-owned MP4 clip.
-- Download, when needed, should use the resulting bridge MP4 asset.
-- Event rows do not expose raw recorder `download_url`.
-
-### Recording rows
-
-- Playback uses NVR playback sessions over archive RTSP with seek.
-- Export can transcode directly from recorder DAV when `file_path` is known.
-- Download uses the original recorder DAV file.
-
-## Background Prefetch
-
-When `archive.enabled` is on, the archive service:
-
-1. indexes archive file rows
-2. indexes event rows for SMD/IVS codes
-3. stores main/sub archive RTSP URLs on those event rows
-4. rechecks recent SMD/IVS windows every 5 minutes
-5. prefetches missing SMD/IVS event MP4 clips for the configured retention window
-
-Default retention/prefetch window:
-
-- last 7 days
-
-The prefetcher:
-
-- skips rows that already have usable asset state in SQLite
-- respects `archive.max_parallel_jobs`
-- starts more work on later sync cycles until the backlog is consumed
-
-This means the bridge side eventually builds a full local list of recent SMD/IVS assets instead of redownloading and retranscoding the same event repeatedly.
-
-## SQLite Tracking
-
-The bridge stores archive and transcode state in SQLite:
-
-### `archive_files`
-
-- recorder file rows
-- includes `file_path`, channel, start/end time
-
-### `archive_events`
-
-- event rows from archive search
-- includes event start/end time, type, flags
-- includes persisted `rtsp_main_url` and `rtsp_sub_url`
-- may also retain `file_path` when the recorder provided it
-
-### `transcode_jobs`
-
-- one logical job per archive record
-- includes:
-  - `record_kind`
-  - `record_id`
-  - `source_file_path`
-  - `output_path`
-  - `status`
-  - timestamps
-
-### `transcoded_assets`
-
-- asset row per produced bridge MP4
-- includes:
-  - `record_kind`
-  - `record_id`
-  - local asset path
-  - status
-  - size
-  - ready timestamp
-
-These tables are the bridge-side source of truth for:
-
-- whether an event has already been extracted
-- where the local MP4 lives
-- which archive event window produced it
-
-## Failure Behavior
-
-The bridge intentionally degrades in this order:
-
-1. archive playback RTSP export
-2. persisted failure state in SQLite/API if export still fails
-
-It should never require any live/recent event buffer to recover archive event video.
-
-## Expected Result
-
-With current behavior, the correct archive event flow is:
-
-1. archive search returns SMD/IVS event row
-2. bridge stores the row and its archive RTSP URLs in SQLite
-3. bridge uses archive playback RTSP for playback/export
-4. bridge stores the resulting MP4 and job metadata in SQLite
-5. later API/card requests reuse that stored asset instead of rebuilding it
-
+See [api-reference.md](api-reference.md) for request and response details.

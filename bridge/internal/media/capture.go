@@ -382,6 +382,41 @@ func (m *Manager) ClipFilePath(clipID string) (string, error) {
 	return filepath.Join(strings.TrimSpace(m.cfg.ClipPath), info.FileName), nil
 }
 
+func (m *Manager) DeleteClip(ctx context.Context, clipID string) error {
+	clipID = strings.TrimSpace(clipID)
+	if clipID == "" {
+		return ErrClipNotFound
+	}
+
+	job, info, err := m.clipJob(clipID)
+	switch {
+	case err == nil:
+		if info.Status == ClipStatusRecording {
+			if err := job.stop(ctx); err != nil {
+				return err
+			}
+		}
+	case errors.Is(err, ErrClipNotFound):
+		info, err = m.loadClip(clipID)
+		if err != nil {
+			return err
+		}
+	default:
+		return err
+	}
+
+	metaPath := filepath.Join(strings.TrimSpace(m.cfg.ClipPath), clipID+".json")
+	if err := removeClipStorageFile(metaPath); err != nil {
+		return err
+	}
+	if strings.TrimSpace(info.FileName) != "" {
+		if err := removeClipStorageFile(filepath.Join(strings.TrimSpace(m.cfg.ClipPath), info.FileName)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (m *Manager) ActiveClip(streamID string) (ClipInfo, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

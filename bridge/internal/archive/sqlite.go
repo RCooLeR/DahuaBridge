@@ -17,20 +17,55 @@ type SQLiteStore struct {
 	db *sql.DB
 }
 
+const sqliteArchiveSchemaVersion = 2
+
 func NewSQLiteStore(db *sql.DB) *SQLiteStore {
 	return &SQLiteStore{db: db}
 }
 
 func (s *SQLiteStore) InitSchema(ctx context.Context) error {
+	var currentVersion int
+	if err := s.db.QueryRowContext(ctx, `PRAGMA user_version`).Scan(&currentVersion); err != nil {
+		return err
+	}
+	if currentVersion != sqliteArchiveSchemaVersion {
+		if err := s.dropSchema(ctx); err != nil {
+			return err
+		}
+	}
+
 	statements := []string{
-		`CREATE TABLE IF NOT EXISTS archive_files (
-			file_id TEXT PRIMARY KEY,
+		`CREATE TABLE IF NOT EXISTS smd_ivs_events (
+			event_id TEXT PRIMARY KEY,
+			device_id TEXT NOT NULL,
+			channel INTEGER NOT NULL,
+			event_type TEXT NOT NULL,
+			start_time TEXT NOT NULL,
+			end_time TEXT NOT NULL,
+			rtsp_main_url TEXT NOT NULL DEFAULT '',
+			rtsp_sub_url TEXT NOT NULL DEFAULT '',
+			mp4_clip_id TEXT NOT NULL DEFAULT '',
+			mp4_file_path TEXT NOT NULL DEFAULT '',
+			mp4_status TEXT NOT NULL DEFAULT '',
+			mp4_error TEXT NOT NULL DEFAULT '',
+			source_file_path TEXT NOT NULL DEFAULT '',
+			video_stream TEXT NOT NULL DEFAULT '',
+			flags_json TEXT NOT NULL DEFAULT '[]',
+			first_seen_at TEXT NOT NULL,
+			last_seen_at TEXT NOT NULL
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_smd_ivs_events_device_channel_time
+			ON smd_ivs_events(device_id, channel, start_time, end_time)`,
+		`CREATE INDEX IF NOT EXISTS idx_smd_ivs_events_type
+			ON smd_ivs_events(device_id, event_type, start_time)`,
+		`CREATE TABLE IF NOT EXISTS nvr_recording_chunks (
+			chunk_id TEXT PRIMARY KEY,
 			device_id TEXT NOT NULL,
 			channel INTEGER NOT NULL,
 			start_time TEXT NOT NULL,
 			end_time TEXT NOT NULL,
 			file_path TEXT NOT NULL,
-			video_stream TEXT NOT NULL,
+			video_stream TEXT NOT NULL DEFAULT '',
 			disk INTEGER NOT NULL DEFAULT 0,
 			partition INTEGER NOT NULL DEFAULT 0,
 			cluster INTEGER NOT NULL DEFAULT 0,
@@ -40,93 +75,50 @@ func (s *SQLiteStore) InitSchema(ctx context.Context) error {
 			first_seen_at TEXT NOT NULL,
 			last_seen_at TEXT NOT NULL
 		)`,
-		`CREATE INDEX IF NOT EXISTS idx_archive_files_device_channel_time
-			ON archive_files(device_id, channel, start_time, end_time)`,
-		`CREATE INDEX IF NOT EXISTS idx_archive_files_path
-			ON archive_files(device_id, file_path)`,
-		`CREATE TABLE IF NOT EXISTS archive_events (
-			event_id TEXT PRIMARY KEY,
+		`CREATE INDEX IF NOT EXISTS idx_nvr_recording_chunks_device_channel_time
+			ON nvr_recording_chunks(device_id, channel, start_time, end_time)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_nvr_recording_chunks_path
+			ON nvr_recording_chunks(device_id, file_path)`,
+		`CREATE TABLE IF NOT EXISTS bridge_mp4_clips (
+			clip_id TEXT PRIMARY KEY,
 			device_id TEXT NOT NULL,
-			channel INTEGER NOT NULL,
-			start_time TEXT NOT NULL,
-			end_time TEXT NOT NULL,
-			file_path TEXT NOT NULL,
-			source TEXT NOT NULL,
-			type TEXT NOT NULL,
-			video_stream TEXT NOT NULL,
-			rtsp_main_url TEXT NOT NULL DEFAULT '',
-			rtsp_sub_url TEXT NOT NULL DEFAULT '',
-			flags_json TEXT NOT NULL DEFAULT '[]',
-			first_seen_at TEXT NOT NULL,
-			last_seen_at TEXT NOT NULL
-		)`,
-		`CREATE INDEX IF NOT EXISTS idx_archive_events_device_channel_time
-			ON archive_events(device_id, channel, start_time, end_time)`,
-		`CREATE INDEX IF NOT EXISTS idx_archive_events_type
-			ON archive_events(device_id, type, start_time)`,
-		`CREATE TABLE IF NOT EXISTS archive_event_files (
-			event_id TEXT NOT NULL,
-			file_id TEXT NOT NULL,
-			linked_at TEXT NOT NULL,
-			PRIMARY KEY(event_id, file_id)
-		)`,
-		`CREATE TABLE IF NOT EXISTS archive_sync_coverage (
-			scope TEXT NOT NULL,
-			device_id TEXT NOT NULL,
-			channel INTEGER NOT NULL,
-			window_start TEXT NOT NULL,
-			window_end TEXT NOT NULL,
-			synced_at TEXT NOT NULL,
-			PRIMARY KEY(scope, device_id, channel, window_start, window_end)
-		)`,
-		`CREATE INDEX IF NOT EXISTS idx_archive_sync_coverage_lookup
-			ON archive_sync_coverage(scope, device_id, channel, window_start, window_end)`,
-		`CREATE TABLE IF NOT EXISTS transcode_jobs (
-			job_id TEXT PRIMARY KEY,
-			record_kind TEXT NOT NULL,
-			record_id TEXT NOT NULL,
-			device_id TEXT NOT NULL,
+			channel INTEGER NOT NULL DEFAULT 0,
+			stream_id TEXT NOT NULL DEFAULT '',
+			start_time TEXT NOT NULL DEFAULT '',
+			end_time TEXT NOT NULL DEFAULT '',
+			file_path TEXT NOT NULL DEFAULT '',
 			status TEXT NOT NULL,
-			source_file_path TEXT NOT NULL DEFAULT '',
-			output_path TEXT NOT NULL DEFAULT '',
 			error_text TEXT NOT NULL DEFAULT '',
 			created_at TEXT NOT NULL,
-			updated_at TEXT NOT NULL,
-			started_at TEXT NOT NULL DEFAULT '',
-			finished_at TEXT NOT NULL DEFAULT ''
+			updated_at TEXT NOT NULL
 		)`,
-		`CREATE INDEX IF NOT EXISTS idx_transcode_jobs_record
-			ON transcode_jobs(record_kind, record_id, updated_at)`,
-		`CREATE TABLE IF NOT EXISTS transcoded_assets (
-			asset_id TEXT PRIMARY KEY,
-			record_kind TEXT NOT NULL,
-			record_id TEXT NOT NULL,
-			device_id TEXT NOT NULL,
-			format TEXT NOT NULL,
-			status TEXT NOT NULL,
-			path TEXT NOT NULL DEFAULT '',
-			size_bytes INTEGER NOT NULL DEFAULT 0,
-			created_at TEXT NOT NULL,
-			updated_at TEXT NOT NULL,
-			ready_at TEXT NOT NULL DEFAULT ''
-		)`,
-		`CREATE INDEX IF NOT EXISTS idx_transcoded_assets_record
-			ON transcoded_assets(record_kind, record_id, updated_at)`,
+		`CREATE INDEX IF NOT EXISTS idx_bridge_mp4_clips_device_channel_time
+			ON bridge_mp4_clips(device_id, channel, start_time, end_time)`,
 	}
 	for _, statement := range statements {
 		if _, err := s.db.ExecContext(ctx, statement); err != nil {
 			return err
 		}
 	}
-	for _, migration := range []struct {
-		table      string
-		column     string
-		definition string
-	}{
-		{table: "archive_events", column: "rtsp_main_url", definition: "TEXT NOT NULL DEFAULT ''"},
-		{table: "archive_events", column: "rtsp_sub_url", definition: "TEXT NOT NULL DEFAULT ''"},
+	if _, err := s.db.ExecContext(ctx, fmt.Sprintf(`PRAGMA user_version = %d`, sqliteArchiveSchemaVersion)); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (s *SQLiteStore) dropSchema(ctx context.Context) error {
+	for _, table := range []string{
+		"archive_event_files",
+		"archive_events",
+		"archive_files",
+		"archive_sync_coverage",
+		"transcoded_assets",
+		"transcode_jobs",
+		"smd_ivs_events",
+		"nvr_recording_chunks",
+		"bridge_mp4_clips",
 	} {
-		if err := s.ensureColumn(ctx, migration.table, migration.column, migration.definition); err != nil {
+		if _, err := s.db.ExecContext(ctx, `DROP TABLE IF EXISTS `+table); err != nil {
 			return err
 		}
 	}
@@ -155,11 +147,11 @@ func (s *SQLiteStore) UpsertArchiveFiles(ctx context.Context, deviceID string, i
 		}
 	}()
 
-	statement, err := tx.PrepareContext(ctx, `INSERT INTO archive_files (
-		file_id, device_id, channel, start_time, end_time, file_path, video_stream, disk, partition, cluster,
+	statement, err := tx.PrepareContext(ctx, `INSERT INTO nvr_recording_chunks (
+		chunk_id, device_id, channel, start_time, end_time, file_path, video_stream, disk, partition, cluster,
 		length_bytes, cut_length_bytes, flags_json, first_seen_at, last_seen_at
 	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	ON CONFLICT(file_id) DO UPDATE SET
+	ON CONFLICT(chunk_id) DO UPDATE SET
 		video_stream=excluded.video_stream,
 		disk=excluded.disk,
 		partition=excluded.partition,
@@ -213,16 +205,16 @@ func (s *SQLiteStore) UpsertArchiveEvents(ctx context.Context, deviceID string, 
 		}
 	}()
 
-	eventStatement, err := tx.PrepareContext(ctx, `INSERT INTO archive_events (
-		event_id, device_id, channel, start_time, end_time, file_path, source, type, video_stream, rtsp_main_url, rtsp_sub_url, flags_json, first_seen_at, last_seen_at
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	eventStatement, err := tx.PrepareContext(ctx, `INSERT INTO smd_ivs_events (
+		event_id, device_id, channel, event_type, start_time, end_time, rtsp_main_url, rtsp_sub_url,
+		source_file_path, video_stream, flags_json, first_seen_at, last_seen_at
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	ON CONFLICT(event_id) DO UPDATE SET
-		file_path=excluded.file_path,
-		source=excluded.source,
-		type=excluded.type,
+		event_type=excluded.event_type,
 		video_stream=excluded.video_stream,
 		rtsp_main_url=excluded.rtsp_main_url,
 		rtsp_sub_url=excluded.rtsp_sub_url,
+		source_file_path=excluded.source_file_path,
 		flags_json=excluded.flags_json,
 		last_seen_at=excluded.last_seen_at`)
 	if err != nil {
@@ -230,33 +222,10 @@ func (s *SQLiteStore) UpsertArchiveEvents(ctx context.Context, deviceID string, 
 	}
 	defer eventStatement.Close()
 
-	fileStatement, err := tx.PrepareContext(ctx, `INSERT INTO archive_files (
-		file_id, device_id, channel, start_time, end_time, file_path, video_stream, disk, partition, cluster,
-		length_bytes, cut_length_bytes, flags_json, first_seen_at, last_seen_at
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	ON CONFLICT(file_id) DO UPDATE SET
-		video_stream=excluded.video_stream,
-		disk=excluded.disk,
-		partition=excluded.partition,
-		cluster=excluded.cluster,
-		length_bytes=excluded.length_bytes,
-		cut_length_bytes=excluded.cut_length_bytes,
-		flags_json=excluded.flags_json,
-		last_seen_at=excluded.last_seen_at`)
-	if err != nil {
-		return err
-	}
-	defer fileStatement.Close()
-
-	linkStatement, err := tx.PrepareContext(ctx, `INSERT INTO archive_event_files (event_id, file_id, linked_at)
-		VALUES (?, ?, ?)
-		ON CONFLICT(event_id, file_id) DO UPDATE SET linked_at=excluded.linked_at`)
-	if err != nil {
-		return err
-	}
-	defer linkStatement.Close()
-
 	for _, item := range items {
+		if !isSMDIVSRecording(item) {
+			continue
+		}
 		eventRow, ok := archiveEventRowFromRecording(deviceID, item, seenAt)
 		if !ok {
 			continue
@@ -265,45 +234,17 @@ func (s *SQLiteStore) UpsertArchiveEvents(ctx context.Context, deviceID string, 
 			eventRow.EventID,
 			eventRow.DeviceID,
 			eventRow.Channel,
+			eventRow.Type,
 			eventRow.StartTime,
 			eventRow.EndTime,
-			eventRow.FilePath,
-			eventRow.Source,
-			eventRow.Type,
-			eventRow.VideoStream,
 			eventRow.RTSPMainURL,
 			eventRow.RTSPSubURL,
+			eventRow.FilePath,
+			eventRow.VideoStream,
 			eventRow.FlagsJSON,
 			eventRow.FirstSeenAt,
 			eventRow.LastSeenAt,
 		); err != nil {
-			return err
-		}
-
-		fileRow, ok := archiveFileRowFromRecording(deviceID, item, seenAt)
-		if !ok {
-			continue
-		}
-		if _, err = fileStatement.ExecContext(ctx,
-			fileRow.FileID,
-			fileRow.DeviceID,
-			fileRow.Channel,
-			fileRow.StartTime,
-			fileRow.EndTime,
-			fileRow.FilePath,
-			fileRow.VideoStream,
-			fileRow.Disk,
-			fileRow.Partition,
-			fileRow.Cluster,
-			fileRow.LengthBytes,
-			fileRow.CutLengthBytes,
-			fileRow.FlagsJSON,
-			fileRow.FirstSeenAt,
-			fileRow.LastSeenAt,
-		); err != nil {
-			return err
-		}
-		if _, err = linkStatement.ExecContext(ctx, eventRow.EventID, fileRow.FileID, seenAt.UTC().Format(time.RFC3339Nano)); err != nil {
 			return err
 		}
 	}
@@ -324,13 +265,10 @@ func (s *SQLiteStore) PruneOlderThan(ctx context.Context, cutoff time.Time) (err
 	}()
 
 	statements := []string{
-		`DELETE FROM archive_event_files WHERE event_id IN (SELECT event_id FROM archive_events WHERE last_seen_at < ?)
-			OR file_id IN (SELECT file_id FROM archive_files WHERE last_seen_at < ?)`,
-		`DELETE FROM archive_events WHERE last_seen_at < ?`,
-		`DELETE FROM archive_files WHERE last_seen_at < ?`,
+		`DELETE FROM smd_ivs_events WHERE last_seen_at < ?`,
+		`DELETE FROM nvr_recording_chunks WHERE last_seen_at < ?`,
 	}
 	args := [][]any{
-		{formatted, formatted},
 		{formatted},
 		{formatted},
 	}
@@ -379,15 +317,12 @@ type archiveEventRow struct {
 }
 
 func archiveFileRowFromRecording(deviceID string, item dahua.NVRRecording, seenAt time.Time) (archiveFileRow, bool) {
+	if shouldTreatAsEvent(item) {
+		return archiveFileRow{}, false
+	}
 	filePath := strings.TrimSpace(item.FilePath)
 	startTime := strings.TrimSpace(item.StartTime)
 	endTime := strings.TrimSpace(item.EndTime)
-	if shouldTreatAsEvent(item) && filePath != "" {
-		if fileStart, fileEnd, ok := dahua.ParseRecordingFileTimeRange(filePath, time.Local); ok {
-			startTime = fileStart.In(time.Local).Format(archiveTimeLayout)
-			endTime = fileEnd.In(time.Local).Format(archiveTimeLayout)
-		}
-	}
 	if strings.TrimSpace(deviceID) == "" || item.Channel <= 0 || filePath == "" || startTime == "" || endTime == "" {
 		return archiveFileRow{}, false
 	}
@@ -443,6 +378,13 @@ func archiveEventRowFromRecording(deviceID string, item dahua.NVRRecording, seen
 }
 
 func archiveFileID(deviceID string, item dahua.NVRRecording) string {
+	filePath := strings.TrimSpace(item.FilePath)
+	if filePath != "" {
+		return stableArchiveID("chunk", []string{
+			strings.TrimSpace(deviceID),
+			filePath,
+		})
+	}
 	return stableArchiveID("file", []string{
 		strings.TrimSpace(deviceID),
 		fmt.Sprintf("%d", item.Channel),
@@ -453,14 +395,17 @@ func archiveFileID(deviceID string, item dahua.NVRRecording) string {
 }
 
 func archiveEventID(deviceID string, item dahua.NVRRecording) string {
+	eventCode := normalizeArchiveEventCode(item.Type)
+	if eventCode == "" {
+		eventCode = strings.TrimSpace(item.Type)
+	}
 	return stableArchiveID("event", []string{
 		strings.TrimSpace(deviceID),
 		fmt.Sprintf("%d", item.Channel),
 		strings.TrimSpace(item.StartTime),
 		strings.TrimSpace(item.EndTime),
 		strings.TrimSpace(item.FilePath),
-		strings.TrimSpace(item.Source),
-		strings.TrimSpace(item.Type),
+		eventCode,
 		strings.TrimSpace(item.VideoStream),
 	})
 }

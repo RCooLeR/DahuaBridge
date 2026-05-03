@@ -56,7 +56,7 @@ func Run(ctx context.Context, cfg config.Config, info buildinfo.BuildInfo) error
 	if len(drivers) == 0 {
 		return errors.New("no enabled drivers were created from config")
 	}
-	archiveService, err := archive.New(cfg.Archive, cfg.Devices.NVR, services, probeStore, logger)
+	archiveService, err := archive.New(cfg.Archive, cfg.Devices.NVR, archiveLiveSearcher{runtime: services}, probeStore, logger)
 	if err != nil {
 		return fmt.Errorf("create archive service: %w", err)
 	}

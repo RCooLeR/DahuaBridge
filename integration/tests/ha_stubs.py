@@ -3,7 +3,8 @@ from __future__ import annotations
 import enum
 import sys
 import types
-from datetime import datetime
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 
 def install() -> None:
@@ -13,6 +14,12 @@ def install() -> None:
     aiohttp = types.ModuleType("aiohttp")
     aiohttp.ClientError = Exception
     aiohttp.ClientSession = object
+    aiohttp.web = types.SimpleNamespace(
+        Request=object,
+        StreamResponse=object,
+        Response=object,
+        json_response=lambda payload, status=200: {"payload": payload, "status": status},
+    )
     sys.modules["aiohttp"] = aiohttp
 
     voluptuous = types.ModuleType("voluptuous")
@@ -41,6 +48,13 @@ def install() -> None:
     camera.Camera = Camera
     camera.CameraEntityFeature = CameraEntityFeature
     sys.modules["homeassistant.components.camera"] = camera
+
+    class HomeAssistantView:
+        pass
+
+    http = types.ModuleType("homeassistant.components.http")
+    http.HomeAssistantView = HomeAssistantView
+    sys.modules["homeassistant.components.http"] = http
 
     class BinarySensorDeviceClass(str, enum.Enum):
         RUNNING = "running"
@@ -176,4 +190,13 @@ def install() -> None:
 
     dt = types.ModuleType("homeassistant.util.dt")
     dt.parse_datetime = lambda value: datetime.fromisoformat(value.replace("Z", "+00:00"))
+    dt.DEFAULT_TIME_ZONE = timezone.utc
+
+    def get_time_zone(value):
+        try:
+            return ZoneInfo(value)
+        except ZoneInfoNotFoundError:
+            return None
+
+    dt.get_time_zone = get_time_zone
     sys.modules["homeassistant.util.dt"] = dt

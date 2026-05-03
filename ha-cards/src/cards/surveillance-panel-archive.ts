@@ -47,10 +47,12 @@ interface RenderBridgeRecordingsArgs {
   playbackSupported: boolean;
   isPlaybackActive: (recording: BridgeRecordingClipModel) => boolean;
   isDownloadingRecording: (recording: BridgeRecordingClipModel) => boolean;
+  isDeletingRecording: (recording: BridgeRecordingClipModel) => boolean;
   onSelectDate: (value: string) => void;
   onSelectPage: (page: number) => void;
   onPlayRecording: (recording: BridgeRecordingClipModel) => void;
   onDownloadRecording: (recording: BridgeRecordingClipModel) => void;
+  onDeleteRecording: (recording: BridgeRecordingClipModel) => void;
   renderIcon: (icon: string) => TemplateResult;
 }
 
@@ -85,6 +87,7 @@ export function renderArchiveRecordings({
   onDownloadRecording,
   renderIcon,
 }: RenderArchiveRecordingsArgs): TemplateResult {
+  const eventMode = showEventFilter;
   const statusTone = archiveError ? "warning" : archiveLoading ? "info" : "success";
   const countText = archiveLoading
     ? "Loading"
@@ -97,17 +100,17 @@ export function renderArchiveRecordings({
   return html`
     <section class="events archive-panel">
       <div class="archive-head">
+        <div class="panel-title">
+          <span class="split-row">
+            <span class="header-chip-icon nvr-storage-icon" aria-hidden="true">
+              ${renderIcon(eventMode ? "mdi:motion-sensor" : "mdi:filmstrip-box-multiple")}
+            </span>
+            <span>${title}</span>
+          </span>
+        </div>
         <div class="chip-row archive-summary">
           <span class="badge ${statusTone}">${countText}</span>
           <span class="badge info">${formatArchiveDateBadge(archiveDate)}</span>
-          ${archiveRecordings?.channel !== undefined && archiveRecordings?.channel !== null
-            ? html`<span class="badge">Channel ${archiveRecordings.channel}</span>`
-            : null}
-          ${showEventFilter &&
-          archiveEventCode.trim() &&
-          archiveEventCode !== EVENT_FILTER_ALL
-            ? html`<span class="badge">${archiveRecordingEventLabel(archiveEventCode)}</span>`
-            : null}
         </div>
         <div class="archive-filter-row">
           <label class="event-filter archive-date-filter">
@@ -123,7 +126,7 @@ export function renderArchiveRecordings({
           ${showEventFilter
             ? html`
                 <label class="event-filter archive-event-filter">
-                  <span class="event-filter-label">Event type</span>
+                  <span class="event-filter-label">SMD/IVS type</span>
                   <select
                     class="event-filter-select"
                     .value=${archiveEventCode}
@@ -179,7 +182,7 @@ export function renderArchiveRecordings({
                           </span>
                         </span>
                         <span class="archive-entry-actions">
-                          ${playbackSupported || item.assetPlaybackUrl
+                          ${eventMode && (playbackSupported || item.rtspMainUrl || item.rtspSubUrl)
                             ? renderControlButton(
                                 isPlaybackActive(item) ? "Playing" : "Play",
                                 isPlaybackActive(item)
@@ -195,9 +198,9 @@ export function renderArchiveRecordings({
                                 },
                               )
                             : null}
-                          ${item.assetDownloadUrl
+                          ${eventMode && (item.assetDownloadUrl || item.exportUrl)
                             ? renderControlButton(
-                                "MP4",
+                                "Export",
                                 "mdi:download",
                                 () => onDownloadRecording(item, "asset"),
                                 renderIcon,
@@ -207,23 +210,11 @@ export function renderArchiveRecordings({
                                 },
                               )
                             : null}
-                          ${item.downloadUrl
+                          ${!eventMode && item.downloadUrl
                             ? renderControlButton(
                                 "DAV",
                                 "mdi:file-download-outline",
                                 () => onDownloadRecording(item, "raw"),
-                                renderIcon,
-                                {
-                                  compact: true,
-                                  disabled: isDownloadingRecording(item),
-                                },
-                              )
-                            : null}
-                          ${!item.assetDownloadUrl && !item.downloadUrl && item.exportUrl
-                            ? renderControlButton(
-                                "Export MP4",
-                                "mdi:download",
-                                () => onDownloadRecording(item, "asset"),
                                 renderIcon,
                                 {
                                   compact: true,
@@ -243,11 +234,11 @@ export function renderArchiveRecordings({
                 <div class="muted">
                   ${archiveLoading
                     ? showEventFilter
-                      ? "Loading events."
-                      : "Loading archive recordings."
+                      ? "Loading SMD/IVS."
+                      : "Loading recording chunks."
                     : showEventFilter
-                      ? `No events found for ${formatArchiveDateBadge(archiveDate).toLowerCase()}.`
-                      : `No recordings found for ${formatArchiveDateBadge(archiveDate).toLowerCase()}.`}
+                      ? `No SMD/IVS found for ${formatArchiveDateBadge(archiveDate).toLowerCase()}.`
+                      : `No recording chunks found for ${formatArchiveDateBadge(archiveDate).toLowerCase()}.`}
                 </div>
               </div>
             `}
@@ -268,10 +259,12 @@ export function renderBridgeRecordings({
   playbackSupported,
   isPlaybackActive,
   isDownloadingRecording,
+  isDeletingRecording,
   onSelectDate,
   onSelectPage,
   onPlayRecording,
   onDownloadRecording,
+  onDeleteRecording,
   renderIcon,
 }: RenderBridgeRecordingsArgs): TemplateResult {
   const statusTone = recordingsError ? "warning" : recordingsLoading ? "info" : "success";
@@ -367,6 +360,19 @@ export function renderBridgeRecordings({
                               {
                                 compact: true,
                                 disabled: isDownloadingRecording(item),
+                              },
+                            )
+                          : null}
+                        ${item.deleteUrl
+                          ? renderControlButton(
+                              "Delete",
+                              "mdi:delete-outline",
+                              () => onDeleteRecording(item),
+                              renderIcon,
+                              {
+                                compact: true,
+                                disabled: isDeletingRecording(item),
+                                tone: "danger",
                               },
                             )
                           : null}

@@ -53,6 +53,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     async_prune_registry_devices()
 
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
+    from .timeframe_proxy import async_register_timeframe_proxy_view
+
+    async_register_timeframe_proxy_view(hass)
     entry.async_on_unload(entry.add_update_listener(async_reload_entry))
     entry.async_on_unload(coordinator.async_add_listener(async_prune_registry_devices))
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)

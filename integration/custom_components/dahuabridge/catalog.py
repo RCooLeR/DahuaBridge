@@ -356,17 +356,36 @@ def profile_order_for_record(
     record: dict[str, Any] | None, preferred_profile: str = "auto"
 ) -> list[str]:
     stream = stream_for_record(record)
-    recommended = str(stream.get("recommended_profile", "")).strip()
-    preference = str(preferred_profile).strip().lower() or "auto"
+    recommended = normalize_profile_name(stream.get("recommended_profile", ""))
+    preference = normalize_profile_name(preferred_profile) or "auto"
     if preference == "stable":
-        return ["stable", "substream", recommended, "default", "quality"]
-    if preference == "default":
-        return ["default", "quality", recommended, "stable", "substream"]
+        return unique_profile_names("stable", recommended, "quality")
     if preference == "quality":
-        return ["quality", "default", recommended, "stable", "substream"]
-    if preference == "substream":
-        return ["substream", "stable", recommended, "default", "quality"]
-    return [recommended, "quality", "default", "stable", "substream"]
+        return unique_profile_names("quality", recommended, "stable")
+    return unique_profile_names(recommended, "quality", "stable")
+
+
+def normalize_profile_name(raw: Any) -> str:
+    value = str(raw or "").strip().lower()
+    if value in {"", "auto", "quality", "stable"}:
+        return value
+    if value in {"default", "main"}:
+        return "quality"
+    if value in {"substream", "sub"}:
+        return "stable"
+    return value
+
+
+def unique_profile_names(*names: str) -> list[str]:
+    result: list[str] = []
+    seen: set[str] = set()
+    for raw_name in names:
+        name = normalize_profile_name(raw_name)
+        if not name or name == "auto" or name in seen:
+            continue
+        seen.add(name)
+        result.append(name)
+    return result
 
 
 def source_order_for_preference(preferred_source: str = "auto") -> tuple[str, ...]:

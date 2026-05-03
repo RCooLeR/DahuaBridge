@@ -150,6 +150,20 @@ func (c *controller) registerMediaRoutes(router chi.Router) {
 		}
 		writeJSON(w, http.StatusOK, clipAPIResponse(r, clip))
 	})
+	router.With(rateLimitMiddleware(c.mediaLimiter)).Delete("/api/v1/media/recordings/{clipID}", func(w http.ResponseWriter, r *http.Request) {
+		if c.media == nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "media layer is not configured"})
+			return
+		}
+		if err := c.media.DeleteClip(r.Context(), chi.URLParam(r, "clipID")); err != nil {
+			writeClassifiedActionError(w, err, http.StatusBadGateway)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"status": "ok",
+			"id":     chi.URLParam(r, "clipID"),
+		})
+	})
 	router.With(rateLimitMiddleware(c.mediaLimiter)).Get("/api/v1/media/recordings/{clipID}/download", func(w http.ResponseWriter, r *http.Request) {
 		if c.media == nil {
 			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "media layer is not configured"})

@@ -1039,6 +1039,9 @@ function appendRetryQueryParam(sourceUrl: string, revision: number): string {
 
   try {
     const parsed = new URL(sourceUrl, globalThis.location?.href);
+    if ([...parsed.searchParams.keys()].some((key) => key.toLowerCase() === "authsig")) {
+      return sourceUrl;
+    }
     parsed.searchParams.set("_retry", String(revision));
     return parsed.toString();
   } catch {

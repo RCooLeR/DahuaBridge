@@ -373,10 +373,6 @@ func buildProfiles(deviceCfg config.DeviceConfig, channel int, includeCredential
 	if stableFrameRate <= 0 {
 		stableFrameRate = 5
 	}
-	substreamFrameRate := mediaCfg.SubstreamFrameRate
-	if substreamFrameRate <= 0 {
-		substreamFrameRate = stableFrameRate
-	}
 	if !mainOK {
 		mainWidth, mainHeight = 0, 0
 	}
@@ -394,27 +390,7 @@ func buildProfiles(deviceCfg config.DeviceConfig, channel int, includeCredential
 		width:   subWidth,
 		height:  subHeight,
 	}, substreamAvailable)
-	substreamSource := resolveProfileSource(mainSource, profileSourceVariant{
-		subtype: 1,
-		width:   subWidth,
-		height:  subHeight,
-	}, substreamAvailable)
-
 	profiles := map[string]Profile{
-		"default": {
-			Name:           "default",
-			StreamURL:      buildRTSPURL(deviceCfg, channel, mainSource.subtype, includeCredentials),
-			LocalMJPEGURL:  buildLocalMJPEGURL(publicBaseURL, streamID, "default"),
-			LocalHLSURL:    buildLocalHLSURL(publicBaseURL, streamID, "default"),
-			LocalDASHURL:   buildLocalDASHURL(publicBaseURL, streamID, "default"),
-			LocalWebRTCURL: buildLocalWebRTCURL(publicBaseURL, streamID, "default"),
-			Subtype:        mainSource.subtype,
-			VideoCodec:     mainCodec,
-			AudioCodec:     audioCodec,
-			SourceWidth:    mainSource.width,
-			SourceHeight:   mainSource.height,
-			Recommended:    recommended == "default",
-		},
 		"quality": {
 			Name:                     "quality",
 			StreamURL:                buildRTSPURL(deviceCfg, channel, mainSource.subtype, includeCredentials),
@@ -447,22 +423,6 @@ func buildProfiles(deviceCfg config.DeviceConfig, channel int, includeCredential
 			SourceHeight:             stableSource.height,
 			UseWallclockAsTimestamps: true,
 			Recommended:              recommended == "stable",
-		},
-		"substream": {
-			Name:           "substream",
-			StreamURL:      buildRTSPURL(deviceCfg, channel, substreamSource.subtype, includeCredentials),
-			LocalMJPEGURL:  buildLocalMJPEGURL(publicBaseURL, streamID, "substream"),
-			LocalHLSURL:    buildLocalHLSURL(publicBaseURL, streamID, "substream"),
-			LocalDASHURL:   buildLocalDASHURL(publicBaseURL, streamID, "substream"),
-			LocalWebRTCURL: buildLocalWebRTCURL(publicBaseURL, streamID, "substream"),
-			Subtype:        substreamSource.subtype,
-			RTSPTransport:  "tcp",
-			FrameRate:      substreamFrameRate,
-			VideoCodec:     firstNonEmptyProfileValue(subCodec, mainCodec),
-			AudioCodec:     audioCodec,
-			SourceWidth:    substreamSource.width,
-			SourceHeight:   substreamSource.height,
-			Recommended:    recommended == "substream",
 		},
 	}
 	return profiles
@@ -893,10 +853,26 @@ func buildNVRChannelFeatures(publicBaseURL string, deviceID string, channel int,
 	features := []FeatureSummary{
 		{
 			Key:       "archive_search",
-			Label:     "Recordings",
+			Label:     "Recording Chunks",
 			Group:     "archive",
 			Kind:      "query",
-			URL:       buildNVRRecordingsCollectionURL(publicBaseURL, deviceID),
+			URL:       buildNVRRecordingChunksCollectionURL(publicBaseURL, deviceID),
+			Supported: true,
+		},
+		{
+			Key:       "archive_smd_ivs",
+			Label:     "SMD/IVS Events",
+			Group:     "archive",
+			Kind:      "query",
+			URL:       buildNVRSMDIVSCollectionURL(publicBaseURL, deviceID),
+			Supported: true,
+		},
+		{
+			Key:       "archive_recording_chunks",
+			Label:     "Recording Chunks",
+			Group:     "archive",
+			Kind:      "query",
+			URL:       buildNVRRecordingChunksCollectionURL(publicBaseURL, deviceID),
 			Supported: true,
 		},
 		{
@@ -905,6 +881,14 @@ func buildNVRChannelFeatures(publicBaseURL string, deviceID string, channel int,
 			Group:     "archive",
 			Kind:      "session",
 			URL:       buildNVRPlaybackSessionsCollectionURL(publicBaseURL, deviceID),
+			Supported: true,
+		},
+		{
+			Key:       "archive_coverage",
+			Label:     "Coverage",
+			Group:     "archive",
+			Kind:      "query",
+			URL:       buildNVRArchiveCoverageURL(publicBaseURL, deviceID, channel),
 			Supported: true,
 		},
 	}
@@ -1302,9 +1286,36 @@ func buildNVRRecordingsCollectionURL(publicBaseURL string, deviceID string) stri
 	return publicBaseURL + path
 }
 
+func buildNVRSMDIVSCollectionURL(publicBaseURL string, deviceID string) string {
+	publicBaseURL = strings.TrimRight(strings.TrimSpace(publicBaseURL), "/")
+	path := "/api/v1/nvr/" + url.PathEscape(deviceID) + "/smd-ivs"
+	if publicBaseURL == "" {
+		return path
+	}
+	return publicBaseURL + path
+}
+
+func buildNVRRecordingChunksCollectionURL(publicBaseURL string, deviceID string) string {
+	publicBaseURL = strings.TrimRight(strings.TrimSpace(publicBaseURL), "/")
+	path := "/api/v1/nvr/" + url.PathEscape(deviceID) + "/recording-chunks"
+	if publicBaseURL == "" {
+		return path
+	}
+	return publicBaseURL + path
+}
+
 func buildNVRPlaybackSessionsCollectionURL(publicBaseURL string, deviceID string) string {
 	publicBaseURL = strings.TrimRight(strings.TrimSpace(publicBaseURL), "/")
 	path := "/api/v1/nvr/" + url.PathEscape(deviceID) + "/playback/sessions"
+	if publicBaseURL == "" {
+		return path
+	}
+	return publicBaseURL + path
+}
+
+func buildNVRArchiveCoverageURL(publicBaseURL string, deviceID string, channel int) string {
+	publicBaseURL = strings.TrimRight(strings.TrimSpace(publicBaseURL), "/")
+	path := "/api/v1/nvr/" + url.PathEscape(deviceID) + "/recordings/coverage?channel=" + url.QueryEscape(strconv.Itoa(channel))
 	if publicBaseURL == "" {
 		return path
 	}
