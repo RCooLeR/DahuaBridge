@@ -1,11 +1,11 @@
 import { html, nothing, type TemplateResult } from "lit";
 
 import type { VtoViewModel } from "../domain/model";
+import type { Localizer } from "../localization";
 import type { DetailTab } from "./surveillance-panel-state";
 import {
   type IsBusyFn,
   type OnVtoButtonAction,
-  type OnVtoRangeChange,
   type OnVtoSwitchAction,
   type RenderIconFn,
   renderVtoIntercomViews,
@@ -16,19 +16,15 @@ import { renderControlButton, renderSegmentButton } from "./surveillance-panel-p
 
 export function renderVtoInspector(
   vto: VtoViewModel,
+  t: Localizer,
   detailTab: DetailTab,
   eventContent: TemplateResult | typeof nothing,
   renderIcon: RenderIconFn,
   isBusy: IsBusyFn,
   onSelectDetailTab: (tab: DetailTab) => void,
-  onVtoRangeChange: OnVtoRangeChange,
   onVtoSwitchAction: OnVtoSwitchAction,
   onVtoButtonAction: OnVtoButtonAction,
 ): TemplateResult {
-  const outputVolumeAvailable =
-    vto.hasOutputVolumeEntity || Boolean(vto.outputVolumeActionUrl);
-  const inputVolumeAvailable =
-    vto.hasInputVolumeEntity || Boolean(vto.inputVolumeActionUrl);
   const autoRecordAvailable =
     vto.hasAutoRecordEntity || Boolean(vto.autoRecordActionUrl);
   const externalUplinkAvailable = Boolean(
@@ -40,105 +36,45 @@ export function renderVtoInspector(
   return html`
     <div class="detail-header">
       <div class="detail-title">${vto.label}</div>
-      <div class="muted">${vto.roomLabel} door station</div>
+      <div class="muted">${t("vto.doorStationSuffix", {room: vto.roomLabel})}</div>
     </div>
     <div class="detail-tabs">
-      ${renderSegmentButton("overview", "Overview", detailTab, (tab) =>
+      ${renderSegmentButton("overview", t("tab.overview"), detailTab, (tab) =>
         onSelectDetailTab(tab as DetailTab),
       )}
-      ${renderSegmentButton("events", "Events", detailTab, (tab) =>
+      ${renderSegmentButton("events", t("tab.events"), detailTab, (tab) =>
         onSelectDetailTab(tab as DetailTab),
       )}
-      ${renderSegmentButton("settings", "Settings", detailTab, (tab) =>
+      ${renderSegmentButton("settings", t("tab.settings"), detailTab, (tab) =>
         onSelectDetailTab(tab as DetailTab),
       )}
     </div>
     <div class="detail-main">
       ${detailTab === "overview"
         ? html`
-            ${renderVtoStatusOverview(vto)}
+            ${renderVtoStatusOverview(vto, t)}
             ${renderVtoLockViews(
               vto,
               renderIcon,
               isBusy,
               onVtoButtonAction,
+              t,
             )}
-            ${renderVtoIntercomViews(vto, renderIcon)}
+            ${renderVtoIntercomViews(vto, renderIcon, t)}
           `
         : nothing}
       ${detailTab === "events" ? eventContent : nothing}
       ${detailTab === "settings"
         ? html`
-            <div class="panel">
-              <div class="panel-title">Audio Controls</div>
-              ${outputVolumeAvailable
-                ? html`
-                    <div class="slider-wrap">
-                      <div class="split-row">
-                        <span class="muted">Speaker Volume</span>
-                        <strong>${vto.outputVolume ?? 0}</strong>
-                      </div>
-                      <input
-                        type="range"
-                        min="0"
-                        max="100"
-                        step="1"
-                        .value=${String(vto.outputVolume ?? 0)}
-                        ?disabled=${isBusy("vto:output-volume")}
-                        @change=${(event: Event) =>
-                          onVtoRangeChange(
-                            event,
-                            "vto:output-volume",
-                            vto.outputVolumeEntityId,
-                            vto.outputVolumeActionUrl,
-                          )}
-                      />
-                    </div>
-                  `
-                : nothing}
-              ${inputVolumeAvailable
-                ? html`
-                    <div class="slider-wrap">
-                      <div class="split-row">
-                        <span class="muted">Microphone Volume</span>
-                        <strong>${vto.inputVolume ?? 0}</strong>
-                      </div>
-                      <input
-                        type="range"
-                        min="0"
-                        max="100"
-                        step="1"
-                        .value=${String(vto.inputVolume ?? 0)}
-                        ?disabled=${isBusy("vto:input-volume")}
-                        @change=${(event: Event) =>
-                          onVtoRangeChange(
-                            event,
-                            "vto:input-volume",
-                            vto.inputVolumeEntityId,
-                            vto.inputVolumeActionUrl,
-                          )}
-                      />
-                    </div>
-                  `
-                : nothing}
-              <div class="chip-row">
-                <span class="badge ${vto.capabilities.outputVolumeSupported ? "success" : "warning"}">
-                  Speaker control ${vto.capabilities.outputVolumeSupported ? "ready" : "unavailable"}
-                </span>
-                <span class="badge ${vto.capabilities.inputVolumeSupported ? "success" : "warning"}">
-                  Microphone control ${vto.capabilities.inputVolumeSupported ? "ready" : "unavailable"}
-                </span>
-                <span class="badge ${vto.capabilities.muteSupported ? "info" : "warning"}">
-                  ${vto.capabilities.muteSupported ? "Mute on video controls" : "Mute unavailable"}
-                </span>
-              </div>
-              ${autoRecordAvailable
-                ? html`
+            ${autoRecordAvailable
+              ? html`
+                  <div class="panel">
+                    <div class="panel-title">${t("inspector.recordingControls")}</div>
                     <div class="control-row">
                       ${renderControlButton(
                         vto.autoRecordEnabled
-                          ? "Auto Record On"
-                          : "Auto Record Off",
+                          ? t("button.autoRecordOn")
+                          : t("button.autoRecordOff"),
                         "mdi:record-rec",
                         () =>
                           void onVtoSwitchAction(
@@ -157,20 +93,20 @@ export function renderVtoInspector(
                         },
                       )}
                     </div>
-                  `
-                : nothing}
-            </div>
+                  </div>
+                `
+              : nothing}
             <div class="panel">
-              <div class="panel-title">Intercom Controls</div>
+              <div class="panel-title">${t("inspector.intercomControls")}</div>
               <div class="chip-row">
                 <span class="badge ${vto.capabilities.resetSupported ? "success" : "warning"}">
-                  ${vto.capabilities.resetSupported ? "Session reset ready" : "Session reset unavailable"}
+                  ${vto.capabilities.resetSupported ? t("inspector.sessionResetReady") : t("inspector.sessionResetUnavailable")}
                 </span>
                 <span class="badge ${vto.capabilities.bridgeAudioUplinkSupported ? "success" : "warning"}">
-                  ${vto.capabilities.bridgeAudioUplinkSupported ? "Bridge uplink supported" : "Bridge uplink unavailable"}
+                  ${vto.capabilities.bridgeAudioUplinkSupported ? t("inspector.bridgeUplinkSupported") : t("inspector.bridgeUplinkUnavailable")}
                 </span>
                 <span class="badge ${vto.capabilities.bridgeAudioOutputSupported ? "info" : "warning"}">
-                  ${vto.capabilities.bridgeAudioOutputSupported ? "Bridge output supported" : "Bridge output unavailable"}
+                  ${vto.capabilities.bridgeAudioOutputSupported ? t("inspector.bridgeOutputSupported") : t("inspector.bridgeOutputUnavailable")}
                 </span>
               </div>
               ${externalUplinkAvailable || sessionResetAvailable
@@ -179,8 +115,8 @@ export function renderVtoInspector(
                       ${externalUplinkAvailable
                         ? renderControlButton(
                             vto.intercom.externalUplinkEnabled
-                              ? "Disable External Uplink"
-                              : "Enable External Uplink",
+                              ? t("button.disableExternalUplink")
+                              : t("button.enableExternalUplink"),
                             vto.intercom.externalUplinkEnabled
                               ? "mdi:upload-off-outline"
                               : "mdi:upload-network-outline",
@@ -204,7 +140,7 @@ export function renderVtoInspector(
                         : nothing}
                       ${sessionResetAvailable
                         ? renderControlButton(
-                            "Reset Bridge Session",
+                            t("button.resetBridgeSession"),
                             "mdi:restart",
                             () =>
                               void onVtoButtonAction(

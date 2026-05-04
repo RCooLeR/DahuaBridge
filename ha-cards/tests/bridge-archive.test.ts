@@ -267,9 +267,56 @@ describe("bridge archive", () => {
       recordKind: "file",
       assetStatus: "ready",
       assetClipId: "clip_ready",
-      assetPlaybackUrl: "http://bridge.local:9205/api/v1/media/recordings/clip_ready/play",
-      assetDownloadUrl: "http://bridge.local:9205/api/v1/media/recordings/clip_ready/download",
-      assetSelfUrl: "http://bridge.local:9205/api/v1/media/recordings/clip_ready",
+      assetPlaybackUrl: "https://ha.example.com/api/v1/media/recordings/clip_ready/play",
+      assetDownloadUrl: "https://ha.example.com/api/v1/media/recordings/clip_ready/download",
+    });
+  });
+
+  it("rewrites relative archive row urls through the request proxy prefix", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        returned_count: 1,
+        items: [
+          {
+            id: "file_ready",
+            channel: 1,
+            start_time: "2026-05-01T10:00:00Z",
+            end_time: "2026-05-01T10:00:20Z",
+            download_url: "/api/v1/nvr/west20_nvr/recordings/file_ready/download",
+            export_url: "/api/v1/nvr/west20_nvr/recordings/file_ready/export",
+            asset_playback_url: "/api/v1/media/recordings/clip_ready/play",
+            asset_download_url: "/api/v1/media/recordings/clip_ready/download",
+          },
+        ],
+      }),
+    } as Response);
+
+    Object.defineProperty(globalThis, "window", {
+      configurable: true,
+      value: {
+        location: {
+          origin: "https://ha.example.com",
+        },
+      },
+    });
+
+    const result = await fetchArchiveRecordings(
+      "https://ha.example.com/dahua-bridge/api/v1/nvr/west20_nvr/smd-ivs",
+      {
+        channel: 1,
+        startTime: "2026-05-01T00:00:00Z",
+        endTime: "2026-05-02T00:00:00Z",
+        limit: 100,
+      },
+    );
+
+    expect(result.items[0]).toMatchObject({
+      downloadUrl: "https://ha.example.com/dahua-bridge/api/v1/nvr/west20_nvr/recordings/file_ready/download",
+      exportUrl: "https://ha.example.com/dahua-bridge/api/v1/nvr/west20_nvr/recordings/file_ready/export",
+      assetPlaybackUrl: "https://ha.example.com/dahua-bridge/api/v1/media/recordings/clip_ready/play",
+      assetDownloadUrl: "https://ha.example.com/dahua-bridge/api/v1/media/recordings/clip_ready/download",
     });
   });
 
@@ -325,6 +372,45 @@ describe("bridge archive", () => {
       sourceEndTime: "2026-05-01T20:12:25Z",
       playbackUrl: "http://bridge.local:9205/api/v1/media/recordings/clip_test/play",
       downloadUrl: "http://bridge.local:9205/api/v1/media/recordings/clip_test/download",
+    });
+  });
+
+  it("rewrites relative bridge mp4 row urls through the request proxy prefix", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        returned_count: 1,
+        items: [
+          {
+            id: "clip_test",
+            stream_id: "nvrpb_clip_test",
+            channel: 1,
+            status: "completed",
+            started_at: "2026-05-01T10:00:00Z",
+            playback_url: "/api/v1/media/recordings/clip_test/play",
+            download_url: "/api/v1/media/recordings/clip_test/download",
+          },
+        ],
+      }),
+    } as Response);
+
+    Object.defineProperty(globalThis, "window", {
+      configurable: true,
+      value: {
+        location: {
+          origin: "https://ha.example.com",
+        },
+      },
+    });
+
+    const result = await fetchBridgeRecordings(
+      "https://ha.example.com/dahua-bridge/api/v1/media/recordings?channel=1",
+    );
+
+    expect(result.items[0]).toMatchObject({
+      playbackUrl: "https://ha.example.com/dahua-bridge/api/v1/media/recordings/clip_test/play",
+      downloadUrl: "https://ha.example.com/dahua-bridge/api/v1/media/recordings/clip_test/download",
     });
   });
 

@@ -41,7 +41,7 @@ export const surveillancePanelBaseStyles = css`
 
   .shell {
     display: grid;
-    grid-template-columns: minmax(300px, 340px) minmax(0, 1fr) minmax(300px, 340px);
+    grid-template-columns: minmax(300px, 340px) minmax(0, 1fr) minmax(300px, 360px);
     grid-template-rows: auto minmax(0, 1fr);
     grid-template-areas:
       "sidebar header header"
@@ -1223,6 +1223,8 @@ export const surveillancePanelOverviewStyles = css`
   .viewport img.remote-stream,
   .viewport video#remote-stream,
   .viewport video.remote-stream,
+  .tile-media dahuabridge-remote-stream,
+  .viewport dahuabridge-remote-stream,
   ha-camera-stream {
     width: 100%;
     height: 100%;
@@ -1489,8 +1491,56 @@ export const surveillancePanelDetailStyles = css`
     pointer-events: none;
   }
 
-  .viewport-controls .control-button {
+  .viewport-controls .control-button,
+  .viewport-controls .icon-button,
+  .viewport-controls .stream-volume-control {
     pointer-events: auto;
+  }
+
+  .viewport-controls .icon-button {
+    width: 36px;
+    height: 36px;
+    border-radius: 999px;
+    border-color: rgba(255, 255, 255, 0.14);
+    background: rgba(7, 18, 29, 0.58);
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
+    flex: 0 0 auto;
+  }
+
+  .stream-volume-control {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+  }
+
+  .volume-popover {
+    position: absolute;
+    right: 0;
+    bottom: calc(100% + 8px);
+    width: 138px;
+    padding: 9px 10px;
+    border-radius: 8px;
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    background: rgba(7, 18, 29, 0.9);
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.28);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    opacity: 0;
+    transform: translateY(6px);
+    visibility: hidden;
+    transition: opacity 0.16s ease, transform 0.16s ease, visibility 0.16s ease;
+  }
+
+  .stream-volume-control:hover .volume-popover,
+  .stream-volume-control:focus-within .volume-popover {
+    opacity: 1;
+    transform: translateY(0);
+    visibility: visible;
+  }
+
+  .volume-slider {
+    display: block;
   }
 
   .viewport.empty {
@@ -1777,6 +1827,11 @@ export const surveillancePanelResponsiveStyles = css`
     .viewport-controls .control-button[data-compact="true"] {
       flex: 1 1 128px;
       justify-content: center;
+    }
+
+    .volume-popover {
+      right: auto;
+      left: 0;
     }
   }
 

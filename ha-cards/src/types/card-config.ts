@@ -7,9 +7,6 @@ const vtoSchema = z
     device_id: z.string().min(1).optional(),
     label: z.string().min(1).optional(),
     lock_button_entity: z.string().min(1).optional(),
-    input_volume_entity: z.string().min(1).optional(),
-    output_volume_entity: z.string().min(1).optional(),
-    muted_entity: z.string().min(1).optional(),
     auto_record_entity: z.string().min(1).optional(),
   })
   .optional();

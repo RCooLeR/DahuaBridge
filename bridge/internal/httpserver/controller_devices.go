@@ -172,6 +172,9 @@ func (c *controller) registerNVRRoutes(router chi.Router) {
 
 		normalizeNVRRecordingSearchResult(&result)
 		attachNVRRecordingExportURLs(r, chi.URLParam(r, "deviceID"), &result)
+		if !parseQueryBool(r.URL.Query(), "include_credentials", "with_credentials") {
+			stripNVRRecordingPlaybackURLs(&result)
+		}
 		writeJSON(w, http.StatusOK, result)
 	})
 	router.With(rateLimitMiddleware(c.adminLimiter)).Get("/api/v1/nvr/{deviceID}/smd-ivs", func(w http.ResponseWriter, r *http.Request) {
@@ -874,6 +877,9 @@ func (c *controller) handleNVRRecordingCollection(w http.ResponseWriter, r *http
 
 	normalizeNVRRecordingSearchResult(&result)
 	attachNVRRecordingExportURLs(r, chi.URLParam(r, "deviceID"), &result)
+	if !parseQueryBool(r.URL.Query(), "include_credentials", "with_credentials") {
+		stripNVRRecordingPlaybackURLs(&result)
+	}
 	writeJSON(w, http.StatusOK, result)
 }
 

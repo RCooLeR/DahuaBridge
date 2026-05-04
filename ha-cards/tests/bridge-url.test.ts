@@ -36,4 +36,20 @@ describe("bridge URL rewriting", () => {
       ),
     ).toBe("https://ha.example.com/bridge/api/v1/nvr/west20_nvr/events/summary");
   });
+
+  it("does not duplicate the browser bridge path prefix when the target already has it", () => {
+    expect(
+      rewriteBridgeUrl(
+        "https://ha.example.com/dahua-bridge/api/v1/vto/front_vto/snapshot",
+        "https://ha.example.com/dahua-bridge",
+      ),
+    ).toBe("https://ha.example.com/dahua-bridge/api/v1/vto/front_vto/snapshot");
+
+    expect(
+      rewriteBridgeUrl(
+        "/dahua-bridge/api/v1/nvr/west20_nvr/smd-ivs?channel=1",
+        "https://ha.example.com/dahua-bridge",
+      ),
+    ).toBe("https://ha.example.com/dahua-bridge/api/v1/nvr/west20_nvr/smd-ivs?channel=1");
+  });
 });

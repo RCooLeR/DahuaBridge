@@ -13,7 +13,6 @@ type Registry struct {
 	registry           *prometheus.Registry
 	ProbeTotal         *prometheus.CounterVec
 	ProbeDuration      *prometheus.HistogramVec
-	MQTTPublishTotal   *prometheus.CounterVec
 	DahuaRequestTotal  *prometheus.CounterVec
 	DeviceAvailability *prometheus.GaugeVec
 	EventTotal         *prometheus.CounterVec
@@ -44,11 +43,6 @@ func New(info buildinfo.BuildInfo) *Registry {
 		Help:    "Duration of Dahua device probes.",
 		Buckets: prometheus.DefBuckets,
 	}, []string{"device_id", "device_type"})
-
-	mqttPublishTotal := prometheus.NewCounterVec(prometheus.CounterOpts{
-		Name: "dahuabridge_mqtt_publish_total",
-		Help: "Total number of MQTT publish attempts.",
-	}, []string{"topic", "status"})
 
 	dahuaRequestTotal := prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "dahuabridge_dahua_request_total",
@@ -99,7 +93,6 @@ func New(info buildinfo.BuildInfo) *Registry {
 		buildInfo,
 		probeTotal,
 		probeDuration,
-		mqttPublishTotal,
 		dahuaRequestTotal,
 		deviceAvailability,
 		eventTotal,
@@ -117,7 +110,6 @@ func New(info buildinfo.BuildInfo) *Registry {
 		registry:           reg,
 		ProbeTotal:         probeTotal,
 		ProbeDuration:      probeDuration,
-		MQTTPublishTotal:   mqttPublishTotal,
 		DahuaRequestTotal:  dahuaRequestTotal,
 		DeviceAvailability: deviceAvailability,
 		EventTotal:         eventTotal,
@@ -142,15 +134,6 @@ func (r *Registry) ObserveProbe(deviceID string, deviceType string, started time
 
 	r.ProbeTotal.WithLabelValues(deviceID, deviceType, status).Inc()
 	r.ProbeDuration.WithLabelValues(deviceID, deviceType).Observe(time.Since(started).Seconds())
-}
-
-func (r *Registry) ObserveMQTTPublish(topic string, err error) {
-	status := "success"
-	if err != nil {
-		status = "error"
-	}
-
-	r.MQTTPublishTotal.WithLabelValues(topic, status).Inc()
 }
 
 func (r *Registry) ObserveDahuaRequest(deviceID string, endpoint string, method string, status string) {

@@ -125,17 +125,6 @@ func (s *SQLiteStore) dropSchema(ctx context.Context) error {
 	return nil
 }
 
-func (s *SQLiteStore) ensureColumn(ctx context.Context, table string, column string, definition string) error {
-	statement := fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s", table, column, definition)
-	if _, err := s.db.ExecContext(ctx, statement); err != nil {
-		if strings.Contains(strings.ToLower(err.Error()), "duplicate column name") {
-			return nil
-		}
-		return err
-	}
-	return nil
-}
-
 func (s *SQLiteStore) UpsertArchiveFiles(ctx context.Context, deviceID string, items []dahua.NVRRecording, seenAt time.Time) (err error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {

@@ -15,6 +15,15 @@ from custom_components.dahuabridge.proxy.timeframe_datetime import (  # noqa: E4
     datetime_for_compare,
     parse_query_datetime,
 )
+from custom_components.dahuabridge.proxy.timeframe_playback import (  # noqa: E402
+    playback_sessions_url,
+    select_mjpeg_url,
+    select_mjpeg_urls,
+)
+from custom_components.dahuabridge.api import DahuaBridgeAPI  # noqa: E402
+from custom_components.dahuabridge.timeframe_proxy import (  # noqa: E402
+    _camera_proxy_request_authenticated,
+)
 
 
 class FakeConfig:
@@ -23,6 +32,38 @@ class FakeConfig:
 
 class FakeHass:
     config = FakeConfig()
+
+
+class FakeAPI:
+    base_url = "https://ha.example.com/dahua-bridge"
+
+    def bridge_resource_url(self, target: str) -> str:
+        if target.startswith("https://ha.example.com/dahua-bridge/"):
+            return target
+        if target.startswith("https://ha.example.com/"):
+            return target.replace(
+                "https://ha.example.com/",
+                "https://ha.example.com/dahua-bridge/",
+                1,
+            )
+        if target.startswith("/"):
+            return f"{self.base_url}{target}"
+        return f"{self.base_url}/{target}"
+
+    def absolute_url(self, target: str) -> str:
+        return self.bridge_resource_url(target)
+
+
+class FakeCoordinator:
+    api = FakeAPI()
+
+
+class FakeRequest(dict):
+    def __init__(self, query: dict[str, str] | None = None, authenticated=False) -> None:
+        super().__init__()
+        self.query = query or {}
+        if authenticated:
+            self["ha_authenticated"] = True
 
 
 class TimeframeProxyTests(unittest.TestCase):
@@ -52,6 +93,69 @@ class TimeframeProxyTests(unittest.TestCase):
         self.assertEqual(
             bridge_playback_datetime(parsed),
             "2026-05-03T13:11:05+00:00",
+        )
+
+    def test_timeframe_proxy_accepts_signed_home_assistant_request(self) -> None:
+        self.assertTrue(
+            _camera_proxy_request_authenticated(FakeRequest(authenticated=True), {})
+        )
+
+    def test_timeframe_proxy_accepts_camera_access_token(self) -> None:
+        self.assertTrue(
+            _camera_proxy_request_authenticated(
+                FakeRequest({"token": "abc"}), {"access_token": "abc"}
+            )
+        )
+
+    def test_timeframe_proxy_rejects_unauthenticated_request(self) -> None:
+        self.assertFalse(
+            _camera_proxy_request_authenticated(
+                FakeRequest({"token": "wrong"}), {"access_token": "abc"}
+            )
+        )
+
+    def test_playback_sessions_url_preserves_proxy_base_path(self) -> None:
+        self.assertEqual(
+            playback_sessions_url(
+                FakeCoordinator(),
+                {
+                    "bridge_playback_sessions_url": (
+                        "https://ha.example.com/api/v1/nvr/west20_nvr/playback/sessions"
+                    )
+                },
+            ),
+            "https://ha.example.com/dahua-bridge/api/v1/nvr/west20_nvr/playback/sessions",
+        )
+
+    def test_bridge_resource_url_preserves_media_query_order(self) -> None:
+        api = DahuaBridgeAPI(object(), "https://ha.example.com/dahua-bridge")
+
+        self.assertEqual(
+            api.bridge_resource_url(
+                "https://ha.example.com/api/v1/media/mjpeg/nvrpb_test?profile=quality&width=640"
+            ),
+            "https://ha.example.com/dahua-bridge/api/v1/media/mjpeg/nvrpb_test?profile=quality&width=640",
+        )
+
+    def test_select_mjpeg_urls_returns_ordered_profile_fallbacks(self) -> None:
+        payload = {
+            "recommended_profile": "stable",
+            "profiles": {
+                "quality": {"mjpeg_url": "/api/v1/media/mjpeg/session?profile=quality"},
+                "stable": {"mjpeg_url": "/api/v1/media/mjpeg/session?profile=stable"},
+            },
+        }
+
+        self.assertEqual(
+            select_mjpeg_url(payload, "quality"),
+            "/api/v1/media/mjpeg/session?profile=quality",
+        )
+        self.assertEqual(
+            select_mjpeg_urls(payload, "quality"),
+            [
+                "/api/v1/media/mjpeg/session?profile=quality",
+                "/api/v1/media/mjpeg/session?profile=stable",
+            ],
         )
 
 

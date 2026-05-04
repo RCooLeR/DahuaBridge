@@ -15,7 +15,7 @@ import (
 func main() {
 	cliApp := &cli.App{
 		Name:  "dahuabridge",
-		Usage: "Bridge Dahua NVR/VTO devices into Home Assistant over MQTT",
+		Usage: "Bridge Dahua NVR/VTO/IPC devices into Home Assistant and local HTTP APIs",
 		Flags: []cli.Flag{
 			&cli.StringFlag{
 				Name:    "config",

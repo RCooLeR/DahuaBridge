@@ -7,16 +7,15 @@ import {
 } from "../domain/model";
 import type { DetailTab } from "./surveillance-panel-state";
 import {
-  audioAuthorityLabel,
-  audioAuthorityTone,
-  audioSemanticLabel,
   streamProfileLabel,
   streamSourceLabel,
 } from "./surveillance-panel-inspector-shared";
 import { renderSegmentButton } from "./surveillance-panel-primitives";
+import type { Localizer } from "../localization";
 
 export function renderCameraInspector(
   camera: CameraViewModel,
+  t: Localizer,
   detailTab: DetailTab,
   eventContent: TemplateResult | typeof nothing,
   archiveContent: TemplateResult | typeof nothing,
@@ -29,16 +28,16 @@ export function renderCameraInspector(
       <div class="muted">${camera.roomLabel}</div>
     </div>
     <div class="detail-tabs">
-      ${renderSegmentButton("events", "Events", detailTab, (tab) =>
+      ${renderSegmentButton("events", t("tab.events"), detailTab, (tab) =>
         onSelectDetailTab(tab as DetailTab),
       )}
-      ${renderSegmentButton("recordings", "Recordings", detailTab, (tab) =>
+      ${renderSegmentButton("recordings", t("tab.recordings"), detailTab, (tab) =>
         onSelectDetailTab(tab as DetailTab),
       )}
       ${renderSegmentButton("mp4", "MP4", detailTab, (tab) =>
         onSelectDetailTab(tab as DetailTab),
       )}
-      ${renderSegmentButton("settings", "Settings", detailTab, (tab) =>
+      ${renderSegmentButton("settings", t("tab.settings"), detailTab, (tab) =>
         onSelectDetailTab(tab as DetailTab),
       )}
     </div>
@@ -48,47 +47,47 @@ export function renderCameraInspector(
       ${detailTab === "mp4" ? mp4Content : nothing}
       ${detailTab === "settings"
         ? html`
-            ${renderCameraStreamStatus(camera)}
-            ${renderCameraStreamProfiles(camera)}
-            ${renderCameraAudioBridge(camera)}
-            ${renderCameraBridgeAdapter(camera)}
+            ${renderCameraStreamStatus(camera, t)}
+            ${renderCameraStreamProfiles(camera, t)}
+            ${renderCameraAudioBridge(camera, t)}
+            ${renderCameraBridgeAdapter(camera, t)}
           `
         : nothing}
     </div>
   `;
 }
 
-function renderCameraStreamStatus(camera: CameraViewModel): TemplateResult {
+function renderCameraStreamStatus(camera: CameraViewModel, t: Localizer): TemplateResult {
   return html`
     <div class="panel">
-      <div class="panel-title">Stream Status</div>
+      <div class="panel-title">${t("inspector.streamStatus")}</div>
       <div class="chip-row">
         <span class="badge ${camera.stream.available ? "success" : "critical"}">
-          ${camera.stream.available ? "Live stream ready" : "Live stream unavailable"}
+          ${camera.stream.available ? t("inspector.liveReady") : t("inspector.liveUnavailable")}
         </span>
-        <span class="badge info">${streamProfileLabel(camera.stream.profile)}</span>
+        <span class="badge info">${streamProfileLabel(camera.stream.profile, t)}</span>
         <span class="badge">${camera.stream.resolution}</span>
         <span class="badge">${camera.stream.codec}</span>
         <span class="badge">${camera.stream.frameRate}</span>
         <span class="badge">${camera.stream.bitrate}</span>
         <span class="badge">${camera.stream.audioCodec}</span>
         ${camera.stream.recommendedProfile
-          ? html`<span class="badge success">Recommended ${streamProfileLabel(camera.stream.recommendedProfile)}</span>`
+          ? html`<span class="badge success">${t("inspector.recommendedProfile", {profile: streamProfileLabel(camera.stream.recommendedProfile, t)})}</span>`
           : nothing}
-        ${camera.stream.onvifStreamUrl ? html`<span class="badge info">ONVIF stream ready</span>` : nothing}
-        ${camera.stream.onvifSnapshotUrl ? html`<span class="badge info">ONVIF snapshot ready</span>` : nothing}
+        ${camera.stream.onvifStreamUrl ? html`<span class="badge info">${t("inspector.onvifStreamReady")}</span>` : nothing}
+        ${camera.stream.onvifSnapshotUrl ? html`<span class="badge info">${t("inspector.onvifSnapshotReady")}</span>` : nothing}
       </div>
       <div class="detail-inline-meta">
         ${camera.stream.preferredVideoProfile
-          ? html`<span class="muted">Preferred profile: ${streamProfileLabel(camera.stream.preferredVideoProfile)}</span>`
+          ? html`<span class="muted">${t("inspector.preferredProfile", {profile: streamProfileLabel(camera.stream.preferredVideoProfile, t)})}</span>`
           : nothing}
         ${camera.stream.preferredVideoSource
-          ? html`<span class="muted">Preferred source: ${streamSourceLabel(camera.stream.preferredVideoSource)}</span>`
+          ? html`<span class="muted">${t("inspector.preferredSource", {source: streamSourceLabel(camera.stream.preferredVideoSource, t)})}</span>`
           : nothing}
         <span class="muted">
           ${camera.stream.source
-            ? "Primary stream route is exposed."
-            : "No primary stream route is exposed."}
+            ? t("inspector.primaryRouteExposed")
+            : t("inspector.primaryRouteMissing")}
         </span>
       </div>
     </div>
@@ -97,6 +96,7 @@ function renderCameraStreamStatus(camera: CameraViewModel): TemplateResult {
 
 function renderCameraStreamProfiles(
   camera: CameraViewModel,
+  t: Localizer,
 ): TemplateResult | typeof nothing {
   if (camera.stream.profiles.length === 0) {
     return nothing;
@@ -104,7 +104,7 @@ function renderCameraStreamProfiles(
 
   return html`
     <div class="panel">
-      <div class="panel-title">Stream Profiles</div>
+      <div class="panel-title">${t("inspector.streamProfiles")}</div>
       <div class="compact-list">
         ${repeat(
           camera.stream.profiles,
@@ -114,11 +114,11 @@ function renderCameraStreamProfiles(
               <div class="panel-title compact-card-head">
                 <span class="sidebar-label">${profile.name}</span>
                 ${profile.recommended
-                  ? html`<span class="badge success">Recommended</span>`
+                  ? html`<span class="badge success">${t("inspector.recommended")}</span>`
                   : nothing}
               </div>
               <div class="chip-row">
-                ${profile.subtype !== null ? html`<span class="badge">Subtype ${profile.subtype}</span>` : nothing}
+                ${profile.subtype !== null ? html`<span class="badge">${t("inspector.subtype", {subtype: profile.subtype})}</span>` : nothing}
                 ${profile.resolution ? html`<span class="badge info">${profile.resolution}</span>` : nothing}
                 ${profile.frameRate !== null ? html`<span class="badge">${profile.frameRate}</span>` : nothing}
                 ${profile.rtspTransport ? html`<span class="badge">${profile.rtspTransport}</span>` : nothing}
@@ -139,27 +139,21 @@ function renderCameraStreamProfiles(
 
 function renderCameraAudioBridge(
   camera: CameraViewModel,
+  t: Localizer,
 ): TemplateResult | typeof nothing {
-  if (!camera.audioMuteSupported && !camera.audioControlAuthority) {
+  if (!camera.audioMuteSupported && !camera.audioCodec.trim()) {
     return nothing;
   }
 
   return html`
     <div class="panel">
-      <div class="panel-title">Stream Audio</div>
+      <div class="panel-title">${t("inspector.browserStreamAudio")}</div>
       <div class="chip-row">
         <span class="badge ${camera.audioMuteSupported ? "success" : "warning"}">
-          ${camera.audioMuteSupported ? "Browser audio toggle ready" : "Browser audio unavailable"}
+          ${camera.audioMuteSupported ? t("inspector.playerAudioAvailable") : t("inspector.playerAudioUnavailable")}
         </span>
-        ${camera.audioControlAuthority
-          ? html`
-              <span class="badge ${audioAuthorityTone(camera.audioControlAuthority)}">
-                ${audioAuthorityLabel(camera.audioControlAuthority)}
-              </span>
-            `
-          : nothing}
-        ${camera.audioControlSemantic
-          ? html`<span class="badge info">${audioSemanticLabel(camera.audioControlSemantic)}</span>`
+        ${camera.audioCodec.trim()
+          ? html`<span class="badge info">${camera.audioCodec}</span>`
           : nothing}
       </div>
     </div>
@@ -168,6 +162,7 @@ function renderCameraAudioBridge(
 
 function renderCameraBridgeAdapter(
   camera: CameraViewModel,
+  t: Localizer,
 ): TemplateResult | typeof nothing {
   if (camera.bridgeBaseUrl && camera.eventsUrl) {
     return nothing;
@@ -175,17 +170,17 @@ function renderCameraBridgeAdapter(
 
   return html`
     <div class="panel">
-      <div class="panel-title">Bridge Adapter</div>
+      <div class="panel-title">${t("inspector.bridgeAdapter")}</div>
       <div class="chip-row">
         <span class="badge ${camera.bridgeBaseUrl ? "success" : "warning"}">
-          ${camera.bridgeBaseUrl ? "Bridge base URL available" : "Bridge base URL unavailable"}
+          ${camera.bridgeBaseUrl ? t("inspector.bridgeBaseAvailable") : t("inspector.bridgeBaseUnavailable")}
         </span>
         <span class="badge ${camera.eventsUrl ? "success" : "warning"}">
-          ${camera.eventsUrl ? "Event route available" : "Event route unavailable"}
+          ${camera.eventsUrl ? t("inspector.eventRouteAvailable") : t("inspector.eventRouteUnavailable")}
         </span>
       </div>
       <div class="muted">
-        Bridge diagnostics are only shown here when a required route is missing.
+        ${t("inspector.bridgeDiagnosticsHint")}
       </div>
     </div>
   `;

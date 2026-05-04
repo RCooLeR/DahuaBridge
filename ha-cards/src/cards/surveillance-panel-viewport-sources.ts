@@ -106,11 +106,11 @@ export function availableStreamViewportSources(
   if (nativeAvailable) {
     sources.push("native");
   }
-  if (profile?.localDashUrl) {
-    sources.push("dash");
-  }
   if (profile?.localHlsUrl) {
     sources.push("hls");
+  }
+  if (profile?.localDashUrl) {
+    sources.push("dash");
   }
   if (profile?.localMjpegUrl) {
     sources.push("mjpeg");
@@ -135,11 +135,65 @@ export function resolveOverviewCameraViewportSource(
   camera: CameraViewModel,
   selectedProfileKey: string | null,
 ): CameraViewportSource | null {
-  return resolveStreamViewportSource(
+  return resolveBridgeFirstStreamViewportSource(
     camera.stream,
     null,
     selectedProfileKey,
     Boolean(camera.cameraEntity),
+  );
+}
+
+export function resolvePreferredCameraViewportSource(
+  camera: CameraViewModel,
+  selectedProfileKey: string | null,
+): CameraViewportSource | null {
+  return resolvePreferredStreamViewportSource(
+    camera.stream,
+    selectedProfileKey,
+    Boolean(camera.cameraEntity),
+  );
+}
+
+export function resolvePreferredStreamViewportSource(
+  stream: CameraStreamViewModel,
+  selectedProfileKey: string | null,
+  nativeAvailable = false,
+): CameraViewportSource | null {
+  return resolveStreamViewportSource(
+    stream,
+    null,
+    selectedProfileKey,
+    nativeAvailable,
+  );
+}
+
+export function resolveBridgeFirstStreamViewportSource(
+  stream: CameraStreamViewModel,
+  selectedSource: CameraViewportSource | null,
+  selectedProfileKey: string | null,
+  nativeAvailable = false,
+): CameraViewportSource | null {
+  const availableSources = availableStreamViewportSources(
+    stream,
+    selectedProfileKey,
+    nativeAvailable,
+  );
+  if (selectedSource && availableSources.includes(selectedSource)) {
+    return selectedSource;
+  }
+
+  const preferredSource = normalizeViewportSource(stream.preferredVideoSource);
+  if (
+    preferredSource &&
+    preferredSource !== "native" &&
+    availableSources.includes(preferredSource)
+  ) {
+    return preferredSource;
+  }
+
+  return selectSourceByPriority(
+    availableSources,
+    ["hls", "dash", "mjpeg", "native"],
   );
 }
 
@@ -230,29 +284,6 @@ export function resolveInitialPlaybackViewportSource(
   return availableSources[0] ?? null;
 }
 
-export function preserveCameraViewportSourceSelection(
-  camera: CameraViewModel,
-  selectedProfileKey: string | null,
-  selectedSource: CameraViewportSource | null,
-): CameraViewportSource | null {
-  return preserveViewportSourceSelection(
-    availableCameraViewportSources(camera, selectedProfileKey),
-    selectedSource,
-  );
-}
-
-export function preserveCameraViewportSourceSelectionOnProfileChange(
-  camera: CameraViewModel,
-  selectedProfileKey: string | null,
-  selectedSource: CameraViewportSource | null,
-): CameraViewportSource | null {
-  return preserveCameraViewportSourceSelection(
-    camera,
-    selectedProfileKey,
-    selectedSource,
-  );
-}
-
 export function preservePlaybackViewportSourceSelection(
   session: NvrPlaybackSessionModel,
   selectedProfileKey: string | null,
@@ -290,6 +321,29 @@ export function resolvePlaybackProfile(
     hlsUrl: firstEntry[1].hlsUrl,
     mjpegUrl: firstEntry[1].mjpegUrl,
   };
+}
+
+export function preserveCameraViewportSourceSelection(
+  camera: CameraViewModel,
+  selectedProfileKey: string | null,
+  selectedSource: CameraViewportSource | null,
+): CameraViewportSource | null {
+  return preserveViewportSourceSelection(
+    availableCameraViewportSources(camera, selectedProfileKey),
+    selectedSource,
+  );
+}
+
+export function preserveCameraViewportSourceSelectionOnProfileChange(
+  camera: CameraViewModel,
+  selectedProfileKey: string | null,
+  selectedSource: CameraViewportSource | null,
+): CameraViewportSource | null {
+  return preserveCameraViewportSourceSelection(
+    camera,
+    selectedProfileKey,
+    selectedSource,
+  );
 }
 
 function normalizeViewportSource(

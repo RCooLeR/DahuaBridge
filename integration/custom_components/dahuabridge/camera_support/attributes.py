@@ -24,6 +24,7 @@ def camera_extra_state_attributes(
     record: dict[str, Any] | None,
     preferred_video_profile: str,
     preferred_video_source: str,
+    integration_language: str,
 ) -> dict[str, Any]:
     stream = stream_for_record(record)
     device = device_for_record(record)
@@ -60,6 +61,7 @@ def camera_extra_state_attributes(
     attrs["bridge_root_device_id"] = parent_id or device_id
     attrs["bridge_device_kind"] = str(device.get("kind", "")).strip()
     attrs["bridge_device_name"] = str(device.get("name", "")).strip()
+    attrs["bridge_integration_language"] = integration_language
 
     channel = stream.get("channel")
     if isinstance(channel, int):

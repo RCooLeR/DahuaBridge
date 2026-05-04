@@ -466,11 +466,12 @@ func parseNVRRecordingQuery(r *http.Request) (dahua.NVRRecordingQuery, error) {
 		return dahua.NVRRecordingQuery{}, fmt.Errorf("invalid channel")
 	}
 
-	startTime, err := parseFlexibleTimestamp(strings.TrimSpace(r.URL.Query().Get("start")), "start")
+	values := r.URL.Query()
+	startTime, err := parseFlexibleTimestamp(firstNonEmptyQueryValue(values, "start", "start_time"), "start")
 	if err != nil {
 		return dahua.NVRRecordingQuery{}, err
 	}
-	endTime, err := parseFlexibleTimestamp(strings.TrimSpace(r.URL.Query().Get("end")), "end")
+	endTime, err := parseFlexibleTimestamp(firstNonEmptyQueryValue(values, "end", "end_time"), "end")
 	if err != nil {
 		return dahua.NVRRecordingQuery{}, err
 	}
@@ -489,7 +490,6 @@ func parseNVRRecordingQuery(r *http.Request) (dahua.NVRRecordingQuery, error) {
 		limit = 200
 	}
 
-	values := r.URL.Query()
 	eventOnly := parseQueryBool(values, "event_only", "events_only")
 	includeAssets := parseQueryBool(values, "include_assets", "with_assets")
 	skipAssetEnrichment := parseQueryBool(values, "db_only", "skip_assets", "skip_asset_enrichment")
@@ -1156,6 +1156,16 @@ func attachNVRRecordingAssetURLs(r *http.Request, item *dahua.NVRRecording) {
 	}
 	if status == "transcoding" {
 		item.AssetStopURL = buildAbsoluteRequestURL(r, "/api/v1/media/recordings/"+url.PathEscape(clipID)+"/stop")
+	}
+}
+
+func stripNVRRecordingPlaybackURLs(result *dahua.NVRRecordingSearchResult) {
+	if result == nil {
+		return
+	}
+	for index := range result.Items {
+		result.Items[index].RTSPMainURL = ""
+		result.Items[index].RTSPSubURL = ""
 	}
 }
 

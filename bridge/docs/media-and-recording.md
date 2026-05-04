@@ -49,11 +49,12 @@ Stores SMD/IVS detections:
 - channel
 - event type
 - start and end time
-- generated main/sub RTSP playback URLs
+- generated main/sub RTSP playback URLs for export and diagnostics
 - source DAV path when the NVR reports one
 - MP4 backup clip ID, file path, status, and error
 
 The card uses these rows for the SMD/IVS list. Play uses direct RTSP native Home Assistant playback. Export creates or reuses an MP4 clip.
+HTTP list responses redact the raw RTSP playback URLs by default. Use `include_credentials=true` only for operator diagnostics.
 
 ### `nvr_recording_chunks`
 
@@ -80,7 +81,7 @@ There are two archive indexing flows:
 - recording chunk sync fills `nvr_recording_chunks`
 - SMD/IVS sync fills `smd_ivs_events` and queues MP4 backup export when enabled
 
-API reads use SQLite only. SMD/IVS list requests do not call the NVR, and recording chunk list requests do not call the NVR.
+API reads use SQLite only. SMD/IVS list requests do not call the NVR, and recording chunk list requests do not call the NVR. Event filters are applied in SQLite before `LIMIT`, then checked again in Go against the normalized Dahua event names.
 
 ## Native Historical Playback
 

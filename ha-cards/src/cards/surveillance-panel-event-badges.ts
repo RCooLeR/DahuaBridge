@@ -1,10 +1,12 @@
 import { html, nothing, type TemplateResult } from "lit";
 
 import type { CameraViewModel } from "../domain/model";
+import { createLocalizer, type Localizer } from "../localization";
 
 export function renderCameraEventCountBadges(
   camera: CameraViewModel,
   variant: "inline" | "overlay",
+  t: Localizer = createLocalizer("en"),
 ): TemplateResult | typeof nothing {
   const humanCount = positiveEventCount(camera.humanCount24h);
   const vehicleCount = positiveEventCount(camera.vehicleCount24h);
@@ -27,8 +29,8 @@ export function renderCameraEventCountBadges(
         ? html`
             <span
               class="tile-event-count info"
-              title="${humanCount} person events in the last 24 hours"
-              aria-label="${humanCount} person events in the last 24 hours"
+              title="${humanCount} ${t("event.human").toLowerCase()} ${t("metric.events24h").toLowerCase()}"
+              aria-label="${humanCount} ${t("event.human").toLowerCase()} ${t("metric.events24h").toLowerCase()}"
             >
               <ha-icon .icon=${"mdi:account"}></ha-icon>
               <span>${humanCount}</span>
@@ -39,8 +41,8 @@ export function renderCameraEventCountBadges(
         ? html`
             <span
               class="tile-event-count warning"
-              title="${vehicleCount} vehicle events in the last 24 hours"
-              aria-label="${vehicleCount} vehicle events in the last 24 hours"
+              title="${vehicleCount} ${t("event.vehicle").toLowerCase()} ${t("metric.events24h").toLowerCase()}"
+              aria-label="${vehicleCount} ${t("event.vehicle").toLowerCase()} ${t("metric.events24h").toLowerCase()}"
             >
               <ha-icon .icon=${"mdi:car"}></ha-icon>
               <span>${vehicleCount}</span>
@@ -51,8 +53,8 @@ export function renderCameraEventCountBadges(
         ? html`
             <span
               class="tile-event-count warning"
-              title="${ivsCount} IVS events in the last 24 hours"
-              aria-label="${ivsCount} IVS events in the last 24 hours"
+              title="${ivsCount} ${t("metric.ivs")} ${t("metric.events24h").toLowerCase()}"
+              aria-label="${ivsCount} ${t("metric.ivs")} ${t("metric.events24h").toLowerCase()}"
             >
               <ha-icon .icon=${"mdi:vector-square"}></ha-icon>
               <span>${ivsCount}</span>
@@ -63,8 +65,8 @@ export function renderCameraEventCountBadges(
         ? html`
             <span
               class="tile-event-count warning"
-              title="${uncategorizedEventCount} SMD/IVS events in the last 24 hours"
-              aria-label="${uncategorizedEventCount} SMD/IVS events in the last 24 hours"
+              title="${uncategorizedEventCount} SMD/IVS ${t("metric.events24h").toLowerCase()}"
+              aria-label="${uncategorizedEventCount} SMD/IVS ${t("metric.events24h").toLowerCase()}"
             >
               <ha-icon .icon=${"mdi:motion-sensor"}></ha-icon>
               <span>${uncategorizedEventCount}</span>

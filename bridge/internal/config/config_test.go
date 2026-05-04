@@ -64,9 +64,6 @@ func TestMediaDefaults(t *testing.T) {
 	if cfg.Media.StableFrameRate != 5 {
 		t.Fatalf("unexpected default media stable_frame_rate %d", cfg.Media.StableFrameRate)
 	}
-	if cfg.Media.SubstreamFrameRate != 5 {
-		t.Fatalf("unexpected default media substream_frame_rate %d", cfg.Media.SubstreamFrameRate)
-	}
 	if cfg.Media.Threads != 1 {
 		t.Fatalf("unexpected default media threads %d", cfg.Media.Threads)
 	}
@@ -98,9 +95,6 @@ func TestArchiveDefaults(t *testing.T) {
 	if cfg.Archive.DBPath != "/data/archive/archive.db" {
 		t.Fatalf("unexpected default archive db_path %q", cfg.Archive.DBPath)
 	}
-	if cfg.Archive.CacheDir != "/data/archive/cache" {
-		t.Fatalf("unexpected default archive cache_dir %q", cfg.Archive.CacheDir)
-	}
 	if cfg.Archive.TempDir != "/data/archive/tmp" {
 		t.Fatalf("unexpected default archive temp_dir %q", cfg.Archive.TempDir)
 	}
@@ -124,7 +118,6 @@ func TestNormalizeArchiveTempDir(t *testing.T) {
 
 func TestValidateRequiresArchiveTempDirWhenEnabled(t *testing.T) {
 	cfg := defaultConfig()
-	cfg.MQTT.Enabled = false
 	cfg.Archive.Enabled = true
 	cfg.Archive.TempDir = ""
 	cfg.Devices.NVR = []DeviceConfig{{
@@ -163,7 +156,6 @@ func TestHTTPRateLimitDefaults(t *testing.T) {
 
 func TestValidateRequiresStateStorePathWhenEnabled(t *testing.T) {
 	cfg := defaultConfig()
-	cfg.MQTT.Enabled = false
 	cfg.StateStore.Enabled = true
 	cfg.Devices.NVR = []DeviceConfig{{
 		ID:       "nvr",
@@ -179,72 +171,15 @@ func TestValidateRequiresStateStorePathWhenEnabled(t *testing.T) {
 	}
 }
 
-func TestHomeAssistantAPIDefaultTimeout(t *testing.T) {
+func TestNormalizeHomeAssistantPublicBaseURL(t *testing.T) {
 	cfg := defaultConfig()
-	if cfg.HomeAssistant.RequestTimeout != 15*time.Second {
-		t.Fatalf("unexpected home assistant request timeout %s", cfg.HomeAssistant.RequestTimeout)
-	}
-	if cfg.HomeAssistant.EntityMode != "native" {
-		t.Fatalf("unexpected home assistant entity mode %q", cfg.HomeAssistant.EntityMode)
-	}
-	if cfg.HomeAssistant.CameraSnapshotSource != "device" {
-		t.Fatalf("unexpected home assistant camera snapshot source %q", cfg.HomeAssistant.CameraSnapshotSource)
-	}
-}
-
-func TestValidateRequiresHomeAssistantTokenWhenAPIBaseURLIsSet(t *testing.T) {
-	cfg := defaultConfig()
-	cfg.MQTT.Enabled = false
-	cfg.HomeAssistant.APIBaseURL = "http://homeassistant.local:8123"
-	cfg.Devices.NVR = []DeviceConfig{{
-		ID:       "nvr",
-		BaseURL:  "http://127.0.0.1",
-		Username: "admin",
-		Password: "secret",
-		Enabled:  boolPtr(true),
-	}}
-
-	err := cfg.validate()
-	if err == nil || !strings.Contains(err.Error(), "home_assistant.access_token") {
-		t.Fatalf("expected home assistant access token validation error, got %v", err)
-	}
-}
-
-func TestValidateRequiresHomeAssistantAPIBaseURLWhenTokenIsSet(t *testing.T) {
-	cfg := defaultConfig()
-	cfg.MQTT.Enabled = false
-	cfg.HomeAssistant.AccessToken = "token"
-	cfg.Devices.NVR = []DeviceConfig{{
-		ID:       "nvr",
-		BaseURL:  "http://127.0.0.1",
-		Username: "admin",
-		Password: "secret",
-		Enabled:  boolPtr(true),
-	}}
-
-	err := cfg.validate()
-	if err == nil || !strings.Contains(err.Error(), "home_assistant.api_base_url") {
-		t.Fatalf("expected home assistant api_base_url validation error, got %v", err)
-	}
-}
-
-func TestNormalizeHomeAssistantAPIBaseURL(t *testing.T) {
-	cfg := defaultConfig()
-	cfg.HomeAssistant.APIBaseURL = " http://homeassistant.local:8123/ "
-	cfg.HomeAssistant.EntityMode = " Native "
-	cfg.HomeAssistant.CameraSnapshotSource = " Logo "
+	cfg.HomeAssistant.PublicBaseURL = " http://bridge.local:9205/ "
 
 	if err := cfg.normalize(); err != nil {
 		t.Fatalf("normalize returned error: %v", err)
 	}
-	if cfg.HomeAssistant.APIBaseURL != "http://homeassistant.local:8123" {
-		t.Fatalf("unexpected normalized api base url %q", cfg.HomeAssistant.APIBaseURL)
-	}
-	if cfg.HomeAssistant.EntityMode != "native" {
-		t.Fatalf("unexpected normalized entity mode %q", cfg.HomeAssistant.EntityMode)
-	}
-	if cfg.HomeAssistant.CameraSnapshotSource != "logo" {
-		t.Fatalf("unexpected normalized camera snapshot source %q", cfg.HomeAssistant.CameraSnapshotSource)
+	if cfg.HomeAssistant.PublicBaseURL != "http://bridge.local:9205" {
+		t.Fatalf("unexpected normalized public base url %q", cfg.HomeAssistant.PublicBaseURL)
 	}
 }
 
@@ -287,42 +222,6 @@ func TestYAMLUnmarshalSupportsMediaHLSTmpDir(t *testing.T) {
 	}
 	if cfg.Media.HLSKeepAfterExit != 90*time.Minute {
 		t.Fatalf("unexpected media hls_keep_after_exit %s", cfg.Media.HLSKeepAfterExit)
-	}
-}
-
-func TestValidateRejectsUnsupportedHomeAssistantEntityMode(t *testing.T) {
-	cfg := defaultConfig()
-	cfg.MQTT.Enabled = false
-	cfg.HomeAssistant.EntityMode = "broken"
-	cfg.Devices.NVR = []DeviceConfig{{
-		ID:       "nvr",
-		BaseURL:  "http://127.0.0.1",
-		Username: "admin",
-		Password: "secret",
-		Enabled:  boolPtr(true),
-	}}
-
-	err := cfg.validate()
-	if err == nil || !strings.Contains(err.Error(), "home_assistant.entity_mode") {
-		t.Fatalf("expected home assistant entity mode validation error, got %v", err)
-	}
-}
-
-func TestValidateRejectsUnsupportedHomeAssistantCameraSnapshotSource(t *testing.T) {
-	cfg := defaultConfig()
-	cfg.MQTT.Enabled = false
-	cfg.HomeAssistant.CameraSnapshotSource = "broken"
-	cfg.Devices.NVR = []DeviceConfig{{
-		ID:       "nvr",
-		BaseURL:  "http://127.0.0.1",
-		Username: "admin",
-		Password: "secret",
-		Enabled:  boolPtr(true),
-	}}
-
-	err := cfg.validate()
-	if err == nil || !strings.Contains(err.Error(), "home_assistant.camera_snapshot_source") {
-		t.Fatalf("expected home assistant camera snapshot source validation error, got %v", err)
 	}
 }
 
@@ -385,7 +284,6 @@ func TestNormalizeMediaWebRTCUplinkTargets(t *testing.T) {
 
 func TestValidateRejectsUnsupportedMediaVideoEncoder(t *testing.T) {
 	cfg := defaultConfig()
-	cfg.MQTT.Enabled = false
 	cfg.Media.VideoEncoder = "broken"
 	cfg.Devices.NVR = []DeviceConfig{{
 		ID:       "nvr",
@@ -403,7 +301,6 @@ func TestValidateRejectsUnsupportedMediaVideoEncoder(t *testing.T) {
 
 func TestValidateRejectsUnsupportedMediaInputPreset(t *testing.T) {
 	cfg := defaultConfig()
-	cfg.MQTT.Enabled = false
 	cfg.Media.InputPreset = "broken"
 	cfg.Devices.NVR = []DeviceConfig{{
 		ID:       "nvr",
@@ -484,7 +381,6 @@ func TestNormalizeImouConfigFromEnvAndOverrides(t *testing.T) {
 
 func TestValidateRequiresImouCredentialsWhenOverrideConfigured(t *testing.T) {
 	cfg := defaultConfig()
-	cfg.MQTT.Enabled = false
 	cfg.Imou.Enabled = true
 	cfg.Devices.NVR = []DeviceConfig{{
 		ID:       "nvr",
@@ -508,7 +404,6 @@ func TestValidateRequiresImouCredentialsWhenOverrideConfigured(t *testing.T) {
 
 func TestValidateRejectsUnsupportedImouDataCenter(t *testing.T) {
 	cfg := defaultConfig()
-	cfg.MQTT.Enabled = false
 	cfg.Imou.Enabled = true
 	cfg.Imou.AppID = "app"
 	cfg.Imou.AppSecret = "secret"

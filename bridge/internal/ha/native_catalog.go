@@ -2,6 +2,7 @@ package ha
 
 import (
 	"sort"
+	"strings"
 	"time"
 
 	"RCooLeR/DahuaBridge/internal/dahua"
@@ -10,7 +11,12 @@ import (
 
 type NativeCatalog struct {
 	GeneratedAt string                `json:"generated_at"`
+	Meta        NativeCatalogMeta     `json:"meta"`
 	Devices     []NativeCatalogDevice `json:"devices"`
+}
+
+type NativeCatalogMeta struct {
+	BaseURL string `json:"base_url"`
 }
 
 type NativeCatalogDevice struct {
@@ -19,7 +25,7 @@ type NativeCatalogDevice struct {
 	Stream *streams.Entry    `json:"stream,omitempty"`
 }
 
-func BuildNativeCatalog(results []*dahua.ProbeResult, entries []streams.Entry) NativeCatalog {
+func BuildNativeCatalog(results []*dahua.ProbeResult, entries []streams.Entry, baseURL ...string) NativeCatalog {
 	streamsByDeviceID := make(map[string]streams.Entry, len(entries))
 	for _, entry := range entries {
 		streamsByDeviceID[entry.ID] = entry
@@ -43,8 +49,20 @@ func BuildNativeCatalog(results []*dahua.ProbeResult, entries []streams.Entry) N
 
 	return NativeCatalog{
 		GeneratedAt: time.Now().UTC().Format(time.RFC3339),
-		Devices:     devices,
+		Meta: NativeCatalogMeta{
+			BaseURL: firstNonEmptyNativeCatalogValue(baseURL...),
+		},
+		Devices: devices,
 	}
+}
+
+func firstNonEmptyNativeCatalogValue(values ...string) string {
+	for _, value := range values {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			return strings.TrimRight(trimmed, "/")
+		}
+	}
+	return ""
 }
 
 func nativeCatalogDevice(device dahua.Device, state dahua.DeviceState, streamsByDeviceID map[string]streams.Entry) NativeCatalogDevice {

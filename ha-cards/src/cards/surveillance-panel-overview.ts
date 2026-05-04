@@ -12,10 +12,12 @@ import type { HassEntity } from "../types/home-assistant";
 import type { SurveillanceOverviewLayout } from "./surveillance-panel-state";
 import { renderIconButton } from "./surveillance-panel-primitives";
 import { renderCameraEventCountBadges } from "./surveillance-panel-event-badges";
+import type { Localizer } from "../localization";
 
 type OverviewTile = CameraViewModel | VtoViewModel;
 
 interface RenderSurveillancePanelOverviewArgs {
+  t: Localizer;
   overviewTiles: OverviewTile[];
   layout: SurveillanceOverviewLayout;
   selection: PanelSelection;
@@ -30,7 +32,6 @@ interface RenderSurveillancePanelOverviewArgs {
   onVtoUnlock: (vto: VtoViewModel) => void;
   onVtoAnswer: (vto: VtoViewModel) => void;
   onVtoHangup: (vto: VtoViewModel) => void;
-  onVtoMute: (vto: VtoViewModel) => void;
   onOpenVtoSnapshot: (vto: VtoViewModel) => void;
   onToggleVtoRecording: (vto: VtoViewModel) => void;
   onToggleVtoStream: (vto: VtoViewModel) => void;
@@ -54,6 +55,7 @@ interface RenderSurveillancePanelOverviewArgs {
 }
 
 export function renderSurveillancePanelOverview({
+  t,
   overviewTiles,
   layout,
   selection,
@@ -68,7 +70,6 @@ export function renderSurveillancePanelOverview({
   onVtoUnlock,
   onVtoAnswer,
   onVtoHangup,
-  onVtoMute,
   onOpenVtoSnapshot,
   onToggleVtoRecording,
   onToggleVtoStream,
@@ -106,7 +107,6 @@ export function renderSurveillancePanelOverview({
                     onVtoUnlock,
                     onVtoAnswer,
                     onVtoHangup,
-                    onVtoMute,
                     onOpenVtoSnapshot,
                     onToggleVtoRecording,
                     onToggleVtoStream,
@@ -122,6 +122,7 @@ export function renderSurveillancePanelOverview({
                     hasAvailableVtoIntercom,
                     vtoBadgeClass,
                     isBusy,
+                    t,
                   })
                 : renderCameraTile({
                     camera: item,
@@ -140,6 +141,7 @@ export function renderSurveillancePanelOverview({
                     isAuxActive,
                     isBusy,
                     ptzAdjusting,
+                    t,
                   }),
           )}
         </div>
@@ -165,6 +167,7 @@ function renderCameraTile({
   isAuxActive,
   isBusy,
   ptzAdjusting,
+  t,
 }: {
   camera: CameraViewModel;
   selection: PanelSelection;
@@ -182,6 +185,7 @@ function renderCameraTile({
   isAuxActive: (camera: CameraViewModel, output: string) => boolean;
   isBusy: (key: string) => boolean;
   ptzAdjusting: boolean;
+  t: Localizer;
 }): TemplateResult {
   const selected = selection.kind === "camera" && selection.deviceId === camera.deviceId;
   const lightAvailable = supportsAuxTarget(camera, "light");
@@ -206,7 +210,7 @@ function renderCameraTile({
         </div>
         <div class="tile-status">
           <span class="badge ${camera.online ? "success" : "critical"}">
-            ${camera.online ? "Online" : "Offline"}
+            ${camera.online ? t("state.online") : t("state.offline")}
           </span>
           <span class="status-dot ${camera.online ? "" : "critical"}"></span>
         </div>
@@ -216,19 +220,19 @@ function renderCameraTile({
         <div class="media-overlay">
           <div class="media-bottom">
             <div class="tile-overlay-badges">
-              ${renderCameraEventCountBadges(camera, "inline")}
+              ${renderCameraEventCountBadges(camera, "inline", t)}
               ${camera.recordingActive
                 ? html`<span
                     class="recording-dot"
-                    title="NVR Recording"
-                    aria-label="NVR Recording"
+                    title=${t("badge.nvrRecording")}
+                    aria-label=${t("badge.nvrRecording")}
                   ></span>`
                 : null}
               ${bridgeRecordingActive
-                ? html`<span class="badge warning">MP4 Clip</span>`
+                ? html`<span class="badge warning">${t("badge.mp4Clip")}</span>`
                 : null}
               ${!camera.streamAvailable
-                ? html`<span class="badge critical">Stream Down</span>`
+                ? html`<span class="badge critical">${t("badge.streamDown")}</span>`
                 : null}
               ${repeat(
                 camera.detections,
@@ -239,7 +243,7 @@ function renderCameraTile({
             <div class="tile-controls">
               ${canOpenSnapshot(camera)
                 ? renderIconButton(
-                    "Snapshot",
+                    t("button.snapshot"),
                     "mdi:camera",
                     () => onOpenSnapshot(camera),
                     renderIcon,
@@ -247,7 +251,7 @@ function renderCameraTile({
                 : null}
               ${camera.supportsRecording
                 ? renderIconButton(
-                    bridgeRecordingActive ? "Stop MP4" : "Start MP4",
+                    bridgeRecordingActive ? t("button.stopMp4") : t("button.startMp4"),
                     bridgeRecordingActive ? "mdi:record-rec" : "mdi:record-circle-outline",
                     () =>
                       onTriggerRecording(
@@ -267,7 +271,7 @@ function renderCameraTile({
               ${camera.supportsAux
               && lightAvailable
                 ? renderIconButton(
-                    lightActive ? "Return to smart light" : "Turn on white light",
+                    lightActive ? t("button.lightSmart") : t("button.lightWhite"),
                     "mdi:lightbulb-on-outline",
                     () => onTriggerAux(camera, "light"),
                     renderIcon,
@@ -281,7 +285,7 @@ function renderCameraTile({
               ${camera.supportsAux
               && warningLightAvailable
                 ? renderIconButton(
-                    warningLightActive ? "Turn warning light off" : "Turn warning light on",
+                    warningLightActive ? t("button.warningLightOff") : t("button.warningLightOn"),
                     "mdi:alarm-light-outline",
                     () => onTriggerAux(camera, "warning_light"),
                     renderIcon,
@@ -295,7 +299,7 @@ function renderCameraTile({
               ${camera.supportsAux
               && sirenAvailable
                 ? renderIconButton(
-                    sirenActive ? "Turn siren off" : "Turn siren on",
+                    sirenActive ? t("button.sirenOff") : t("button.sirenOn"),
                     "mdi:bullhorn",
                     () => onTriggerAux(camera, "siren"),
                     renderIcon,
@@ -308,7 +312,7 @@ function renderCameraTile({
                 : null}
               ${camera.supportsPtz
                 ? renderIconButton(
-                    "PTZ controls",
+                    t("button.ptzControls"),
                     "mdi:axis-arrow",
                     () => onEnablePtz(camera),
                     renderIcon,
@@ -320,8 +324,8 @@ function renderCameraTile({
                 : null}
               ${camera.audioCodec.trim()
                 ? renderIconButton(
-                    cameraMuted ? "Enable Stream Audio" : "Disable Stream Audio",
-                    cameraMuted ? "mdi:volume-high" : "mdi:volume-off",
+                    cameraMuted ? t("button.enableStreamAudio") : t("button.disableStreamAudio"),
+                    cameraMuted ? "mdi:volume-off" : "mdi:volume-high",
                     () => onToggleCameraAudio(camera),
                     renderIcon,
                     {
@@ -344,7 +348,6 @@ function renderVtoTile({
   onVtoUnlock,
   onVtoAnswer,
   onVtoHangup,
-  onVtoMute,
   onOpenVtoSnapshot,
   onToggleVtoRecording,
   onToggleVtoStream,
@@ -360,6 +363,7 @@ function renderVtoTile({
   hasAvailableVtoIntercom,
   vtoBadgeClass,
   isBusy,
+  t,
 }: {
   vto: VtoViewModel;
   selection: PanelSelection;
@@ -367,7 +371,6 @@ function renderVtoTile({
   onVtoUnlock: (vto: VtoViewModel) => void;
   onVtoAnswer: (vto: VtoViewModel) => void;
   onVtoHangup: (vto: VtoViewModel) => void;
-  onVtoMute: (vto: VtoViewModel) => void;
   onOpenVtoSnapshot: (vto: VtoViewModel) => void;
   onToggleVtoRecording: (vto: VtoViewModel) => void;
   onToggleVtoStream: (vto: VtoViewModel) => void;
@@ -383,6 +386,7 @@ function renderVtoTile({
   hasAvailableVtoIntercom: (vto: VtoViewModel) => boolean;
   vtoBadgeClass: (vto: VtoViewModel) => string;
   isBusy: (key: string) => boolean;
+  t: Localizer;
 }): TemplateResult {
   const streamPlaying = isVtoStreamPlaying(vto);
   const bridgeRecordingActive = isVtoBridgeRecordingActive(vto);
@@ -419,15 +423,15 @@ function renderVtoTile({
           <div class="media-bottom">
             <div class="tile-overlay-badges">
               ${bridgeRecordingActive
-                ? html`<span class="recording-dot" title="MP4 Recording" aria-label="MP4 Recording"></span>`
+                ? html`<span class="recording-dot" title=${t("badge.mp4Clip")} aria-label=${t("badge.mp4Clip")}></span>`
                 : null}
-              ${vto.doorbell ? html`<span class="badge warning">Doorbell</span>` : null}
-              ${vto.tamper ? html`<span class="badge critical">Tamper</span>` : null}
+              ${vto.doorbell ? html`<span class="badge warning">${t("badge.doorbell")}</span>` : null}
+              ${vto.tamper ? html`<span class="badge critical">${t("badge.tamper")}</span>` : null}
             </div>
             <div class="tile-controls">
               ${hasPlayableVtoStream(vto)
                 ? renderIconButton(
-                    streamPlaying ? "Stop Stream" : "Play Stream",
+                    streamPlaying ? t("button.stopStream") : t("button.playStream"),
                     streamPlaying ? "mdi:stop-circle-outline" : "mdi:play-circle-outline",
                     () => onToggleVtoStream(vto),
                     renderIcon,
@@ -439,7 +443,7 @@ function renderVtoTile({
                 : null}
               ${canOpenVtoSnapshot(vto)
                 ? renderIconButton(
-                    "Snapshot",
+                    t("button.snapshot"),
                     "mdi:camera",
                     () => onOpenVtoSnapshot(vto),
                     renderIcon,
@@ -447,7 +451,7 @@ function renderVtoTile({
                 : null}
               ${vto.recordingStartUrl || vto.recordingStopUrl
                 ? renderIconButton(
-                    bridgeRecordingActive ? "Stop MP4" : "Start MP4",
+                    bridgeRecordingActive ? t("button.stopMp4") : t("button.startMp4"),
                     bridgeRecordingActive ? "mdi:record-rec" : "mdi:record-circle-outline",
                     () => onToggleVtoRecording(vto),
                     renderIcon,
@@ -460,7 +464,7 @@ function renderVtoTile({
                 : null}
               ${callActionVisible && (vto.hasUnlockButtonEntity || Boolean(vto.unlockActionUrl))
                 ? renderIconButton(
-                    "Unlock",
+                    t("button.unlock"),
                     "mdi:lock-open-variant",
                     () => onVtoUnlock(vto),
                     renderIcon,
@@ -473,7 +477,7 @@ function renderVtoTile({
               ${vto.callState === "ringing" &&
               (vto.hasAnswerButtonEntity || Boolean(vto.answerActionUrl))
                 ? renderIconButton(
-                    "Answer call",
+                    t("button.answerCall"),
                     "mdi:phone",
                     () => onVtoAnswer(vto),
                     renderIcon,
@@ -486,7 +490,7 @@ function renderVtoTile({
               ${callActionVisible &&
               (vto.hasHangupButtonEntity || Boolean(vto.hangupActionUrl))
                 ? renderIconButton(
-                    "Hang up",
+                    t("button.hangUp"),
                     "mdi:phone-hangup",
                     () => onVtoHangup(vto),
                     renderIcon,
@@ -497,22 +501,9 @@ function renderVtoTile({
                     },
                   )
                 : null}
-              ${vto.hasMutedEntity || Boolean(vto.mutedActionUrl)
-                ? renderIconButton(
-                    vto.muted ? "Unmute" : "Mute",
-                    vto.muted ? "mdi:volume-off" : "mdi:volume-high",
-                    () => onVtoMute(vto),
-                    renderIcon,
-                    {
-                      disabled: isBusy("vto:mute"),
-                      tone: vto.muted ? "warning" : undefined,
-                      active: vto.muted,
-                    },
-                  )
-                : null}
               ${vto.capabilities.browserMicrophoneSupported && hasAvailableVtoIntercom(vto)
                 ? renderIconButton(
-                    isVtoMicrophoneActive(vto) ? "Disable Mic" : "Enable Mic",
+                    isVtoMicrophoneActive(vto) ? t("button.disableMic") : t("button.enableMic"),
                     isVtoMicrophoneActive(vto) ? "mdi:microphone-off" : "mdi:microphone",
                     () => onToggleVtoMicrophone(vto),
                     renderIcon,

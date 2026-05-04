@@ -1,0 +1,23 @@
+start_recording:
+  target:
+    entity:
+      integration: dahuabridge
+      domain: camera
+  fields:
+    profile:
+      selector:
+        text:
+      required: false
+    duration_seconds:
+      selector:
+        number:
+          min: 1
+          max: 86400
+          mode: box
+      required: false
+
+stop_recording:
+  target:
+    entity:
+      integration: dahuabridge
+      domain: camera

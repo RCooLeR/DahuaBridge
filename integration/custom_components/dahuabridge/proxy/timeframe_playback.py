@@ -29,7 +29,7 @@ def resolve_coordinator(
 def playback_sessions_url(coordinator: Any, attrs: Mapping[str, Any]) -> str | None:
     playback_url = str(attrs.get("bridge_playback_sessions_url", "")).strip()
     if playback_url:
-        return playback_url
+        return coordinator.api.bridge_resource_url(playback_url)
 
     root_device_id = str(attrs.get("bridge_root_device_id", "")).strip()
     if not root_device_id:
@@ -43,9 +43,17 @@ def select_mjpeg_url(
     session_payload: Mapping[str, Any],
     requested_profile: str | None,
 ) -> str | None:
+    urls = select_mjpeg_urls(session_payload, requested_profile)
+    return urls[0] if urls else None
+
+
+def select_mjpeg_urls(
+    session_payload: Mapping[str, Any],
+    requested_profile: str | None,
+) -> list[str]:
     profiles = session_payload.get("profiles")
     if not isinstance(profiles, Mapping):
-        return None
+        return []
 
     candidates: list[str] = []
     if requested_profile:
@@ -56,6 +64,8 @@ def select_mjpeg_url(
     candidates.extend(str(key) for key in profiles)
 
     seen: set[str] = set()
+    seen_urls: set[str] = set()
+    urls: list[str] = []
     for candidate in candidates:
         key = candidate.strip()
         if not key or key in seen:
@@ -66,5 +76,8 @@ def select_mjpeg_url(
             continue
         mjpeg_url = profile.get("mjpeg_url")
         if isinstance(mjpeg_url, str) and mjpeg_url.strip():
-            return mjpeg_url.strip()
-    return None
+            normalized_url = mjpeg_url.strip()
+            if normalized_url not in seen_urls:
+                seen_urls.add(normalized_url)
+                urls.append(normalized_url)
+    return urls

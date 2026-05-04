@@ -58,7 +58,7 @@ Archive exports also create bridge MP4 clips. SMD/IVS export state is stored bac
 
 ### `GET /api/v1/nvr/{deviceID}/smd-ivs`
 
-Returns SMD/IVS event rows from SQLite only. The bridge does not query the NVR on this request.
+Returns indexed SMD/IVS event rows. These are served from SQLite; the request does not query the NVR live.
 
 Query fields:
 
@@ -66,14 +66,17 @@ Query fields:
 - `start` or `start_time`: required start time.
 - `end` or `end_time`: required end time.
 - `limit`: optional, default from the card/domain model.
-- `event`: optional event filter. Supported normalized values are `all`, `human`, `vehicle`, `animal`, `tripwire`, and `intrusion`.
+- `event`: optional event filter. Supported normalized values are `all`, `human`, `vehicle`, `animal`, `tripwire`, and `intrusion`. Dahua names such as `smdTypeHuman`, `smdTypeVehicle`, `CrossLineDetection`, and `CrossRegionDetection` are accepted. SQLite filtering also matches stored `event_type` values such as `Event.smdTypeHuman`.
+- `db_only`, `skip_assets`, or `skip_asset_enrichment`: compatibility flags that skip MP4 asset enrichment work for list responses.
+- `include_assets` or `with_assets`: enables asset enrichment for event list responses.
+- `include_credentials` or `with_credentials`: includes raw RTSP playback URLs. Leave this off for normal clients.
 
 Returned rows have:
 
 - `record_kind: "smd_ivs"`
 - `source: "smd_ivs"`
-- `rtsp_main_url` and `rtsp_sub_url` when the bridge can build them from device config
 - `export_url` for MP4 export
+- `rtsp_main_url` and `rtsp_sub_url` only when `include_credentials=true`
 - no raw DAV `download_url`
 
 `GET /api/v1/nvr/{deviceID}/smd_ivs` is an underscore alias.
@@ -98,7 +101,7 @@ Returned rows have:
 
 ### `GET /api/v1/nvr/{deviceID}/recordings`
 
-Compatibility endpoint. New clients should use `/smd-ivs` for SMD/IVS and `/recording-chunks` for normal chunks.
+Compatibility endpoint. New clients should use `/smd-ivs` for SMD/IVS and `/recording-chunks` for normal chunks. The endpoint also redacts raw RTSP playback URLs unless `include_credentials=true` is supplied.
 
 ### `POST /api/v1/nvr/{deviceID}/recordings/export`
 
@@ -113,6 +116,18 @@ Downloads the original DAV file by `file_path`. This is intended for recording c
 ### `GET /api/v1/nvr/{deviceID}/recordings/coverage`
 
 Returns coverage generated from `nvr_recording_chunks`. The current cards do not use this endpoint for seek playback; native seek builds a direct RTSP playback URL.
+
+## Archive Query Checks
+
+For event rows, compare the unfiltered and filtered views first:
+
+```text
+GET /api/v1/nvr/{deviceID}/events/summary?channel=1&start=...&end=...&event=all
+GET /api/v1/nvr/{deviceID}/smd-ivs?channel=1&start=...&end=...&event=all
+GET /api/v1/nvr/{deviceID}/smd-ivs?channel=1&start=...&end=...&event=smdTypeHuman
+```
+
+If `event=all` has rows and `event=smdTypeHuman` has none, the indexed rows in that window are not human detections. Check the summary codes before debugging the NVR query path.
 
 ## NVR Playback Sessions
 

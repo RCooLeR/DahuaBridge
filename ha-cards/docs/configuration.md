@@ -1,39 +1,60 @@
 # Card Configuration
 
-This page documents the supported card configuration fields.
+The cards expect the DahuaBridge Home Assistant integration to be installed first.
+The integration supplies the entities, stream metadata, archive URLs, and bridge
+action URLs that the cards render.
 
-## Shared Assumptions
+If the browser reaches the bridge through a different base URL than Home
+Assistant, set `browser_bridge_url`. The card rewrites bridge media and action
+URLs for the browser only.
 
-The cards expect:
+## Language
 
-- the DahuaBridge Home Assistant integration to already be installed
-- bridge-generated device metadata to exist in Home Assistant entities
-- the browser to be able to reach any bridge URLs rendered into the card
+The cards do not have their own language option. They read the resolved
+DahuaBridge integration language from camera attributes:
 
-If Home Assistant reaches the bridge on one URL but the browser must use another, set `browser_bridge_url`.
+- `bridge_integration_language`
+- `integration_language` as a compatibility fallback
 
-This matters for playback and export flows because the bridge can emit media URLs based on its configured `public_base_url`. The cards rewrite those browser-side when `browser_bridge_url` is set.
+Supported card languages are:
 
-## `custom:dahuabridge-surveillance-panel`
+- `en`
+- `uk`
 
-This is the full dashboard surface.
+If no DahuaBridge camera attribute exposes a supported language, the cards use
+Home Assistant's frontend language when it is English or Ukrainian. Otherwise
+they fall back to English.
+
+Change the language from the DahuaBridge integration options:
+
+- `auto`: follow Home Assistant language when supported
+- `en`: force English
+- `uk`: force Ukrainian
+
+## Full Panel
+
+Card type:
+
+```yaml
+type: custom:dahuabridge-surveillance-panel
+```
 
 Supported fields:
 
-- `title`
-- `subtitle`
-- `browser_bridge_url`
-- `event_lookback_hours`
-- `bridge_event_poll_seconds`
-- `max_events`
-- `vto.device_id`
+- `title`: optional panel title
+- `subtitle`: optional panel subtitle
+- `browser_bridge_url`: optional browser-reachable bridge base URL
+- `event_lookback_hours`: initial bridge event window, 1-168 hours
+- `bridge_event_poll_seconds`: event poll interval, 5-300 seconds
+- `max_events`: visible recent event limit, 1-50
+- `vto`: optional preferred VTO settings
 
 Example:
 
 ```yaml
 type: custom:dahuabridge-surveillance-panel
 title: DahuaBridge Surveillance
-subtitle: Full-panel command center
+subtitle: Home perimeter
 browser_bridge_url: https://dahua.example.com
 event_lookback_hours: 12
 bridge_event_poll_seconds: 15
@@ -42,28 +63,23 @@ vto:
   device_id: front_vto
 ```
 
-Field notes:
+## Tile
 
-- `browser_bridge_url` overrides the bridge base URL for browser-side requests only
-- set `browser_bridge_url` whenever the browser cannot directly use the media URLs returned by the bridge, including local testing against a bridge that advertises a public host name
-- `event_lookback_hours` controls the initial event query window
-- `bridge_event_poll_seconds` controls how often the card refreshes bridge events
-- `max_events` limits the visible event timeline window in the card
-- `vto.device_id` pins a preferred VTO when more than one is available
+Card type:
 
-## `custom:dahuabridge-surveillance-tile`
-
-This is the compact single-device surface.
+```yaml
+type: custom:dahuabridge-surveillance-tile
+```
 
 Required fields:
 
-- `device_id`
+- `device_id`: DahuaBridge device id for one camera or VTO
 
 Optional fields:
 
-- `title`
-- `browser_bridge_url`
-- `vto.device_id`
+- `title`: display label override
+- `browser_bridge_url`: browser-reachable bridge base URL
+- `vto`: optional VTO settings
 
 Example:
 
@@ -74,4 +90,33 @@ title: Yard
 browser_bridge_url: https://dahua.example.com
 ```
 
-Use the tile card when you want a compact camera or VTO view on an existing dashboard instead of the full panel experience.
+## VTO Settings
+
+Both cards accept the same optional `vto` object:
+
+- `device_id`: preferred VTO device id
+- `label`: display label override
+- `lock_button_entity`: Home Assistant lock button entity
+- `auto_record_entity`: auto-record switch entity
+
+Only controls backed by real Home Assistant entities or bridge URLs are shown.
+The cards do not expose VTO device mute or VTO speaker/microphone volume
+controls; camera audio is controlled only in the browser player.
+
+## Archive Metadata Used By The Cards
+
+For archive tabs, the cards read these channel attributes:
+
+- `bridge_archive_smd_ivs_url_template`
+- `bridge_archive_recording_chunks_url_template`
+- `bridge_archive_recordings_url_template` as a compatibility fallback for chunks
+- `bridge_channel`
+- `bridge_root_device_id`
+
+SMD/IVS playback and download use row-level MP4 fields returned by the bridge,
+such as `asset_download_url` and `export_url` for MP4 downloads. SMD/IVS Play
+uses direct RTSP archive playback through the Home Assistant timeframe proxy.
+Recording chunk download uses row-level `download_url`.
+
+The cards do not read `bridge_playback_sessions_url` or
+`bridge_archive_coverage_url`.

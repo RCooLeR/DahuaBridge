@@ -858,6 +858,32 @@ func TestRuntimeServicesCreateNVRPlaybackSessionResolvesPlaybackStream(t *testin
 	}
 }
 
+func TestBuildPlaybackRTSPURLPreservesDahuaQueryOrderAndCredentials(t *testing.T) {
+	previousLocal := time.Local
+	local := time.FixedZone("EEST", 3*60*60)
+	time.Local = local
+	t.Cleanup(func() {
+		time.Local = previousLocal
+	})
+
+	actual := buildPlaybackRTSPURL(
+		config.DeviceConfig{
+			BaseURL:  "http://192.0.2.10",
+			Username: "assistant",
+			Password: "secret",
+		},
+		5,
+		0,
+		time.Date(2026, 5, 4, 4, 30, 0, 0, local),
+		time.Date(2026, 5, 4, 5, 0, 0, 0, local),
+		true,
+	)
+	expected := "rtsp://example-user:example-password@192.0.2.10:554/cam/playback?channel=5&subtype=0&starttime=2026_05_04_04_30_00&endtime=2026_05_04_05_00_00"
+	if actual != expected {
+		t.Fatalf("unexpected playback RTSP URL\nwant: %s\n got: %s", expected, actual)
+	}
+}
+
 func TestRuntimeServicesPlaybackRTSPUsesLocalWallClock(t *testing.T) {
 	previousLocal := time.Local
 	time.Local = time.FixedZone("EEST", 3*60*60)

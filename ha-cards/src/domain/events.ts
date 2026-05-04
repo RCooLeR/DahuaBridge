@@ -2,6 +2,7 @@ import { binarySensorEntityId, sensorEntityId } from "../ha/entity-id";
 import { entityById, entityBooleanState } from "../ha/state";
 import type { BridgeEvent } from "../ha/bridge-events";
 import type { HomeAssistant } from "../types/home-assistant";
+import { createLocalizer, type Localizer } from "../localization";
 
 export type EventSeverity = "critical" | "warning" | "info" | "success";
 
@@ -31,37 +32,37 @@ export interface TimelineEvent {
 const CAMERA_EVENT_SPECS = [
   {
     key: "motion",
-    title: "Motion",
+    titleKey: "event.motion",
     icon: "mdi:motion-sensor",
     severity: "warning",
   },
   {
     key: "human",
-    title: "Human",
+    titleKey: "event.human",
     icon: "mdi:account",
     severity: "info",
   },
   {
     key: "vehicle",
-    title: "Vehicle",
+    titleKey: "event.vehicle",
     icon: "mdi:car",
     severity: "info",
   },
   {
     key: "tripwire",
-    title: "Tripwire",
+    titleKey: "event.tripwire",
     icon: "mdi:vector-line",
     severity: "warning",
   },
   {
     key: "intrusion",
-    title: "Intrusion",
+    titleKey: "event.intrusion",
     icon: "mdi:shield-alert",
     severity: "critical",
   },
 ] as const satisfies ReadonlyArray<{
   key: string;
-  title: string;
+  titleKey: Parameters<Localizer>[0];
   icon: string;
   severity: EventSeverity;
 }>;
@@ -73,6 +74,7 @@ export function collectCameraEvents(
   roomLabel: string | null,
   deviceKind: string | null,
   lookbackMs: number,
+  t: Localizer = createLocalizer("en"),
 ): TimelineEvent[] {
   const now = Date.now();
 
@@ -97,15 +99,15 @@ export function collectCameraEvents(
         id: `${deviceId}:${spec.key}:${entity.last_changed}`,
         deviceId,
         rootDeviceId: deviceId,
-        title: spec.title,
+        title: t(spec.titleKey),
         context: label,
         roomLabel,
         deviceKind,
         icon: spec.icon,
         severity: spec.severity,
         active,
-        statusText: active ? "Active now" : "Recent event",
-        actionText: active ? "State" : "Cleared",
+        statusText: active ? t("events.activeNow") : t("events.recentEvent"),
+        actionText: active ? t("events.state") : t("events.cleared"),
         sourceCode: spec.key,
         details: [],
         timestamp,
@@ -120,29 +122,30 @@ export function collectVtoEvents(
   label: string,
   roomLabel: string | null,
   lookbackMs: number,
+  t: Localizer = createLocalizer("en"),
 ): TimelineEvent[] {
   const specs = [
     {
       key: "doorbell",
-      title: "Doorbell",
+      titleKey: "event.doorbell" as const,
       icon: "mdi:bell-ring",
       severity: "warning" as const,
     },
     {
       key: "call",
-      title: "Call",
+      titleKey: "event.call" as const,
       icon: "mdi:phone",
       severity: "info" as const,
     },
     {
       key: "access",
-      title: "Access",
+      titleKey: "event.access" as const,
       icon: "mdi:door-open",
       severity: "success" as const,
     },
     {
       key: "tamper",
-      title: "Tamper",
+      titleKey: "event.tamper" as const,
       icon: "mdi:shield-alert",
       severity: "critical" as const,
     },
@@ -169,15 +172,15 @@ export function collectVtoEvents(
         id: `${deviceId}:${spec.key}:${entity.last_changed}`,
         deviceId,
         rootDeviceId: deviceId,
-        title: spec.title,
+        title: t(spec.titleKey),
         context: label,
         roomLabel,
         deviceKind: "vto",
         icon: spec.icon,
         severity: spec.severity,
         active,
-        statusText: active ? "Active now" : "Recent event",
-        actionText: active ? "State" : "Cleared",
+        statusText: active ? t("events.activeNow") : t("events.recentEvent"),
+        actionText: active ? t("events.state") : t("events.cleared"),
         sourceCode: spec.key,
         details: [],
         timestamp,
@@ -196,15 +199,15 @@ export function collectVtoEvents(
         id: `${deviceId}:call_started:${callStart}`,
         deviceId,
         rootDeviceId: deviceId,
-        title: "Call Started",
+        title: t("event.callStarted"),
         context: label,
         roomLabel,
         deviceKind: "vto",
         icon: "mdi:phone-in-talk",
         severity: "info",
         active: false,
-        statusText: "Recent event",
-        actionText: "Start",
+        statusText: t("events.recentEvent"),
+        actionText: t("events.start"),
         sourceCode: "call_started",
         details: [],
         timestamp,
@@ -223,6 +226,7 @@ export function bridgeEventsToTimeline(
     deviceKind: string | null;
   }>,
   lookbackMs: number,
+  t: Localizer = createLocalizer("en"),
 ): TimelineEvent[] {
   const now = Date.now();
 
@@ -238,8 +242,8 @@ export function bridgeEventsToTimeline(
         contextByDeviceId.get(targetDeviceId) ??
         contextByDeviceId.get(event.device_id) ??
         null;
-      const normalized = normalizeBridgeEvent(event.code, event.action);
-      const details = bridgeEventDetails(event);
+      const normalized = normalizeBridgeEvent(event.code, event.action, t);
+      const details = bridgeEventDetails(event, t);
 
       return [
         {
@@ -261,7 +265,7 @@ export function bridgeEventsToTimeline(
           severity: normalized.severity,
           active: normalized.active,
           statusText: normalized.statusText,
-          actionText: humanizeSnakeLikeValue(event.action),
+          actionText: bridgeActionText(event.action, t),
           sourceCode: event.code,
           details,
           timestamp,
@@ -297,6 +301,7 @@ export function mergeTimelineEvents(
 function normalizeBridgeEvent(
   code: string,
   action: string,
+  t: Localizer,
 ): Pick<TimelineEvent, "title" | "icon" | "severity" | "active" | "statusText"> {
   const normalizedCode = code.trim().toLowerCase();
   const active = isActiveBridgeEventAction(action);
@@ -304,74 +309,84 @@ function normalizeBridgeEvent(
   switch (normalizedCode) {
     case "videomotion":
       return eventMeta(
-        active ? "Motion" : "Motion Cleared",
+        active ? t("event.motion") : t("event.motionCleared"),
         "mdi:motion-sensor",
         "warning",
         active,
+        t,
       );
     case "smartmotionhuman":
       return eventMeta(
-        active ? "Human Detected" : "Human Cleared",
+        active ? t("event.humanDetected") : t("event.humanCleared"),
         "mdi:account",
         "info",
         active,
+        t,
       );
     case "smartmotionvehicle":
       return eventMeta(
-        active ? "Vehicle Detected" : "Vehicle Cleared",
+        active ? t("event.vehicleDetected") : t("event.vehicleCleared"),
         "mdi:car",
         "info",
         active,
+        t,
       );
     case "crosslinedetection":
       return eventMeta(
-        active ? "Tripwire" : "Tripwire Cleared",
+        active ? t("event.tripwire") : t("event.tripwireCleared"),
         "mdi:vector-line",
         "warning",
         active,
+        t,
       );
     case "crossregiondetection":
       return eventMeta(
-        active ? "Intrusion" : "Intrusion Cleared",
+        active ? t("event.intrusion") : t("event.intrusionCleared"),
         "mdi:shield-alert",
         "critical",
         active,
+        t,
       );
     case "doorbell":
       return eventMeta(
-        active ? "Doorbell Pressed" : "Doorbell Cleared",
+        active ? t("event.doorbellPressed") : t("event.doorbellCleared"),
         "mdi:bell-ring",
         "warning",
         active,
+        t,
       );
     case "call":
       return eventMeta(
-        active ? "Call Started" : "Call Ended",
+        active ? t("event.callStarted") : t("event.callEnded"),
         active ? "mdi:phone-in-talk" : "mdi:phone-hangup",
         "info",
         active,
+        t,
       );
     case "accessctl":
     case "accesscontrol":
       return eventMeta(
-        active ? "Access Granted" : "Access Closed",
+        active ? t("event.accessGranted") : t("event.accessClosed"),
         "mdi:door-open",
         "success",
         active,
+        t,
       );
     case "alarmlocal":
       return eventMeta(
-        active ? "Alarm Triggered" : "Alarm Cleared",
+        active ? t("event.alarmTriggered") : t("event.alarmCleared"),
         "mdi:alarm-light",
         "critical",
         active,
+        t,
       );
     case "tamper":
       return eventMeta(
-        active ? "Tamper Detected" : "Tamper Cleared",
+        active ? t("event.tamperDetected") : t("event.tamperCleared"),
         "mdi:shield-alert",
         "critical",
         active,
+        t,
       );
     default:
       return eventMeta(
@@ -379,6 +394,7 @@ function normalizeBridgeEvent(
         "mdi:information-outline",
         "info",
         active,
+        t,
       );
   }
 }
@@ -388,14 +404,31 @@ function eventMeta(
   icon: string,
   severity: EventSeverity,
   active: boolean,
+  t: Localizer,
 ): Pick<TimelineEvent, "title" | "icon" | "severity" | "active" | "statusText"> {
   return {
     title,
     icon,
     severity,
     active,
-    statusText: active ? "Active now" : "Recovered",
+    statusText: active ? t("events.activeNow") : t("events.recovered"),
   };
+}
+
+function bridgeActionText(action: string, t: Localizer): string {
+  const normalized = action.trim().toLowerCase();
+  switch (normalized) {
+    case "start":
+      return t("events.start");
+    case "stop":
+    case "clear":
+    case "cleared":
+      return t("events.cleared");
+    case "state":
+      return t("events.state");
+    default:
+      return humanizeSnakeLikeValue(action);
+  }
 }
 
 function isActiveBridgeEventAction(action: string): boolean {
@@ -463,11 +496,11 @@ function humanizeSnakeLikeValue(value: string): string {
     .replace(/\b\w/g, (match) => match.toUpperCase());
 }
 
-function bridgeEventDetails(event: BridgeEvent): TimelineEventDetail[] {
+function bridgeEventDetails(event: BridgeEvent, t: Localizer): TimelineEventDetail[] {
   const details: TimelineEventDetail[] = [];
   const data = event.data ?? {};
 
-  pushDetail(details, "Source", firstEventDataValue(data, [
+  pushDetail(details, t("events.source"), firstEventDataValue(data, [
     "CallSrc",
     "CallSource",
     "Source",
@@ -478,23 +511,23 @@ function bridgeEventDetails(event: BridgeEvent): TimelineEventDetail[] {
     "UnitNo",
     "FloorNo",
   ]));
-  pushDetail(details, "Rule", firstEventDataValue(data, [
+  pushDetail(details, t("events.rule"), firstEventDataValue(data, [
     "Name",
     "RuleName",
     "ProfileName",
   ]));
-  pushDetail(details, "Region", firstEventDataValue(data, [
+  pushDetail(details, t("events.region"), firstEventDataValue(data, [
     "RegionName",
     "Region",
   ]));
-  pushDetail(details, "Object", firstEventDataValue(data, [
+  pushDetail(details, t("events.object"), firstEventDataValue(data, [
     "ObjectType",
     "ObjectClass",
     "Type",
   ]));
 
   if (event.channel && event.channel > 0) {
-    pushDetail(details, "Channel", String(event.channel));
+    pushDetail(details, t("events.channel"), String(event.channel));
   }
 
   return details.slice(0, 3);

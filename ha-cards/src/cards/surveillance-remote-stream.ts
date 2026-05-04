@@ -9,6 +9,7 @@ import {
   redactUrlForLog,
   setCardLogState,
 } from "../utils/logging";
+import { clampStreamVolume } from "./surveillance-panel-player-audio-model";
 
 const STARTUP_TIMEOUT_MS = 35_000;
 const STARTUP_GRACE_TIMEOUT_MS = 15_000;
@@ -32,6 +33,7 @@ const HLS_RETRY_CONFIG = {
 export interface RemoteStreamDescriptor {
   cacheKey: string;
   alt: string;
+  fallbackText?: string;
   fallbackImageUrl: string | null;
   className?: string;
   sources: Array<{
@@ -41,7 +43,7 @@ export interface RemoteStreamDescriptor {
 }
 
 export interface RemoteStreamAudioHost extends HTMLElement {
-  syncAudioState(muted: boolean): void;
+  syncAudioState(muted: boolean, volume?: number): void;
 }
 
 interface DashPlayerLike {
@@ -62,6 +64,7 @@ export function renderRemoteStream(
   descriptor: RemoteStreamDescriptor,
   options: {
     muted: boolean;
+    volume?: number;
     controls?: boolean;
     preload?: "none" | "metadata" | "auto";
   },
@@ -70,6 +73,7 @@ export function renderRemoteStream(
     <dahuabridge-remote-stream
       .descriptor=${descriptor}
       .muted=${options.muted}
+      .volume=${clampStreamVolume(options.volume ?? 1)}
       .controls=${options.controls ?? true}
       .preload=${options.preload ?? "auto"}
     ></dahuabridge-remote-stream>
@@ -80,6 +84,7 @@ class DahuaBridgeRemoteStreamElement extends LitElement {
   static properties = {
     descriptor: { attribute: false },
     muted: { type: Boolean },
+    volume: { type: Number },
     controls: { type: Boolean },
     preload: { type: String },
     _activeSourceIndex: { state: true },
@@ -103,20 +108,20 @@ class DahuaBridgeRemoteStreamElement extends LitElement {
     video,
     img,
     .viewport-empty {
-      display: block;
-      width: 100%;
-      height: 100%;
-      min-width: 0;
-      min-height: 0;
-      max-width: 100%;
-      max-height: 100%;
-      aspect-ratio: 16 / 9;
+      display: block !important;
+      width: 100% !important;
+      height: 100% !important;
+      min-width: 0 !important;
+      min-height: 0 !important;
+      max-width: 100% !important;
+      max-height: 100% !important;
+      aspect-ratio: 16 / 9 !important;
     }
 
     video,
     img {
-      object-fit: fill;
-      object-position: center center;
+      object-fit: fill !important;
+      object-position: center center !important;
       background: #06101a;
     }
 
@@ -131,6 +136,7 @@ class DahuaBridgeRemoteStreamElement extends LitElement {
 
   descriptor: RemoteStreamDescriptor | null = null;
   muted = true;
+  volume = 1;
   controls = true;
   preload: "none" | "metadata" | "auto" = "auto";
 
@@ -147,6 +153,7 @@ class DahuaBridgeRemoteStreamElement extends LitElement {
   private _startupTimer: number | null = null;
   private _retryTimer: number | null = null;
   private _sourceRetryTimer: number | null = null;
+  private _playbackFrame: number | null = null;
   private readonly _sourceFailureCounts = new Map<string, number>();
 
   connectedCallback(): void {
@@ -184,8 +191,8 @@ class DahuaBridgeRemoteStreamElement extends LitElement {
       return;
     }
 
-    if (changedProperties.has("muted")) {
-      this.applyAudioState(video, this.muted);
+    if (changedProperties.has("muted") || changedProperties.has("volume")) {
+      this.applyAudioState(video, this.muted, this.volume);
     }
 
     const sourceKey = this.sourceRuntimeKey(currentSource);
@@ -205,11 +212,26 @@ class DahuaBridgeRemoteStreamElement extends LitElement {
     super.disconnectedCallback();
   }
 
-  syncAudioState(muted: boolean): void {
+  syncAudioState(muted: boolean, volume = this.volume): void {
     const previousMuted = this.muted;
-    this.muted = muted;
-    this.requestUpdate("muted", previousMuted);
-    this.applyAudioState(this._videoRef.value ?? this._attachedVideo, muted, true);
+    const previousVolume = this.volume;
+    const nextVolume = clampStreamVolume(volume);
+
+    if (previousMuted !== muted) {
+      this.muted = muted;
+      this.requestUpdate("muted", previousMuted);
+    }
+    if (previousVolume !== nextVolume) {
+      this.volume = nextVolume;
+      this.requestUpdate("volume", previousVolume);
+    }
+
+    this.applyAudioState(
+      this._videoRef.value ?? this._attachedVideo,
+      this.muted,
+      this.volume,
+      true,
+    );
   }
 
   render(): TemplateResult {
@@ -240,6 +262,8 @@ class DahuaBridgeRemoteStreamElement extends LitElement {
         ?controls=${this.controls}
         preload=${this.preload}
         ?muted=${this.muted}
+        .volume=${clampStreamVolume(this.volume)}
+        data-audio-volume=${String(clampStreamVolume(this.volume))}
       ></video>
     `;
   }
@@ -256,7 +280,7 @@ class DahuaBridgeRemoteStreamElement extends LitElement {
       `;
     }
 
-    return html`<div class="viewport-empty">Stream unavailable.</div>`;
+    return html`<div class="viewport-empty">${this.descriptor?.fallbackText ?? ""}</div>`;
   }
 
   private currentSource():
@@ -676,7 +700,8 @@ class DahuaBridgeRemoteStreamElement extends LitElement {
   };
 
   private prepareVideo(video: HTMLVideoElement): void {
-    this.applyAudioState(video, this.muted);
+    this.applyAudioState(video, this.muted, this.volume);
+    applyMediaElementStyle(video);
     video.autoplay = true;
     video.playsInline = true;
   }
@@ -684,23 +709,49 @@ class DahuaBridgeRemoteStreamElement extends LitElement {
   private applyAudioState(
     video: HTMLVideoElement | null,
     muted: boolean,
+    volume: number,
     playImmediately = false,
   ): void {
     if (!video) {
       return;
     }
-    video.dataset.audioMuted = muted ? "true" : "false";
-    video.defaultMuted = muted;
-    video.muted = muted;
-    video.toggleAttribute("muted", muted);
-    if (playImmediately) {
+    const normalizedVolume = clampStreamVolume(volume);
+    const dataMuted = muted ? "true" : "false";
+    const dataVolume = String(normalizedVolume);
+
+    if (video.dataset.audioMuted !== dataMuted) {
+      video.dataset.audioMuted = dataMuted;
+    }
+    if (video.dataset.audioVolume !== dataVolume) {
+      video.dataset.audioVolume = dataVolume;
+    }
+    if (video.defaultMuted !== muted) {
+      video.defaultMuted = muted;
+    }
+    if (video.muted !== muted) {
+      video.muted = muted;
+    }
+    if (video.volume !== normalizedVolume) {
+      video.volume = normalizedVolume;
+    }
+    if (video.hasAttribute("muted") !== muted) {
+      video.toggleAttribute("muted", muted);
+    }
+    if (playImmediately && video.paused) {
       void video.play().catch(() => undefined);
     }
   }
 
   private queuePlayback(video: HTMLVideoElement): void {
     this.prepareVideo(video);
-    window.requestAnimationFrame(() => {
+    if (this._playbackFrame !== null) {
+      return;
+    }
+    this._playbackFrame = window.requestAnimationFrame(() => {
+      this._playbackFrame = null;
+      if (!this.isConnected || this._attachedVideo !== video || !video.paused) {
+        return;
+      }
       void video.play().catch(() => undefined);
     });
   }
@@ -795,6 +846,7 @@ class DahuaBridgeRemoteStreamElement extends LitElement {
 
   private cleanupPlayback(): void {
     this.clearStartupTimer();
+    this.cancelQueuedPlayback();
     this._videoListenersCleanup?.();
     this._videoListenersCleanup = null;
 
@@ -819,6 +871,14 @@ class DahuaBridgeRemoteStreamElement extends LitElement {
 
     this._attachedVideo = null;
     this._attachedSourceKey = "";
+  }
+
+  private cancelQueuedPlayback(): void {
+    if (this._playbackFrame === null) {
+      return;
+    }
+    window.cancelAnimationFrame(this._playbackFrame);
+    this._playbackFrame = null;
   }
 
   private shouldExtendStartupTimer(): boolean {
@@ -959,6 +1019,19 @@ function canPlayNativeHls(video: HTMLVideoElement): boolean {
     video.canPlayType("application/vnd.apple.mpegurl") !== "" ||
     video.canPlayType("application/x-mpegURL") !== ""
   );
+}
+
+function applyMediaElementStyle(element: HTMLElement): void {
+  element.style.setProperty("display", "block", "important");
+  element.style.setProperty("width", "100%", "important");
+  element.style.setProperty("height", "100%", "important");
+  element.style.setProperty("min-width", "0", "important");
+  element.style.setProperty("min-height", "0", "important");
+  element.style.setProperty("max-width", "100%", "important");
+  element.style.setProperty("max-height", "100%", "important");
+  element.style.setProperty("object-fit", "fill", "important");
+  element.style.setProperty("object-position", "center center", "important");
+  element.style.setProperty("aspect-ratio", "16 / 9", "important");
 }
 
 export function resolveHlsPlaybackMode(capabilities: {

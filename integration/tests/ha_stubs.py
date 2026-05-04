@@ -54,6 +54,7 @@ def install() -> None:
 
     http = types.ModuleType("homeassistant.components.http")
     http.HomeAssistantView = HomeAssistantView
+    http.KEY_AUTHENTICATED = "ha_authenticated"
     sys.modules["homeassistant.components.http"] = http
 
     class BinarySensorDeviceClass(str, enum.Enum):

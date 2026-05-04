@@ -38,12 +38,15 @@ interface SurveillancePanelRuntimeHost {
 export class SurveillancePanelRuntime {
     private eventPollHandle?: number;
     private eventAbort?: AbortController;
+    private registryRefreshInFlight: Promise<void> | null = null;
+    private registryRefreshCompleted = false;
+    private registryRefreshStartedAt = 0;
 
     constructor(private readonly host: SurveillancePanelRuntimeHost) {
     }
 
     connected(): void {
-        void this.refreshRegistrySnapshot();
+        void this.refreshRegistrySnapshot({ force: true });
         this.restartEventPolling();
     }
 
@@ -95,7 +98,18 @@ export class SurveillancePanelRuntime {
         }
     }
 
-    private async refreshRegistrySnapshot(): Promise<void> {
+    private async refreshRegistrySnapshot(options: { force?: boolean } = {}): Promise<void> {
+        if (this.registryRefreshInFlight) {
+            return this.registryRefreshInFlight;
+        }
+        const now = Date.now();
+        if (!options.force && this.registryRefreshCompleted) {
+            return;
+        }
+        if (!options.force && now - this.registryRefreshStartedAt < 30_000) {
+            return;
+        }
+
         const hass = this.host.getHass();
         if (!hass?.callWS && !hass?.connection?.sendMessagePromise) {
             this.host.setRegistrySnapshot(null);
@@ -105,10 +119,26 @@ export class SurveillancePanelRuntime {
             return;
         }
 
+        this.registryRefreshStartedAt = now;
+        this.registryRefreshInFlight = this.doRefreshRegistrySnapshot();
+        try {
+            await this.registryRefreshInFlight;
+        } finally {
+            this.registryRefreshInFlight = null;
+        }
+    }
+
+    private async doRefreshRegistrySnapshot(): Promise<void> {
+        const hass = this.host.getHass();
+        if (!hass) {
+            return;
+        }
+
         try {
             const registrySnapshot = await fetchRegistrySnapshot(hass);
             if (registrySnapshot === null) {
                 this.host.setRegistrySnapshot(null);
+                this.registryRefreshCompleted = true;
                 logCardWarn("card runtime registry empty", {
                     fallback: "unassigned",
                 });
@@ -117,6 +147,7 @@ export class SurveillancePanelRuntime {
             }
 
             this.host.setRegistrySnapshot(registrySnapshot);
+            this.registryRefreshCompleted = true;
             this.host.requestUpdate();
         } catch (error) {
             this.host.setRegistrySnapshot(null);

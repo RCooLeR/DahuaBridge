@@ -116,9 +116,6 @@ func New(cfg config.ArchiveConfig, devices []config.DeviceConfig, searcher Searc
 	if err := os.MkdirAll(filepath.Dir(cfg.DBPath), 0o755); err != nil {
 		return nil, fmt.Errorf("create archive db directory: %w", err)
 	}
-	if err := os.MkdirAll(cfg.CacheDir, 0o755); err != nil {
-		return nil, fmt.Errorf("create archive cache directory: %w", err)
-	}
 	if err := os.MkdirAll(cfg.TempDir, 0o755); err != nil {
 		return nil, fmt.Errorf("create archive temp directory: %w", err)
 	}
@@ -169,7 +166,6 @@ func (s *Service) Start(ctx context.Context) error {
 	}
 	s.logger.Info().
 		Str("db_path", s.cfg.DBPath).
-		Str("cache_dir", s.cfg.CacheDir).
 		Str("temp_dir", s.cfg.TempDir).
 		Int("device_count", len(s.devices)).
 		Int("prefetch_days", s.cfg.PrefetchDays).

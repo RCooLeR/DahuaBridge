@@ -2,7 +2,6 @@ import {
   postBridgeRequest,
   pressButton,
   readBridgeJson,
-  setNumberValue,
   toggleSwitch,
 } from "../ha/actions";
 import {
@@ -14,6 +13,7 @@ import {
   type CameraViewModel,
 } from "../domain/model";
 import type { HomeAssistant } from "../types/home-assistant";
+import { createLocalizer, resolvePanelLanguage, type Localizer } from "../localization";
 
 interface SurveillancePanelActionHost {
   getHass(): HomeAssistant | undefined;
@@ -47,9 +47,7 @@ export class SurveillancePanelActions {
     }
 
     if (!fallbackUrl) {
-      this.host.setError(
-        "Control is unavailable in Home Assistant and no bridge fallback URL was provided.",
-      );
+      this.host.setError(this.t()("error.controlUnavailable"));
       return;
     }
 
@@ -78,9 +76,7 @@ export class SurveillancePanelActions {
     }
 
     if (!fallbackUrl) {
-      this.host.setError(
-        "Switch control is unavailable in Home Assistant and no bridge fallback URL was provided.",
-      );
+      this.host.setError(this.t()("error.switchControlUnavailable"));
       return;
     }
 
@@ -93,56 +89,13 @@ export class SurveillancePanelActions {
     });
   }
 
-  async handleVtoRangeChange(
-    event: Event,
-    key: string,
-    entityId: string,
-    fallbackUrl: string | null,
-  ): Promise<void> {
-    const hass = this.host.getHass();
-    if (!hass) {
-      return;
-    }
-
-    const target = event.currentTarget as HTMLInputElement;
-    const value = Number.parseFloat(target.value);
-    if (!Number.isFinite(value)) {
-      return;
-    }
-
-    if (this.entityExists(entityId)) {
-      await this.runAction(key, async () => {
-        await setNumberValue(hass, entityId, value);
-      });
-      return;
-    }
-
-    if (!fallbackUrl) {
-      this.host.setError(
-        "Volume control is unavailable in Home Assistant and no bridge fallback URL was provided.",
-      );
-      return;
-    }
-
-    await this.runAction(key, async () => {
-      await postBridgeRequest(fallbackUrl, {
-        body: {
-          slot: 0,
-          level: Math.round(value),
-        },
-      });
-    });
-  }
-
   async triggerPtzAction(
     camera: CameraViewModel,
     command: string,
   ): Promise<void> {
     const targetUrl = buildPtzUrl(camera);
     if (!targetUrl) {
-      this.host.setError(
-        "PTZ target URL is unavailable. The card needs bridge-derived camera attributes for direct PTZ control.",
-      );
+      this.host.setError(this.t()("error.ptzUrlUnavailable"));
       return;
     }
 
@@ -164,15 +117,13 @@ export class SurveillancePanelActions {
     const target = findAuxTarget(camera, output);
     const targetUrl = target?.url ?? buildAuxUrl(camera);
     if (!targetUrl) {
-      this.host.setError(
-        "Aux output URL is unavailable. The bridge base URL could not be derived from the camera entity.",
-      );
+      this.host.setError(this.t()("error.auxUrlUnavailable"));
       return false;
     }
 
     const action = resolveAuxTargetAction(target, active);
     if (!action) {
-      this.host.setError("No compatible deterrence action is available for that output.");
+      this.host.setError(this.t()("error.auxActionUnavailable"));
       return false;
     }
 
@@ -198,8 +149,8 @@ export class SurveillancePanelActions {
     if (!targetUrl) {
       this.host.setError(
         action === "stop"
-          ? "No active bridge MP4 clip is available to stop for this camera."
-          : "Bridge MP4 recording is unavailable for this camera.",
+          ? this.t()("error.noActiveMp4Stop")
+          : this.t()("error.cameraMp4Unavailable"),
       );
       return false;
     }
@@ -253,7 +204,7 @@ export class SurveillancePanelActions {
       return true;
     } catch (error) {
       this.host.setError(
-        error instanceof Error ? error.message : "Unexpected action failure.",
+        error instanceof Error ? error.message : this.t()("error.unexpectedActionFailure"),
       );
       return false;
     } finally {
@@ -261,6 +212,11 @@ export class SurveillancePanelActions {
       reducedBusy.delete(key);
       this.host.setBusyActions(reducedBusy);
     }
+  }
+
+  private t(): Localizer {
+    const hass = this.host.getHass();
+    return createLocalizer(hass ? resolvePanelLanguage(hass) : "en");
   }
 }
 

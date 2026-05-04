@@ -23,17 +23,6 @@ export async function toggleSwitch(
   });
 }
 
-export async function setNumberValue(
-  hass: HomeAssistant,
-  entityId: string,
-  value: number,
-): Promise<void> {
-  await hass.callService("number", "set_value", {
-    entity_id: entityId,
-    value,
-  });
-}
-
 export async function postBridgeRequest(
   targetUrl: string,
   options: BridgeRequestOptions = {},

@@ -1,71 +1,86 @@
 # HA Cards Architecture
 
-This page documents the current frontend structure and the browser media policy.
+The HA cards are a browser UI layer on top of the DahuaBridge integration. They
+do not own camera discovery, recording creation, archive indexing, or media file
+management.
 
-## Player Policy
+## Data Flow
 
-Viewport playback in the cards is intentionally limited to:
+1. Home Assistant provides entities and attributes created by the integration.
+2. `src/domain/devices.ts` reads entity attributes and bridge feature metadata.
+3. `src/domain/model.ts` builds the panel view model and rewrites bridge URLs
+   with `browser_bridge_url` when configured.
+4. `src/cards/*` renders the panel, tile, live viewport, archive lists, and controls.
+5. `src/ha/*` contains browser requests to bridge endpoints.
 
-- HLS for primary browser playback
-- MJPEG as the fallback path
+## Live Media
 
-WebRTC is not used for camera, VTO, or archive viewport playback in the cards.
+`src/cards/surveillance-panel-media.ts` chooses a live source for the selected
+camera or VTO. `src/cards/surveillance-remote-stream.ts` attaches HLS, DASH, or
+MJPEG sources and falls back through the ordered source list when a source fails.
 
-Reason:
+Native Home Assistant camera rendering is only used for live camera/VTO views
+when that source is available. Archive playback does not use the native camera
+element.
 
-- the bridge/browser path has been more stable with HLS
-- WebRTC introduced more reconnect and decode churn than it solved for dashboard use
-- the main panel must support dense multi-camera layouts, where transport stability matters more than protocol variety
+## Archive Media
 
-`hls.js` is bundled into the card build. When the runtime checks `Hls.isSupported()`, it is checking browser Media Source Extensions support, not whether the library was loaded.
+Archive support is split by the two lists the card still shows:
 
-If the browser supports native HLS, the card can attach the playlist directly to the video element. Otherwise it uses `hls.js`. If neither path is available, the card falls back to MJPEG or snapshot behavior.
+- SMD/IVS events from `bridge_archive_smd_ivs_url_template`
+- 30-minute recording chunks from `bridge_archive_recording_chunks_url_template`
 
-Archive search is resolved from either:
+`src/domain/archive.ts` models only those two archive capabilities.
+`src/ha/bridge-archive.ts` fetches list responses, maps row-level URLs, exports
+bridge MP4 clips when requested, and lists manual MP4 clips.
 
-- archive feature metadata exposed by the bridge integration
-- integration archive URL attributes such as `bridge_archive_recordings_url_template`, `bridge_playback_sessions_url`, and `bridge_archive_coverage_url`
+Archive state is split into small card-side models:
 
-Template-style archive search URLs are normalized in the card runtime before query parameters are appended.
+- SMD/IVS list source selection lives in `surveillance-panel-smd-ivs-model.ts`.
+- 30-minute chunk list source selection lives in `surveillance-panel-chunks-model.ts`.
+- Shared archive list routing helpers live in `surveillance-panel-archive-state-model.ts`.
+- Direct RTSP seek date/time math and timeframe proxy path building live in
+  `surveillance-panel-archive-seek-model.ts`.
+- The seek UI element lives in `surveillance-panel-archive-seek.ts`.
+- Manual MP4 list playback/download state lives in `surveillance-panel-mp4-model.ts`.
+- Native archive playback state/profile selection lives in
+  `surveillance-panel-native-playback-model.ts`.
+- Selected camera live stream source selection lives in
+  `surveillance-panel-live-stream-model.ts`.
 
-For the selected live camera view, `surveillance-panel-media.ts` can keep the Home Assistant native camera element while overriding `stream_source`, snapshot URLs, and `subtype`-specific query params so main/sub stream selection actually follows the selected profile.
+The panel card now coordinates those modules, owns the active Home Assistant
+connection, and dispatches bridge requests. SMD/IVS results and recording chunk
+results are held in separate state slots so one list cannot replace the other.
 
-Archive seek is rendered by `surveillance-panel-archive-seek.ts`, which wraps `nouislider` and consumes bridge archive coverage chunks instead of relying on a plain browser range input.
+## Module Map
 
-## Module Layout
+- `src/cards/surveillance-panel-card.ts`: panel coordination, selection, bridge request dispatch
+- `src/cards/surveillance-panel-archive.ts`: SMD/IVS, chunk, and MP4 list rendering
+- `src/cards/surveillance-panel-smd-ivs-model.ts`: SMD/IVS archive list source model
+- `src/cards/surveillance-panel-chunks-model.ts`: recording chunk archive list source model
+- `src/cards/surveillance-panel-archive-state-model.ts`: active archive list mode and list state helpers
+- `src/cards/surveillance-panel-archive-seek-model.ts`: archive seek date/time and proxy URL helpers
+- `src/cards/surveillance-panel-archive-seek.ts`: archive seek UI element
+- `src/cards/surveillance-panel-mp4-model.ts`: manual MP4 list playback/download model
+- `src/cards/surveillance-panel-native-playback-model.ts`: direct RTSP archive playback model
+- `src/cards/surveillance-panel-live-stream-model.ts`: selected camera live stream model
+- `src/cards/surveillance-panel-media.ts`: live and MP4 viewport composition
+- `src/cards/surveillance-panel-viewport-sources.ts`: live source/profile selection
+- `src/cards/surveillance-remote-stream.ts`: browser media attach lifecycle
+- `src/cards/surveillance-tile-card.ts`: compact single-device card
+- `src/domain/archive.ts`: archive capability and row models
+- `src/domain/devices.ts`: Home Assistant entity to device capability mapping
+- `src/domain/model.ts`: panel/tile view models
+- `src/ha/bridge-archive.ts`: archive list, MP4 export, and MP4 list requests
 
-The main frontend modules are split by responsibility:
+## Removed Runtime Paths
 
-- `src/cards/surveillance-panel-card.ts`
-  - panel state orchestration
-  - selection transitions
-  - archive and playback actions
-- `src/cards/surveillance-panel-overview.ts`
-  - overview grid rendering
-- `src/cards/surveillance-panel-sidebar.ts`
-  - sidebar rendering and discovery lists
-- `src/cards/surveillance-panel-inspector*.ts`
-  - device-specific inspector rendering
-- `src/cards/surveillance-panel-media.ts`
-  - viewport composition and stream styling hooks
-- `src/cards/surveillance-panel-viewport-sources.ts`
-  - stream/profile/source selection logic
-- `src/cards/surveillance-remote-stream.ts`
-  - browser video attach lifecycle and HLS/MJPEG fallback
-- `src/cards/surveillance-tile-card.ts`
-  - compact single-device card
+The card runtime no longer has a playback-session path or archive coverage path.
+There is no HA card code that reads `bridge_playback_sessions_url` or
+`bridge_archive_coverage_url`.
 
-## Review Boundaries
+Keep future archive UI changes aligned with the current ownership split:
 
-When refactoring, prefer these seams:
-
-- split render-only modules out of `surveillance-panel-card.ts`
-- keep bridge request logic in action/runtime helpers instead of embedding fetch flows in render modules
-- keep source-selection policy in `surveillance-panel-viewport-sources.ts`
-- keep transport attach/recovery logic in `surveillance-remote-stream.ts`
-
-Avoid:
-
-- reintroducing a second DOM-level playback lifecycle outside `dahuabridge-remote-stream`
-- mixing player transport policy with inspector/sidebar rendering
-- exposing frontend source choices the browser path does not support reliably
+- the bridge creates and serves MP4 files
+- the integration exposes attributes and action URLs
+- the cards list, play, and download only the URLs they are given

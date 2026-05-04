@@ -1,22 +1,17 @@
 # DahuaBridge Go Service
 
-This directory contains the actual bridge service.
+This is the bridge backend. It talks to Dahua NVR, IPC, and VTO devices, builds the normalized runtime model, exposes HTTP APIs, indexes archive metadata, and serves bridge-hosted media.
 
-The bridge is the system backend. It talks to Dahua devices, owns the normalized runtime model, exposes HTTP APIs, and serves bridge-hosted media.
+Start with [docs/README.md](docs/README.md).
 
-## Start Here
+Common references:
 
-- [bridge/docs/README.md](docs/README.md)
+- [Getting Started](docs/getting-started.md)
+- [Configuration](docs/configuration.md)
+- [Media And Recording](docs/media-and-recording.md)
+- [API Reference](docs/api-reference.md)
 
-## Most Common Tasks
+Related docs:
 
-- first setup: [docs/getting-started.md](docs/getting-started.md)
-- configuration: [docs/configuration.md](docs/configuration.md)
-- features: [docs/features.md](docs/features.md)
-- media and recording: [docs/media-and-recording.md](docs/media-and-recording.md)
-- HTTP endpoints: [docs/api-reference.md](docs/api-reference.md)
-
-## Related Docs
-
-- root architecture docs: [../docs/README.md](../docs/README.md)
-- Home Assistant integration docs: [../integration/docs/README.md](../integration/docs/README.md)
+- [Root architecture docs](../docs/README.md)
+- [Home Assistant integration docs](../integration/docs/README.md)

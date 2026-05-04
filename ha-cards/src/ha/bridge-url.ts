@@ -37,10 +37,8 @@ export function rewriteBridgeUrl(
     const parsedTarget = new URL(normalizedTarget);
     return buildRewrittenUrl(browserBase, parsedTarget.pathname, parsedTarget.search, parsedTarget.hash);
   } catch {
-    if (normalizedTarget.startsWith("/")) {
-      return buildRewrittenUrl(browserBase, normalizedTarget, "", "");
-    }
-    return new URL(normalizedTarget, ensureTrailingSlash(normalizedBrowserBridgeUrl)).toString();
+    const parsedTarget = new URL(normalizedTarget, "https://dahuabridge.invalid/");
+    return buildRewrittenUrl(browserBase, parsedTarget.pathname, parsedTarget.search, parsedTarget.hash);
   }
 }
 
@@ -63,7 +61,10 @@ function buildRewrittenUrl(
   hash: string,
 ): string {
   const rewritten = new URL(browserBase.toString());
-  const normalizedTargetPath = targetPath === "/" && !search && !hash ? "" : targetPath;
+  const normalizedTargetPath =
+    targetPath === "/" && !search && !hash
+      ? ""
+      : stripExistingBasePath(targetPath, browserBase.pathname);
   rewritten.pathname = joinUrlPaths(browserBase.pathname, normalizedTargetPath);
   rewritten.search = search;
   rewritten.hash = hash;
@@ -85,10 +86,6 @@ function trimTrailingSlash(pathname: string): string {
   return pathname.replace(/\/+$/, "");
 }
 
-function ensureTrailingSlash(value: string): string {
-  return value.endsWith("/") ? value : `${value}/`;
-}
-
 function joinUrlPaths(basePath: string, targetPath: string): string {
   const normalizedBase = trimTrailingSlash(basePath);
   if (!targetPath) {
@@ -96,4 +93,20 @@ function joinUrlPaths(basePath: string, targetPath: string): string {
   }
   const normalizedTarget = targetPath.startsWith("/") ? targetPath : `/${targetPath}`;
   return `${normalizedBase}${normalizedTarget}` || "/";
+}
+
+function stripExistingBasePath(targetPath: string, basePath: string): string {
+  const normalizedBase = trimTrailingSlash(basePath);
+  if (!normalizedBase) {
+    return targetPath;
+  }
+
+  const normalizedTarget = targetPath.startsWith("/") ? targetPath : `/${targetPath}`;
+  if (normalizedTarget === normalizedBase) {
+    return "";
+  }
+  if (normalizedTarget.startsWith(`${normalizedBase}/`)) {
+    return normalizedTarget.slice(normalizedBase.length);
+  }
+  return targetPath;
 }

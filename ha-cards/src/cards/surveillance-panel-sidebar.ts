@@ -11,12 +11,14 @@ import {
   type SidebarFilter,
   type VtoViewModel,
 } from "../domain/model";
+import { pluralUnit, type Localizer } from "../localization";
 
 type SidebarItemKind = "camera" | "vto" | "accessory" | "nvr";
 type SidebarTone = "neutral" | "success" | "warning" | "critical";
 
 interface RenderSurveillancePanelSidebarArgs {
   model: PanelModel;
+  t: Localizer;
   sidebarOpen: boolean;
   searchText: string;
   sidebarFilter: SidebarFilter;
@@ -50,6 +52,7 @@ function renderSidebarSectionLabel(
 
 export function renderSurveillancePanelSidebar({
   model,
+  t,
   sidebarOpen,
   searchText,
   sidebarFilter,
@@ -73,14 +76,14 @@ export function renderSurveillancePanelSidebar({
           class="search"
           type="search"
           .value=${searchText}
-          placeholder="Search devices"
+          placeholder=${t("sidebar.search")}
           @input=${onSearchInput}
         />
         <div class="chip-row">
-          ${renderFilterChip("all", "All", sidebarFilter, onSelectFilter)}
-          ${renderFilterChip("alerts", "Alerts", sidebarFilter, onSelectFilter)}
-          ${renderFilterChip("nvr", "NVR", sidebarFilter, onSelectFilter)}
-          ${renderFilterChip("vto", "VTO", sidebarFilter, onSelectFilter)}
+          ${renderFilterChip("all", t("sidebar.filter.all"), sidebarFilter, onSelectFilter)}
+          ${renderFilterChip("alerts", t("sidebar.filter.alerts"), sidebarFilter, onSelectFilter)}
+          ${renderFilterChip("nvr", t("sidebar.filter.nvr"), sidebarFilter, onSelectFilter)}
+          ${renderFilterChip("vto", t("sidebar.filter.vto"), sidebarFilter, onSelectFilter)}
         </div>
       </div>
 
@@ -88,22 +91,22 @@ export function renderSurveillancePanelSidebar({
         ${vtos.length > 0
           ? html`
               <section class="sidebar-group">
-                ${renderSidebarSectionLabel("Door Stations", "mdi:doorbell-video", renderIcon)}
+                ${renderSidebarSectionLabel(t("sidebar.doorStations"), "mdi:doorbell-video", renderIcon)}
                 ${repeat(
                   vtos,
                   (vto) => vto.deviceId,
                   (vto) =>
                     renderSidebarDeviceButton({
                       label: vto.label,
-                      secondary: formatVtoSecondary(vto),
+                        secondary: formatVtoSecondary(vto, t),
                       selected:
                         selection.kind === "vto" && selection.deviceId === vto.deviceId,
                       highlighted: vto.callState === "ringing" || vto.callState === "active",
                       badgeText:
                         vto.callState === "ringing"
-                          ? "Ringing"
+                          ? t("state.ringing")
                           : vto.callState === "active"
-                            ? "Active"
+                            ? t("state.active")
                             : undefined,
                       onClick: () => onSelectVto(vto),
                       tone: vto.online ? "success" : "critical",
@@ -117,7 +120,7 @@ export function renderSurveillancePanelSidebar({
           : nothing}
 
         <section class="sidebar-group">
-          ${renderSidebarSectionLabel("NVR Systems", "mdi:server-network", renderIcon)}
+          ${renderSidebarSectionLabel(t("sidebar.nvrSystems"), "mdi:server-network", renderIcon)}
           ${repeat(
             model.nvrs,
             (nvr) => nvr.deviceId,
@@ -125,10 +128,10 @@ export function renderSurveillancePanelSidebar({
               <section class="sidebar-nvr">
                 ${renderSidebarDeviceButton({
                   label: nvr.label,
-                  secondary: `${nvr.rooms.length} room${nvr.rooms.length === 1 ? "" : "s"} | ${nvr.disks.length} drive${nvr.disks.length === 1 ? "" : "s"}`,
+                  secondary: `${nvr.rooms.length} ${pluralUnit(nvr.rooms.length, "unit.room", "unit.rooms", t)} | ${nvr.disks.length} ${pluralUnit(nvr.disks.length, "unit.drive", "unit.drives", t)}`,
                   selected: selection.kind === "nvr" && selection.deviceId === nvr.deviceId,
                   highlighted: !nvr.healthy,
-                  badgeText: !nvr.healthy ? "Alert" : undefined,
+                  badgeText: !nvr.healthy ? t("unit.alert") : undefined,
                   onClick: () => onSelectNvr(nvr),
                   tone: !nvr.healthy ? "warning" : "success",
                   kind: "nvr",
@@ -154,6 +157,7 @@ export function renderSurveillancePanelSidebar({
                       selection,
                       onSelectCamera,
                       renderIcon,
+                      t,
                       matchesSidebarFilters,
                     }),
                 )}
@@ -165,7 +169,7 @@ export function renderSurveillancePanelSidebar({
         ${ipcCameras.length > 0
           ? html`
               <section class="sidebar-group">
-                ${renderSidebarSectionLabel("IPC Cameras", "mdi:cctv", renderIcon)}
+                ${renderSidebarSectionLabel(t("sidebar.ipcCameras"), "mdi:cctv", renderIcon)}
                 ${repeat(
                   ipcCameras.filter((camera) =>
                     matchesSidebarFilters(
@@ -201,15 +205,15 @@ export function renderSurveillancePanelSidebar({
       </div>
 
       <div class="storage-widget">
-        ${renderSidebarSectionLabel("NVR Storage", "mdi:harddisk", renderIcon)}
+          ${renderSidebarSectionLabel(t("sidebar.nvrStorage"), "mdi:harddisk", renderIcon)}
         <div class="storage-drives">
           ${model.nvrs.length > 0
             ? repeat(
                 model.nvrs,
                 (nvr) => `storage:${nvr.deviceId}`,
-                (nvr) => renderStorageSummaryRow(nvr),
+                (nvr) => renderStorageSummaryRow(nvr, t),
               )
-            : html`<div class="muted">No NVR storage state discovered.</div>`}
+            : html`<div class="muted">${t("sidebar.noStorage")}</div>`}
         </div>
       </div>
     </aside>
@@ -222,6 +226,7 @@ function renderSidebarRoomGroup({
   selection,
   onSelectCamera,
   renderIcon,
+  t,
   matchesSidebarFilters,
 }: {
   nvrDeviceId: string;
@@ -229,6 +234,7 @@ function renderSidebarRoomGroup({
   selection: PanelSelection;
   onSelectCamera: (camera: CameraViewModel) => void;
   renderIcon: (icon: string) => TemplateResult;
+  t: Localizer;
   matchesSidebarFilters: (
     label: string,
     secondary: string,
@@ -257,11 +263,11 @@ function renderSidebarRoomGroup({
         <div class="sidebar-room-summary">
           <div class="sidebar-room-meta">
             <div class="sidebar-label">${room.label}</div>
-            <div class="sidebar-secondary">${cameras.length} channels</div>
+            <div class="sidebar-secondary">${cameras.length} ${pluralUnit(cameras.length, "unit.channel", "unit.channels", t)}</div>
           </div>
           <div class="split-row">
             ${alertCount > 0
-              ? html`<span class="badge warning">${alertCount} alerts</span>`
+              ? html`<span class="badge warning">${alertCount} ${pluralUnit(alertCount, "unit.alert", "unit.alerts", t)}</span>`
               : nothing}
             <span class="sidebar-room-toggle" aria-hidden="true">
               ${renderIcon("mdi:chevron-down")}
@@ -372,7 +378,7 @@ function renderSidebarDeviceButton({
 
 function sidebarItemIcon(label: string, secondary: string): string {
   const haystack = `${label} ${secondary}`.toLowerCase();
-  if (haystack.includes("door")) {
+  if (haystack.includes("door") || haystack.includes("виклич")) {
     return "mdi:doorbell-video";
   }
   if (haystack.includes("recorder") || haystack.includes("nvr")) {
@@ -404,17 +410,17 @@ function renderFilterChip(
   `;
 }
 
-function renderStorageSummaryRow(nvr: NvrViewModel): TemplateResult {
+function renderStorageSummaryRow(nvr: NvrViewModel, t: Localizer): TemplateResult {
   return html`
     <div class="storage-drive">
       <div class="storage-drive-head">
         <div class="sidebar-label">${nvr.label}</div>
         <div class="split-row">
           <span class="badge ${nvr.healthy ? "success" : "warning"}">
-            ${nvr.healthy ? "Healthy" : "Attention"}
+            ${nvr.healthy ? t("state.healthy") : t("state.attention")}
           </span>
           <span class="badge ${nvr.recordingActive ? "critical" : "info"}">
-            ${nvr.recordingActive ? "Recording" : "Standby"}
+            ${nvr.recordingActive ? t("state.recording") : t("state.standby")}
           </span>
         </div>
       </div>
@@ -426,24 +432,28 @@ function renderStorageSummaryRow(nvr: NvrViewModel): TemplateResult {
       </div>
       <div class="storage-drive-meta">
         <span class="muted">
-          ${nvr.storageUsedPercent !== null ? `${Math.round(nvr.storageUsedPercent)}% used` : "Usage unknown"}
+          ${nvr.storageUsedPercent !== null
+            ? t("storage.percentUsed", { value: Math.round(nvr.storageUsedPercent) })
+            : t("storage.usageUnknown")}
         </span>
         <span class="muted">${nvr.storageText}</span>
       </div>
-      <div class="muted">${nvr.disks.length} drive${nvr.disks.length === 1 ? "" : "s"}</div>
+      <div class="muted">${nvr.disks.length} ${pluralUnit(nvr.disks.length, "unit.drive", "unit.drives", t)}</div>
     </div>
   `;
 }
 
-function formatVtoSecondary(vto: VtoViewModel): string {
+function formatVtoSecondary(vto: VtoViewModel, t: Localizer): string {
   const parts = [
-    vto.roomLabel && vto.roomLabel !== "Unassigned" ? vto.roomLabel : "Door Station",
+    vto.roomLabel && vto.roomLabel !== "Unassigned" && vto.roomLabel !== t("sidebar.unassigned")
+      ? vto.roomLabel
+      : t("kind.doorStation"),
   ];
   if (vto.lockCount > 0) {
-    parts.push(`${vto.lockCount} lock${vto.lockCount === 1 ? "" : "s"}`);
+    parts.push(`${vto.lockCount} ${pluralUnit(vto.lockCount, "unit.lock", "unit.locks", t)}`);
   }
   if (vto.alarmCount > 0) {
-    parts.push(`${vto.alarmCount} alarm${vto.alarmCount === 1 ? "" : "s"}`);
+    parts.push(`${vto.alarmCount} ${pluralUnit(vto.alarmCount, "unit.alarm", "unit.alarms", t)}`);
   }
   return parts.join(" | ");
 }

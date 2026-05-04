@@ -5,6 +5,12 @@ import {
   resolveSourceFailureAction,
   resolveSourceFailureTransition,
 } from "../src/cards/surveillance-remote-stream";
+import {
+  clampStreamVolume,
+  streamVolumeFromInputValue,
+  streamVolumeIcon,
+  streamVolumePercent,
+} from "../src/cards/surveillance-panel-player-audio-model";
 
 describe("remote stream hls playback mode", () => {
   it("prefers hls.js when both hls.js and native hls are reported", () => {
@@ -97,5 +103,22 @@ describe("remote stream hls playback mode", () => {
       retryCurrentSource: false,
       retryExhaustedSources: true,
     });
+  });
+});
+
+describe("player audio model", () => {
+  it("clamps browser stream volume to the media element range", () => {
+    expect(clampStreamVolume(-1)).toBe(0);
+    expect(clampStreamVolume(0.42)).toBe(0.42);
+    expect(clampStreamVolume(2)).toBe(1);
+    expect(clampStreamVolume(Number.NaN)).toBe(1);
+  });
+
+  it("maps slider input and icons to browser-local volume state", () => {
+    expect(streamVolumeFromInputValue("37")).toBe(0.37);
+    expect(streamVolumePercent(0.374)).toBe(37);
+    expect(streamVolumeIcon(true, 1)).toBe("mdi:volume-off");
+    expect(streamVolumeIcon(false, 0.2)).toBe("mdi:volume-medium");
+    expect(streamVolumeIcon(false, 0.8)).toBe("mdi:volume-high");
   });
 });

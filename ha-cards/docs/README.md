@@ -1,23 +1,21 @@
 # HA Cards Documentation
 
-This section documents the optional Lovelace card workspace.
+These pages document the optional DahuaBridge Lovelace card bundle.
 
-Use these pages in order:
+Read in this order:
 
 1. [Install](install.md)
 2. [Configuration](configuration.md)
 3. [Features](features.md)
 4. [Architecture](architecture.md)
 
-## What This Section Covers
+The current card bundle is intentionally narrow. It shows live streams, recent
+bridge events, SMD/IVS events with direct RTSP playback and bridge-managed MP4
+download/export, 30-minute recording chunks with download only, selected-camera
+RTSP archive seek, and MP4 clips created by the manual recording button.
 
-- how to build and install the Lovelace bundle
-- which custom card entry points exist
-- what configuration each card accepts
-- which workflows belong in cards instead of the bridge or integration
+The cards do not use playback sessions or archive coverage.
 
-## Related Docs
+Related report:
 
-- root docs: [../../docs/README.md](../../docs/README.md)
-- bridge docs: [../../bridge/docs/README.md](../../bridge/docs/README.md)
-- integration docs: [../../integration/docs/README.md](../../integration/docs/README.md)
+- [Removed functionality report](../removed-report.md)

@@ -1473,13 +1473,7 @@ func TestAdminPageEndpoint(t *testing.T) {
 	}, stubSnapshotReader{
 		adminSettings: func() map[string]any {
 			return map[string]any{
-				"mqtt": map[string]any{
-					"broker":   "tcp://mqtt.local:1883",
-					"password": "[redacted]",
-				},
-				"home_assistant": map[string]any{
-					"access_token": "[redacted]",
-				},
+				"home_assistant": map[string]any{"public_base_url": "http://bridge.local:9205"},
 				"devices": map[string]any{
 					"vto": []map[string]any{{
 						"id":       "front_vto",
@@ -1583,7 +1577,7 @@ func TestAdminPageEndpoint(t *testing.T) {
 	if !strings.Contains(body, `[redacted]`) {
 		t.Fatalf("missing redacted settings marker:\n%s", body)
 	}
-	if strings.Contains(body, `"password":"secret"`) || strings.Contains(body, `"access_token":"token"`) {
+	if strings.Contains(body, `"password":"secret"`) {
 		t.Fatalf("unexpected secret disclosure:\n%s", body)
 	}
 }
@@ -2797,6 +2791,105 @@ func TestNVRSMDIVSEndpointSkipsAssetEnrichment(t *testing.T) {
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected status 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestNVRSMDIVSEndpointParsesAliasesAndRedactsPlaybackURLs(t *testing.T) {
+	server := newTestServerWithConfig(config.HTTPConfig{
+		ListenAddress: ":0",
+		MetricsPath:   "/metrics",
+		HealthPath:    "/healthz",
+	}, stubSnapshotReader{
+		nvrRecordings: func(_ context.Context, _ string, query dahua.NVRRecordingQuery) (dahua.NVRRecordingSearchResult, error) {
+			if !query.EventOnly {
+				t.Fatal("expected smd/ivs route to force event-only search")
+			}
+			if query.EventCode != "smdTypeHuman" {
+				t.Fatalf("unexpected event code %q", query.EventCode)
+			}
+			if !query.SkipAssetEnrichment {
+				t.Fatal("expected db_only to skip asset enrichment")
+			}
+			if query.StartTime.Format(time.RFC3339) != "2026-05-03T21:00:00Z" {
+				t.Fatalf("unexpected start time %s", query.StartTime.Format(time.RFC3339))
+			}
+			if query.EndTime.Format(time.RFC3339) != "2026-05-04T21:00:00Z" {
+				t.Fatalf("unexpected end time %s", query.EndTime.Format(time.RFC3339))
+			}
+			return dahua.NVRRecordingSearchResult{
+				DeviceID:      "west20_nvr",
+				Channel:       query.Channel,
+				StartTime:     "2026-05-03 21:00:00",
+				EndTime:       "2026-05-04 21:00:00",
+				Limit:         query.Limit,
+				ReturnedCount: 1,
+				Items: []dahua.NVRRecording{{
+					RecordKind:  "smd_ivs",
+					Source:      "smd_ivs",
+					Channel:     query.Channel,
+					StartTime:   "2026-05-04 08:10:28",
+					EndTime:     "2026-05-04 08:10:46",
+					Type:        "Event.smdTypeHuman",
+					VideoStream: "Main",
+					RTSPMainURL: "rtsp://user:pass@example.test/main",
+					RTSPSubURL:  "rtsp://user:pass@example.test/sub",
+				}},
+			}, nil
+		},
+	}, nil, stubActionReader{}, stubEventReader{})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/nvr/west20_nvr/smd-ivs?channel=1&start_time=2026-05-03T21:00:00Z&end_time=2026-05-04T21:00:00Z&limit=20&event=smdTypeHuman&db_only=true", nil)
+	rec := httptest.NewRecorder()
+
+	server.httpServer.Handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "rtsp_main_url") || strings.Contains(rec.Body.String(), "rtsp_sub_url") {
+		t.Fatalf("expected playback URLs to be redacted by default: %s", rec.Body.String())
+	}
+}
+
+func TestNVRSMDIVSEndpointIncludesPlaybackURLsWhenRequested(t *testing.T) {
+	server := newTestServerWithConfig(config.HTTPConfig{
+		ListenAddress: ":0",
+		MetricsPath:   "/metrics",
+		HealthPath:    "/healthz",
+	}, stubSnapshotReader{
+		nvrRecordings: func(_ context.Context, _ string, query dahua.NVRRecordingQuery) (dahua.NVRRecordingSearchResult, error) {
+			return dahua.NVRRecordingSearchResult{
+				DeviceID:      "west20_nvr",
+				Channel:       query.Channel,
+				StartTime:     "2026-05-03 21:00:00",
+				EndTime:       "2026-05-04 21:00:00",
+				Limit:         query.Limit,
+				ReturnedCount: 1,
+				Items: []dahua.NVRRecording{{
+					RecordKind:  "smd_ivs",
+					Source:      "smd_ivs",
+					Channel:     query.Channel,
+					StartTime:   "2026-05-04 08:10:28",
+					EndTime:     "2026-05-04 08:10:46",
+					Type:        "Event.smdTypeHuman",
+					VideoStream: "Main",
+					RTSPMainURL: "rtsp://user:pass@example.test/main",
+					RTSPSubURL:  "rtsp://user:pass@example.test/sub",
+				}},
+			}, nil
+		},
+	}, nil, stubActionReader{}, stubEventReader{})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/nvr/west20_nvr/smd-ivs?channel=1&start=2026-05-03T21:00:00Z&end=2026-05-04T21:00:00Z&include_credentials=true", nil)
+	rec := httptest.NewRecorder()
+
+	server.httpServer.Handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "rtsp_main_url") || !strings.Contains(rec.Body.String(), "rtsp_sub_url") {
+		t.Fatalf("expected playback URLs when include_credentials=true: %s", rec.Body.String())
 	}
 }
 

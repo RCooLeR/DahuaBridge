@@ -145,9 +145,6 @@ export interface BridgeIntercomSummary {
   lockUrls: string[];
   externalUplinkEnableUrl: string | null;
   externalUplinkDisableUrl: string | null;
-  outputVolumeUrl: string | null;
-  inputVolumeUrl: string | null;
-  muteUrl: string | null;
   recordingUrl: string | null;
   bridgeSessionActive: boolean;
   bridgeSessionCount: number | null;
@@ -166,17 +163,9 @@ export interface BridgeIntercomSummary {
   supportsExternalAudioExport: boolean;
   configuredExternalUplinkTargetCount: number | null;
   supportsVtoCallAnswer: boolean;
-  supportsVtoOutputVolumeControl: boolean;
-  supportsVtoInputVolumeControl: boolean;
-  supportsVtoMuteControl: boolean;
   supportsVtoRecordingControl: boolean;
   supportsVtoTalkback: boolean;
   supportsFullCallAcceptance: boolean;
-  outputVolumeLevel: number | null;
-  outputVolumeLevels: number[];
-  inputVolumeLevel: number | null;
-  inputVolumeLevels: number[];
-  muted: boolean;
   autoRecordEnabled: boolean;
   autoRecordTimeSeconds: number | null;
   streamAudioEnabled: boolean;
@@ -263,8 +252,6 @@ export interface BridgeDeviceDiagnosticsModel {
   subCodec: string | null;
   subResolution: string | null;
   audioCodec: string | null;
-  controlAudioAuthority: string | null;
-  controlAudioSemantic: string | null;
   nvrConfigWritable: boolean | null;
   nvrConfigReason: string | null;
   directIPCConfigured: boolean | null;
@@ -309,9 +296,6 @@ export interface VtoCapabilityModel {
   bridgeAudioUplinkSupported: boolean;
   bridgeAudioOutputSupported: boolean;
   externalAudioExportSupported: boolean;
-  outputVolumeSupported: boolean;
-  inputVolumeSupported: boolean;
-  muteSupported: boolean;
   recordingSupported: boolean;
   talkbackSupported: boolean;
   fullCallAcceptanceSupported: boolean;
@@ -413,21 +397,12 @@ export interface VtoModel extends BridgeCameraDeviceBase {
   lastCallStartedAt: string;
   lastCallEndedAt: string;
   lastCallDurationSeconds: number | null;
-  outputVolume: number | null;
-  inputVolume: number | null;
-  muted: boolean;
   autoRecordEnabled: boolean;
   intercom: BridgeIntercomSummary | null;
   answerButtonEntityId: string;
   hasAnswerButtonEntity: boolean;
   hangupButtonEntityId: string;
   hasHangupButtonEntity: boolean;
-  outputVolumeEntityId: string;
-  hasOutputVolumeEntity: boolean;
-  inputVolumeEntityId: string;
-  hasInputVolumeEntity: boolean;
-  mutedEntityId: string;
-  hasMutedEntity: boolean;
   autoRecordEntityId: string;
   hasAutoRecordEntity: boolean;
   lockCount: number;
@@ -550,9 +525,8 @@ interface BridgeCaptureShape {
 }
 
 interface BridgeArchiveAttributeSummary {
-  searchUrl: string | null;
-  playbackUrl: string | null;
-  coverageUrl: string | null;
+  smdIvsUrl: string | null;
+  chunksUrl: string | null;
 }
 
 interface BridgeIntercomShape {
@@ -720,15 +694,6 @@ function buildVtoModel(
   const hangupButtonEntityId =
     resolveEntityId(hass, registrySnapshot, "button", base.deviceId, "hangup_call") ??
     buttonEntityId(base.deviceId, "hangup_call");
-  const outputVolumeEntityId =
-    resolveEntityId(hass, registrySnapshot, "number", base.deviceId, "output_volume") ??
-    numberEntityId(base.deviceId, "output_volume");
-  const inputVolumeEntityId =
-    resolveEntityId(hass, registrySnapshot, "number", base.deviceId, "input_volume") ??
-    numberEntityId(base.deviceId, "input_volume");
-  const mutedEntityId =
-    resolveEntityId(hass, registrySnapshot, "switch", base.deviceId, "muted") ??
-    switchEntityId(base.deviceId, "muted");
   const autoRecordEntityId =
     resolveEntityId(hass, registrySnapshot, "switch", base.deviceId, "auto_record_enabled") ??
     switchEntityId(base.deviceId, "auto_record_enabled");
@@ -765,21 +730,12 @@ function buildVtoModel(
       base.deviceId,
       "last_call_duration_seconds",
     ),
-    outputVolume: entityNumberState(hass, outputVolumeEntityId),
-    inputVolume: entityNumberState(hass, inputVolumeEntityId),
-    muted: entityBooleanState(hass, mutedEntityId),
     autoRecordEnabled: entityBooleanState(hass, autoRecordEntityId),
     intercom,
     answerButtonEntityId,
     hasAnswerButtonEntity: entityById(hass, answerButtonEntityId) !== undefined,
     hangupButtonEntityId,
     hasHangupButtonEntity: entityById(hass, hangupButtonEntityId) !== undefined,
-    outputVolumeEntityId,
-    hasOutputVolumeEntity: entityById(hass, outputVolumeEntityId) !== undefined,
-    inputVolumeEntityId,
-    hasInputVolumeEntity: entityById(hass, inputVolumeEntityId) !== undefined,
-    mutedEntityId,
-    hasMutedEntity: entityById(hass, mutedEntityId) !== undefined,
     autoRecordEntityId,
     hasAutoRecordEntity: entityById(hass, autoRecordEntityId) !== undefined,
     lockCount: intercom?.lockUrls.length ?? 0,
@@ -1144,10 +1100,6 @@ function buildDeviceDiagnostics(
     subResolution:
       sensorStateForDevice(hass, registrySnapshot, deviceId, "sub_resolution") ?? null,
     audioCodec: sensorStateForDevice(hass, registrySnapshot, deviceId, "audio_codec") ?? null,
-    controlAudioAuthority:
-      sensorStateForDevice(hass, registrySnapshot, deviceId, "control_audio_authority") ?? null,
-    controlAudioSemantic:
-      sensorStateForDevice(hass, registrySnapshot, deviceId, "control_audio_semantic") ?? null,
     nvrConfigWritable: optionalBinaryStateForDevice(
       hass,
       registrySnapshot,
@@ -1513,11 +1465,6 @@ function buildVtoCapabilities(
     bridgeAudioUplinkSupported: intercom?.supportsBridgeAudioUplink === true,
     bridgeAudioOutputSupported: intercom?.supportsBridgeAudioOutput === true,
     externalAudioExportSupported: intercom?.supportsExternalAudioExport === true,
-    outputVolumeSupported:
-      intercom?.supportsVtoOutputVolumeControl === true && !!intercom.outputVolumeUrl,
-    inputVolumeSupported:
-      intercom?.supportsVtoInputVolumeControl === true && !!intercom.inputVolumeUrl,
-    muteSupported: intercom?.supportsVtoMuteControl === true && !!intercom.muteUrl,
     recordingSupported:
       intercom?.supportsVtoRecordingControl === true && !!intercom.recordingUrl,
     talkbackSupported: intercom?.supportsVtoTalkback === true,
@@ -1694,11 +1641,13 @@ function bridgeArchiveAttributesForEntity(
   entity: HassEntity | undefined,
 ): BridgeArchiveAttributeSummary {
   return {
-    searchUrl: normalizeArchiveSearchUrlTemplate(
-      stringValue(entity?.attributes.bridge_archive_recordings_url_template),
+    smdIvsUrl: normalizeArchiveSearchUrlTemplate(
+      stringValue(entity?.attributes.bridge_archive_smd_ivs_url_template),
     ),
-    playbackUrl: stringValue(entity?.attributes.bridge_playback_sessions_url),
-    coverageUrl: stringValue(entity?.attributes.bridge_archive_coverage_url),
+    chunksUrl: normalizeArchiveSearchUrlTemplate(
+      stringValue(entity?.attributes.bridge_archive_recording_chunks_url_template) ??
+        stringValue(entity?.attributes.bridge_archive_recordings_url_template),
+    ),
   };
 }
 
@@ -1709,15 +1658,15 @@ function withArchiveFallbackFeatures(
   const merged = [...features];
 
   if (
-    archiveAttributes.searchUrl &&
-    !merged.some((feature) => feature.key === "archive_search" && feature.url)
+    archiveAttributes.smdIvsUrl &&
+    !merged.some((feature) => feature.key === "archive_smd_ivs" && feature.url)
   ) {
     merged.push({
-      key: "archive_search",
-      label: "Recordings",
+      key: "archive_smd_ivs",
+      label: "SMD/IVS Events",
       group: "archive",
       kind: "query",
-      url: archiveAttributes.searchUrl,
+      url: archiveAttributes.smdIvsUrl,
       supported: true,
       parameterKey: null,
       parameterValue: null,
@@ -1735,41 +1684,15 @@ function withArchiveFallbackFeatures(
   }
 
   if (
-    archiveAttributes.coverageUrl &&
-    !merged.some((feature) => feature.key === "archive_coverage" && feature.url)
+    archiveAttributes.chunksUrl &&
+    !merged.some((feature) => feature.key === "archive_recording_chunks" && feature.url)
   ) {
     merged.push({
-      key: "archive_coverage",
-      label: "Coverage",
+      key: "archive_recording_chunks",
+      label: "Recording Chunks",
       group: "archive",
       kind: "query",
-      url: archiveAttributes.coverageUrl,
-      supported: true,
-      parameterKey: null,
-      parameterValue: null,
-      commands: [],
-      actions: [],
-      targets: [],
-      allowedValues: [],
-      minValue: null,
-      maxValue: null,
-      stepValue: null,
-      currentValue: null,
-      active: null,
-      currentText: null,
-    });
-  }
-
-  if (
-    archiveAttributes.playbackUrl &&
-    !merged.some((feature) => feature.key === "archive_playback" && feature.url)
-  ) {
-    merged.push({
-      key: "archive_playback",
-      label: "Playback",
-      group: "archive",
-      kind: "session",
-      url: archiveAttributes.playbackUrl,
+      url: archiveAttributes.chunksUrl,
       supported: true,
       parameterKey: null,
       parameterValue: null,
@@ -1961,9 +1884,6 @@ function bridgeIntercomForEntity(
     lockUrls: stringArray(typed.lock_urls),
     externalUplinkEnableUrl: stringValue(typed.external_uplink_enable_url),
     externalUplinkDisableUrl: stringValue(typed.external_uplink_disable_url),
-    outputVolumeUrl: stringValue(typed.output_volume_url),
-    inputVolumeUrl: stringValue(typed.input_volume_url),
-    muteUrl: stringValue(typed.mute_url),
     recordingUrl: stringValue(typed.recording_url),
     bridgeSessionActive: booleanValue(typed.bridge_session_active),
     bridgeSessionCount: numberValue(typed.bridge_session_count),
@@ -1984,17 +1904,9 @@ function bridgeIntercomForEntity(
       typed.configured_external_uplink_target_count,
     ),
     supportsVtoCallAnswer: booleanValue(typed.supports_vto_call_answer),
-    supportsVtoOutputVolumeControl: booleanValue(typed.supports_vto_output_volume_control),
-    supportsVtoInputVolumeControl: booleanValue(typed.supports_vto_input_volume_control),
-    supportsVtoMuteControl: booleanValue(typed.supports_vto_mute_control),
     supportsVtoRecordingControl: booleanValue(typed.supports_vto_recording_control),
     supportsVtoTalkback: booleanValue(typed.supports_vto_talkback),
     supportsFullCallAcceptance: booleanValue(typed.supports_full_call_acceptance),
-    outputVolumeLevel: numberValue(typed.output_volume_level),
-    outputVolumeLevels: numberArray(typed.output_volume_levels),
-    inputVolumeLevel: numberValue(typed.input_volume_level),
-    inputVolumeLevels: numberArray(typed.input_volume_levels),
-    muted: booleanValue(typed.muted),
     autoRecordEnabled: booleanValue(typed.auto_record_enabled),
     autoRecordTimeSeconds: numberValue(typed.auto_record_time_seconds),
     streamAudioEnabled: booleanValue(typed.stream_audio_enabled),

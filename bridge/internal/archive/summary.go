@@ -2,7 +2,6 @@ package archive
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"strings"
 	"time"
@@ -150,27 +149,4 @@ func archiveCountMapKeys(values map[int]map[string]int) []int {
 		keys = append(keys, key)
 	}
 	return keys
-}
-
-func archiveCoverageWindowsFromRows(rows *sql.Rows) ([]coverageChunk, error) {
-	chunks := make([]coverageChunk, 0)
-	for rows.Next() {
-		var startText, endText string
-		if err := rows.Scan(&startText, &endText); err != nil {
-			return nil, err
-		}
-		startTime, okStart := parseArchiveLocalTime(startText)
-		endTime, okEnd := parseArchiveLocalTime(endText)
-		if !okStart || !okEnd || !endTime.After(startTime) {
-			continue
-		}
-		chunks = append(chunks, coverageChunk{
-			StartTime: startTime,
-			EndTime:   endTime,
-		})
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return chunks, nil
 }

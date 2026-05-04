@@ -3,7 +3,6 @@ package archive
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"strings"
 	"time"
 
@@ -102,19 +101,26 @@ func (s *SQLiteStore) searchFileRows(ctx context.Context, deviceID string, query
 }
 
 func (s *SQLiteStore) searchEventRows(ctx context.Context, deviceID string, query dahua.NVRRecordingQuery) ([]dahua.NVRRecording, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT
-		event_id, channel, start_time, end_time, source_file_path, event_type, video_stream,
-		rtsp_main_url, rtsp_sub_url, flags_json, mp4_clip_id, mp4_status, mp4_error
-		FROM smd_ivs_events
-		WHERE device_id = ? AND channel = ? AND end_time >= ? AND start_time <= ?
-		ORDER BY start_time DESC
-		LIMIT ?`,
+	where := `device_id = ? AND channel = ? AND end_time >= ? AND start_time <= ?`
+	args := []any{
 		strings.TrimSpace(deviceID),
 		query.Channel,
 		query.StartTime.In(time.Local).Format(archiveTimeLayout),
 		query.EndTime.In(time.Local).Format(archiveTimeLayout),
-		query.Limit*4,
-	)
+	}
+	if filterSQL, filterArgs := archiveEventSQLFilter(query.EventCode); filterSQL != "" {
+		where += ` AND (` + filterSQL + `)`
+		args = append(args, filterArgs...)
+	}
+	args = append(args, query.Limit)
+
+	rows, err := s.db.QueryContext(ctx, `SELECT
+		event_id, channel, start_time, end_time, source_file_path, event_type, video_stream,
+		rtsp_main_url, rtsp_sub_url, flags_json, mp4_clip_id, mp4_status, mp4_error
+		FROM smd_ivs_events
+		WHERE `+where+`
+		ORDER BY start_time DESC
+		LIMIT ?`, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -164,14 +170,6 @@ func (s *SQLiteStore) searchEventRows(ctx context.Context, deviceID string, quer
 	return items, rows.Err()
 }
 
-func (s *SQLiteStore) MarkCoverage(ctx context.Context, scope string, deviceID string, channel int, startTime time.Time, endTime time.Time, syncedAt time.Time) error {
-	return nil
-}
-
-func (s *SQLiteStore) IsCoverageComplete(ctx context.Context, scope string, deviceID string, channel int, windows [][2]time.Time) (bool, error) {
-	return false, nil
-}
-
 func shouldSearchEventScope(query dahua.NVRRecordingQuery) bool {
 	code, ok := archiveScopeForQuery(query)
 	return ok && strings.HasPrefix(code, "event:")
@@ -204,6 +202,42 @@ func matchesArchiveEventQuery(item dahua.NVRRecording, eventCode string) bool {
 		}
 	}
 	return false
+}
+
+func archiveEventSQLFilter(eventCode string) (string, []any) {
+	code := normalizeArchiveEventCode(eventCode)
+	if code == "" {
+		return "", nil
+	}
+	patterns := archiveEventSQLPatterns(code)
+	if len(patterns) == 0 {
+		return "1 = 0", nil
+	}
+
+	clauses := []string{"LOWER(event_type) = ?", "LOWER(flags_json) LIKE ?"}
+	args := []any{code, "%\"" + code + "\"%"}
+	for _, pattern := range patterns {
+		clauses = append(clauses, "LOWER(event_type) LIKE ?", "LOWER(flags_json) LIKE ?")
+		args = append(args, pattern, pattern)
+	}
+	return strings.Join(clauses, " OR "), args
+}
+
+func archiveEventSQLPatterns(code string) []string {
+	switch normalizeArchiveEventCode(code) {
+	case "human":
+		return []string{"%smdtypehuman%", "%humandetection%", "%smartmotionhuman%", "%intelliframehuman%"}
+	case "vehicle":
+		return []string{"%smdtypevehicle%", "%vehicledetection%", "%smartmotionvehicle%", "%motorvehicle%"}
+	case "animal":
+		return []string{"%smdtypeanimal%", "%animaldetection%"}
+	case "tripwire":
+		return []string{"%crosslinedetection%", "%tripwire%"}
+	case "intrusion":
+		return []string{"%crossregiondetection%", "%intrusion%"}
+	default:
+		return nil
+	}
 }
 
 func normalizeArchiveEventCode(value string) string {
@@ -280,21 +314,6 @@ func isSMDIVSRecording(item dahua.NVRRecording) bool {
 	}
 }
 
-func buildCoverageWindows(startTime time.Time, endTime time.Time, windowSize time.Duration) [][2]time.Time {
-	if startTime.IsZero() || endTime.IsZero() || !endTime.After(startTime) || windowSize <= 0 {
-		return nil
-	}
-	windows := make([][2]time.Time, 0)
-	for from := startTime.Truncate(windowSize); from.Before(endTime); from = from.Add(windowSize) {
-		to := from.Add(windowSize)
-		if to.After(endTime) {
-			to = endTime
-		}
-		windows = append(windows, [2]time.Time{from, to})
-	}
-	return windows
-}
-
 func ensureArchiveRecordIdentity(deviceID string, item *dahua.NVRRecording) {
 	if item == nil {
 		return
@@ -351,11 +370,4 @@ func archiveFileRowRank(item dahua.NVRRecording) int64 {
 		}
 	}
 	return rank
-}
-
-func summarizeScope(scope string) string {
-	if strings.TrimSpace(scope) == "" {
-		return "archive"
-	}
-	return fmt.Sprintf("scope %s", scope)
 }

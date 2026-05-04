@@ -28,16 +28,79 @@ export interface RegistrySnapshot {
   areasById: Map<string, AreaRegistryEntry>;
 }
 
+interface RegistrySnapshotCacheEntry {
+  snapshot: RegistrySnapshot | null;
+  fetchedAt: number;
+  inFlight: Promise<RegistrySnapshot | null> | null;
+}
+
+type RegistryCall = <T>(message: { type: string; [key: string]: unknown }) => Promise<T>;
+
+const REGISTRY_SNAPSHOT_CACHE_MS = 5 * 60_000;
+const registrySnapshotCache = new WeakMap<object, RegistrySnapshotCacheEntry>();
+
 export async function fetchRegistrySnapshot(
   hass: HomeAssistant,
 ): Promise<RegistrySnapshot | null> {
-  const call =
-    hass.callWS?.bind(hass) ??
-    hass.connection?.sendMessagePromise?.bind(hass.connection);
+  const call = registryCallForHass(hass);
   if (!call) {
     return null;
   }
 
+  const cacheKey = registryCacheKeyForHass(hass);
+  const now = Date.now();
+  const cached = registrySnapshotCache.get(cacheKey);
+  if (cached?.inFlight) {
+    return cached.inFlight;
+  }
+  if (cached && now - cached.fetchedAt < REGISTRY_SNAPSHOT_CACHE_MS) {
+    return cached.snapshot;
+  }
+
+  const inFlight = loadRegistrySnapshot(call);
+  registrySnapshotCache.set(cacheKey, {
+    snapshot: cached?.snapshot ?? null,
+    fetchedAt: cached?.fetchedAt ?? 0,
+    inFlight,
+  });
+
+  try {
+    const snapshot = await inFlight;
+    registrySnapshotCache.set(cacheKey, {
+      snapshot,
+      fetchedAt: Date.now(),
+      inFlight: null,
+    });
+    return snapshot;
+  } catch (error) {
+    if (cached) {
+      registrySnapshotCache.set(cacheKey, {
+        snapshot: cached.snapshot,
+        fetchedAt: cached.fetchedAt,
+        inFlight: null,
+      });
+    } else {
+      registrySnapshotCache.delete(cacheKey);
+    }
+    throw error;
+  }
+}
+
+function registryCallForHass(hass: HomeAssistant): RegistryCall | null {
+  return (
+    hass.callWS?.bind(hass) ??
+    hass.connection?.sendMessagePromise?.bind(hass.connection) ??
+    null
+  );
+}
+
+function registryCacheKeyForHass(hass: HomeAssistant): object {
+  return hass.connection ?? hass;
+}
+
+async function loadRegistrySnapshot(
+  call: RegistryCall,
+): Promise<RegistrySnapshot | null> {
   const [entityEntries, deviceEntries, areaEntries] = await Promise.all([
     call<EntityRegistryEntry[]>({ type: "config/entity_registry/list" }),
     call<DeviceRegistryEntry[]>({ type: "config/device_registry/list" }),

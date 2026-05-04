@@ -57,8 +57,6 @@ media:
   frame_rate: 5
   # Output frame rate for the bridge "stable" profile.
   stable_frame_rate: 5
-  # Output frame rate for the bridge "substream" profile.
-  substream_frame_rate: 5
   # MJPEG JPEG quality. Lower numbers usually mean better quality and larger frames; tune for your ffmpeg build if needed.
   jpeg_quality: 7
   # ffmpeg thread count. 1 is predictable and lighter on some systems; higher values may improve speed but increase CPU contention.
@@ -104,22 +102,19 @@ media:
   #   # Example shorthand host:port form.
   #   - 127.0.0.1:5006
 
-# Optional archive indexing and caching service for recorder-side file paths and event-backed recordings.
+# Optional archive indexing service for recorder-side file paths and event-backed recordings.
 archive:
   # Enable or disable the background archive indexer.
   enabled: false
   # SQLite database path for normalized archive file and event metadata. Prefer SSD because SQLite does small random reads/writes.
   db_path: /data/archive/archive.db
-  # Directory for archive cache and pre-transcoded assets. SSD gives better export/transcode response; HDD is acceptable if
-  # capacity matters more than speed.
-  cache_dir: /data/archive/cache
   # Temporary staging directory for direct recorder exports before ffmpeg remux/transcode. Prefer SSD or other fast local disk.
   temp_dir: /data/archive/tmp
   # Number of recent days to keep indexed and rescan.
   prefetch_days: 7
   # Number of days to retain indexed rows before pruning.
   retain_days: 7
-  # Reserved worker parallelism limit for archive background work.
+  # Worker parallelism limit for archive background MP4 asset prefetch work.
   max_parallel_jobs: 2
   # Enable SMD event indexing.
   prefetch_smd: true
@@ -130,25 +125,10 @@ archive:
 
 # Top-level Home Assistant integration settings for the native custom integration and bridge-generated URLs.
 home_assistant:
-  # Enable or disable Home Assistant-specific features such as the native catalog behavior.
-  enabled: true
-  # Prefix used in unique IDs and naming for some Home Assistant integration paths.
-  node_id: dahuabridge
-  # Native bridge integration is the only supported Home Assistant entity mode.
-  entity_mode: native
-  # Camera snapshot source for bridge-provided camera metadata. "device" fetches real camera snapshots during probes.
-  # "logo" skips device snapshot HTTP requests and uses a built-in placeholder image instead.
-  camera_snapshot_source: device
   # Browser- and HA-reachable base URL for this bridge. Must be the URL users and Home Assistant can actually open.
   public_base_url: http://127.0.0.1:9205
-  # Optional Home Assistant base URL for bridge -> Home Assistant API calls.
-  # api_base_url: http://homeassistant.local:8123
-  # Optional Home Assistant long-lived access token paired with api_base_url.
-  # access_token: your-home-assistant-long-lived-token
-  # Timeout for bridge -> Home Assistant API requests.
-  request_timeout: 15s
 
-# Top-level persistent state store settings. Used to restore last known state across restarts.
+# Optional Imou Open Platform settings for channels mapped with channel_imou_overrides.
 imou:
   # Enable Imou cloud overrides for devices/channels that are mapped below.
   enabled: false

@@ -38,6 +38,9 @@ export interface NvrPlaybackSessionRequestModel {
   endTime: string;
   seekTime: string | null;
   filePath?: string | null;
+  source?: string | null;
+  type?: string | null;
+  videoStream?: string | null;
 }
 
 export interface NvrPlaybackSeekRequestModel {
@@ -55,34 +58,10 @@ export interface NvrArchiveSearchCapabilityModel {
   requestFields: ArchiveRequestFieldModel[];
 }
 
-export interface NvrPlaybackSessionCapabilityModel {
-  supported: boolean;
-  label: string;
-  kind: "session";
-  method: "POST";
-  url: string | null;
-  channel: number | null;
-  requestFields: ArchiveRequestFieldModel[];
-  seekRequestFields: ArchiveRequestFieldModel[];
-  responseProfiles: Array<"dash" | "hls" | "mjpeg" | "webrtc">;
-}
-
-export interface NvrArchiveCoverageCapabilityModel {
-  supported: boolean;
-  label: string;
-  kind: "query";
-  method: "GET";
-  url: string | null;
-  channel: number | null;
-}
-
 export interface CameraArchiveCapabilities {
   supported: boolean;
-  search: NvrArchiveSearchCapabilityModel;
   smdIvsSearch: NvrArchiveSearchCapabilityModel;
   chunkSearch: NvrArchiveSearchCapabilityModel;
-  playback: NvrPlaybackSessionCapabilityModel;
-  coverage: NvrArchiveCoverageCapabilityModel;
 }
 
 export interface NvrArchiveRecordingModel {
@@ -98,11 +77,7 @@ export interface NvrArchiveRecordingModel {
   assetClipId?: string | null;
   assetPlaybackUrl?: string | null;
   assetDownloadUrl?: string | null;
-  assetSelfUrl?: string | null;
-  assetStopUrl?: string | null;
   assetError?: string | null;
-  rtspMainUrl?: string | null;
-  rtspSubUrl?: string | null;
   filePath: string | null;
   type: string | null;
   videoStream: string | null;
@@ -134,20 +109,6 @@ export interface NvrArchiveSearchResultModel {
   items: NvrArchiveRecordingModel[];
 }
 
-export interface NvrArchiveCoverageChunkModel {
-  startTime: string;
-  endTime: string;
-}
-
-export interface NvrArchiveCoverageModel {
-  deviceId: string;
-  channel: number;
-  startTime: string | null;
-  endTime: string | null;
-  chunkCount: number;
-  chunks: NvrArchiveCoverageChunkModel[];
-}
-
 export interface BridgeRecordingClipModel {
   id: string;
   streamId: string;
@@ -167,9 +128,6 @@ export interface BridgeRecordingClipModel {
   fileName: string | null;
   playbackUrl: string | null;
   downloadUrl: string | null;
-  selfUrl: string | null;
-  stopUrl: string | null;
-  deleteUrl: string | null;
   error: string | null;
 }
 
@@ -207,38 +165,16 @@ export function buildCameraArchiveCapabilities(
   channelNumber: number | null,
   features: readonly ArchiveFeatureSource[],
 ): CameraArchiveCapabilities {
-  const archiveSearch = featureByKey(features, "archive_search");
   const smdIvsSearch = featureByKey(features, "archive_smd_ivs");
-  const chunkSearch = featureByKey(features, "archive_recording_chunks");
-  const archivePlayback = featureByKey(features, "archive_playback");
-  const archiveCoverage = featureByKey(features, "archive_coverage");
-  const resolvedChunkSearch = chunkSearch ?? archiveSearch;
+  const chunkSearch = featureByKey(features, "archive_recording_chunks") ?? featureByKey(features, "archive_search");
 
   return {
     supported:
-      archiveSearch?.supported === true ||
       smdIvsSearch?.supported === true ||
-      chunkSearch?.supported === true ||
-      archivePlayback?.supported === true ||
-      archiveCoverage?.supported === true,
-    search: {
-      supported: archiveSearch?.supported === true,
-      label: archiveSearch?.label ?? "Recordings",
-      kind: "query",
-      method: "GET",
-      url: archiveSearch?.url ?? null,
-      channel: channelNumber,
-      defaultLimit: DEFAULT_ARCHIVE_SEARCH_LIMIT,
-      requestFields: [
-        buildRequestField("channel", true, "integer", channelNumber),
-        buildRequestField("start_time", true, "datetime"),
-        buildRequestField("end_time", true, "datetime"),
-        buildRequestField("limit", false, "integer", DEFAULT_ARCHIVE_SEARCH_LIMIT),
-      ],
-    },
+      chunkSearch?.supported === true,
     smdIvsSearch: {
       supported: smdIvsSearch?.supported === true,
-      label: smdIvsSearch?.label ?? "SMD/IVS",
+      label: smdIvsSearch?.label ?? "SMD/IVS Events",
       kind: "query",
       method: "GET",
       url: smdIvsSearch?.url ?? null,
@@ -252,11 +188,11 @@ export function buildCameraArchiveCapabilities(
       ],
     },
     chunkSearch: {
-      supported: resolvedChunkSearch?.supported === true,
-      label: resolvedChunkSearch?.label ?? "Recording Chunks",
+      supported: chunkSearch?.supported === true,
+      label: chunkSearch?.label ?? "Recording Chunks",
       kind: "query",
       method: "GET",
-      url: resolvedChunkSearch?.url ?? null,
+      url: chunkSearch?.url ?? null,
       channel: channelNumber,
       defaultLimit: DEFAULT_ARCHIVE_SEARCH_LIMIT,
       requestFields: [
@@ -265,30 +201,6 @@ export function buildCameraArchiveCapabilities(
         buildRequestField("end_time", true, "datetime"),
         buildRequestField("limit", false, "integer", DEFAULT_ARCHIVE_SEARCH_LIMIT),
       ],
-    },
-    playback: {
-      supported: archivePlayback?.supported === true,
-      label: archivePlayback?.label ?? "Playback",
-      kind: "session",
-      method: "POST",
-      url: archivePlayback?.url ?? null,
-      channel: channelNumber,
-      requestFields: [
-        buildRequestField("channel", true, "integer", channelNumber),
-        buildRequestField("start_time", true, "datetime"),
-        buildRequestField("end_time", true, "datetime"),
-        buildRequestField("seek_time", false, "datetime"),
-      ],
-      seekRequestFields: [buildRequestField("seek_time", true, "datetime")],
-      responseProfiles: ["dash", "hls", "mjpeg", "webrtc"],
-    },
-    coverage: {
-      supported: archiveCoverage?.supported === true,
-      label: archiveCoverage?.label ?? "Coverage",
-      kind: "query",
-      method: "GET",
-      url: archiveCoverage?.url ?? null,
-      channel: channelNumber,
     },
   };
 }
@@ -313,6 +225,9 @@ export function createPlaybackSessionRequest(
   endTime: string,
   seekTime?: string | null,
   filePath?: string | null,
+  source?: string | null,
+  type?: string | null,
+  videoStream?: string | null,
 ): NvrPlaybackSessionRequestModel {
   const request: NvrPlaybackSessionRequestModel = {
     channel,
@@ -322,6 +237,15 @@ export function createPlaybackSessionRequest(
   };
   if (filePath) {
     request.filePath = filePath;
+  }
+  if (source) {
+    request.source = source;
+  }
+  if (type) {
+    request.type = type;
+  }
+  if (videoStream) {
+    request.videoStream = videoStream;
   }
   return request;
 }

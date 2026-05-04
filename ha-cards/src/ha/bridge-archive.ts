@@ -1,8 +1,6 @@
 import { z } from "zod";
 
 import type {
-  NvrArchiveCoverageModel,
-  NvrArchiveCoverageChunkModel,
   BridgeRecordingClipListModel,
   BridgeRecordingClipModel,
   NvrArchiveExportClipModel,
@@ -47,16 +45,8 @@ const archiveRecordingSchema = z.object({
   assetPlaybackURL: z.string().optional().nullable(),
   asset_download_url: z.string().optional().nullable(),
   assetDownloadURL: z.string().optional().nullable(),
-  asset_self_url: z.string().optional().nullable(),
-  assetSelfURL: z.string().optional().nullable(),
-  asset_stop_url: z.string().optional().nullable(),
-  assetStopURL: z.string().optional().nullable(),
   asset_error: z.string().optional().nullable(),
   assetError: z.string().optional().nullable(),
-  rtsp_main_url: z.string().optional().nullable(),
-  rtspMainURL: z.string().optional().nullable(),
-  rtsp_sub_url: z.string().optional().nullable(),
-  rtspSubURL: z.string().optional().nullable(),
   file_path: z.string().optional().nullable(),
   FilePath: z.string().optional().nullable(),
   type: z.string().optional().nullable(),
@@ -141,9 +131,6 @@ const bridgeRecordingSchema = z.object({
   file_name: z.string().optional().nullable(),
   playback_url: z.string().optional().nullable(),
   download_url: z.string().optional().nullable(),
-  self_url: z.string().optional().nullable(),
-  stop_url: z.string().optional().nullable(),
-  delete_url: z.string().optional().nullable(),
   error: z.string().optional().nullable(),
 });
 
@@ -155,20 +142,6 @@ const bridgeRecordingArraySchema = z.preprocess(
 const bridgeRecordingListSchema = z.object({
   returned_count: optionalIntegerSchema,
   items: bridgeRecordingArraySchema,
-});
-
-const archiveCoverageChunkSchema = z.object({
-  start_time: z.string().optional().nullable(),
-  end_time: z.string().optional().nullable(),
-});
-
-const archiveCoverageSchema = z.object({
-  device_id: z.string().optional().nullable(),
-  channel: optionalIntegerSchema,
-  start_time: z.string().optional().nullable(),
-  end_time: z.string().optional().nullable(),
-  chunk_count: optionalIntegerSchema,
-  chunks: z.array(archiveCoverageChunkSchema).default([]),
 });
 
 export interface ArchiveRecordingsQuery {
@@ -185,42 +158,6 @@ export interface BridgeRecordingsQuery {
   startTime?: string;
   endTime?: string;
   limit?: number;
-}
-
-export async function fetchArchiveCoverage(
-  coverageUrl: string,
-  channel?: number | null,
-  signal?: AbortSignal,
-): Promise<NvrArchiveCoverageModel> {
-  const url = new URL(coverageUrl, window.location.origin);
-  if (typeof channel === "number" && Number.isFinite(channel) && channel > 0) {
-    url.searchParams.set("channel", String(Math.trunc(channel)));
-  }
-
-  const started = performance.now();
-  logArchiveRequest("request", "GET", url.toString());
-  const response = await fetch(url, {
-    method: "GET",
-    headers: {
-      Accept: "application/json",
-    },
-    signal,
-  });
-  logArchiveRequest("response", "GET", url.toString(), response.status, performance.now() - started);
-
-  if (!response.ok) {
-    throw new Error(`Bridge archive coverage request failed with status ${response.status}`);
-  }
-
-  const payload = archiveCoverageSchema.parse(await response.json());
-  return {
-    deviceId: firstString(payload.device_id),
-    channel: firstNumber(payload.channel, channel ?? 0),
-    startTime: firstNullableString(payload.start_time),
-    endTime: firstNullableString(payload.end_time),
-    chunkCount: firstNumber(payload.chunk_count, payload.chunks.length),
-    chunks: payload.chunks.map(mapArchiveCoverageChunk),
-  };
 }
 
 export async function fetchArchiveRecordings(
@@ -261,6 +198,7 @@ export async function fetchArchiveRecordings(
 
   const payload = archiveSearchResultSchema.parse(await response.json());
   const items = selectArchiveItems(payload);
+  const browserBridgeUrl = browserBridgeUrlFromRequestUrl(url.toString());
   const resultChannel = firstNumber(payload.channel, payload.Channel, query.channel);
   const resultStartTime = firstString(payload.start_time, payload.StartTime, query.startTime);
   const resultEndTime = firstString(payload.end_time, payload.EndTime, query.endTime);
@@ -273,11 +211,15 @@ export async function fetchArchiveRecordings(
     limit: resultLimit,
     returnedCount: firstNumber(payload.returned_count, payload.found, items.length),
     items: items.map((item) =>
-      mapArchiveRecording(item, {
-        channel: resultChannel,
-        startTime: resultStartTime,
-        endTime: resultEndTime,
-      }),
+      mapArchiveRecording(
+        item,
+        {
+          channel: resultChannel,
+          startTime: resultStartTime,
+          endTime: resultEndTime,
+        },
+        browserBridgeUrl,
+      ),
     ),
   };
 }
@@ -314,7 +256,7 @@ export async function fetchBridgeRecordings(
   }
 
   const payload = bridgeRecordingListSchema.parse(await response.json());
-  const browserBridgeUrl = normalizeBrowserBridgeUrl(url.toString());
+  const browserBridgeUrl = browserBridgeUrlFromRequestUrl(url.toString());
   return {
     returnedCount: firstNumber(payload.returned_count, payload.items.length),
     items: payload.items.map((item) => mapBridgeRecording(item, browserBridgeUrl)),
@@ -328,6 +270,7 @@ function mapArchiveRecording(
     startTime: string;
     endTime: string;
   },
+  browserBridgeUrl?: string | null,
 ): NvrArchiveRecordingModel {
   return {
     id: firstNullableString(item.id),
@@ -336,17 +279,13 @@ function mapArchiveRecording(
     channel: firstNumber(item.channel, item.Channel, fallback.channel),
     startTime: firstString(item.start_time, item.StartTime, fallback.startTime),
     endTime: firstString(item.end_time, item.EndTime, fallback.endTime),
-    downloadUrl: firstNullableString(item.download_url, item.DownloadURL),
-    exportUrl: firstNullableString(item.export_url, item.ExportURL),
+    downloadUrl: rewriteBridgeUrl(firstNullableString(item.download_url, item.DownloadURL), browserBridgeUrl),
+    exportUrl: rewriteBridgeUrl(firstNullableString(item.export_url, item.ExportURL), browserBridgeUrl),
     assetStatus: firstNullableString(item.asset_status, item.assetStatus),
     assetClipId: firstNullableString(item.asset_clip_id, item.assetClipId),
-    assetPlaybackUrl: firstNullableString(item.asset_playback_url, item.assetPlaybackURL),
-    assetDownloadUrl: firstNullableString(item.asset_download_url, item.assetDownloadURL),
-    assetSelfUrl: firstNullableString(item.asset_self_url, item.assetSelfURL),
-    assetStopUrl: firstNullableString(item.asset_stop_url, item.assetStopURL),
+    assetPlaybackUrl: rewriteBridgeUrl(firstNullableString(item.asset_playback_url, item.assetPlaybackURL), browserBridgeUrl),
+    assetDownloadUrl: rewriteBridgeUrl(firstNullableString(item.asset_download_url, item.assetDownloadURL), browserBridgeUrl),
     assetError: firstNullableString(item.asset_error, item.assetError),
-    rtspMainUrl: firstNullableString(item.rtsp_main_url, item.rtspMainURL),
-    rtspSubUrl: firstNullableString(item.rtsp_sub_url, item.rtspSubURL),
     filePath: firstNullableString(item.file_path, item.FilePath),
     type: firstNullableString(item.type, item.Type),
     videoStream: firstNullableString(item.video_stream, item.VideoStream),
@@ -463,17 +402,16 @@ function mapBridgeRecording(
     fileName: item.file_name ?? null,
     playbackUrl: rewriteBridgeUrl(item.playback_url ?? null, browserBridgeUrl),
     downloadUrl: rewriteBridgeUrl(item.download_url ?? null, browserBridgeUrl),
-    selfUrl: rewriteBridgeUrl(item.self_url ?? null, browserBridgeUrl),
-    stopUrl: rewriteBridgeUrl(item.stop_url ?? null, browserBridgeUrl),
-    deleteUrl: rewriteBridgeUrl(item.delete_url ?? null, browserBridgeUrl),
     error: item.error ?? null,
   };
 }
 
-function normalizeBrowserBridgeUrl(value: string): string | null {
+function browserBridgeUrlFromRequestUrl(value: string): string | null {
   try {
     const url = new URL(value, window.location.origin);
-    return `${url.protocol}//${url.host}`;
+    const apiPathIndex = url.pathname.indexOf("/api/");
+    const bridgePath = apiPathIndex > 0 ? url.pathname.slice(0, apiPathIndex) : "";
+    return `${url.protocol}//${url.host}${bridgePath.replace(/\/+$/, "")}`;
   } catch {
     return null;
   }
@@ -589,13 +527,4 @@ function normalizeFlags(
     normalized.push(trimmed);
   }
   return normalized;
-}
-
-function mapArchiveCoverageChunk(
-  item: z.infer<typeof archiveCoverageChunkSchema>,
-): NvrArchiveCoverageChunkModel {
-  return {
-    startTime: firstString(item.start_time),
-    endTime: firstString(item.end_time),
-  };
 }

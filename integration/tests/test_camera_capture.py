@@ -84,6 +84,7 @@ class FakeCoordinator:
         self.data = {"devices": [record]}
         self.preferred_video_profile = "stable"
         self.preferred_video_source = "hls"
+        self.integration_language = "en"
         self.refresh_count = 0
         self.last_update_success = True
 
@@ -177,6 +178,7 @@ class CameraCaptureTests(unittest.IsolatedAsyncioTestCase):
             attrs["bridge_archive_recording_chunks_url_template"],
             "http://bridge.local:8080/api/v1/nvr/west20_nvr/recording-chunks?channel=5&start={start}&end={end}&limit={limit}",
         )
+        self.assertEqual(attrs["bridge_integration_language"], "en")
 
     async def test_async_start_recording_calls_bridge_capture_service(self) -> None:
         camera = DahuaBridgeCamera(

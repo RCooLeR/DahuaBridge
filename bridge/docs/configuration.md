@@ -1,208 +1,147 @@
 # Configuration
 
-The bridge is configured with `config.yaml`.
+The bridge reads `config.yaml`. Use `../config.example.yaml` as the template; it now contains only settings used by the running bridge.
 
-The best reference template is:
+Unknown legacy YAML keys are ignored by the loader. Remove old keys from local configs anyway so the file reflects what the process actually uses.
 
-- `../config.example.yaml`
+## Active Sections
 
-This page focuses on the sections that matter most for real deployments.
+| Section | Used for |
+| --- | --- |
+| `log` | process logging |
+| `http` | built-in API/admin/metrics server and rate limits |
+| `media` | bridge-hosted snapshots, MJPEG, HLS, WebRTC, and bridge-owned MP4 clips |
+| `archive` | SQLite archive/event index, archive export, and background SMD/IVS sync |
+| `home_assistant` | bridge-generated URLs consumed by the native HA integration |
+| `imou` | optional Imou Open Platform channel overrides |
+| `state_store` | persisted probe state and Imou auth state |
+| `devices` | NVR, IPC, and VTO inventory |
 
 ## `log`
 
-Controls process logging.
-
-Important fields:
-
-- `level`
-- `pretty`
+- `level`: log verbosity.
+- `pretty`: human-readable console formatting.
 
 ## `http`
 
-Controls the built-in HTTP server.
-
-Important fields:
-
-- `listen_address`
-- `metrics_path`
-- `health_path`
-- `read_timeout`
-- `write_timeout`
-- `idle_timeout`
-- `admin_rate_limit_*`
-- `snapshot_rate_limit_*`
-- `media_rate_limit_*`
-
-Use this section when you need to:
-
-- change ports
-- run behind a reverse proxy
-- tune rate limits
+- `listen_address`: bind address for the HTTP server.
+- `metrics_path`: Prometheus metrics route.
+- `health_path`: liveness route.
+- `read_timeout`, `write_timeout`, `idle_timeout`: HTTP server timeouts.
+- `admin_rate_limit_*`: admin/API action limiter.
+- `snapshot_rate_limit_*`: snapshot limiter.
+- `media_rate_limit_*`: media endpoint limiter.
 
 ## `media`
 
-Controls bridge-hosted media.
+- `enabled`: enables bridge-hosted media.
+- `ffmpeg_path`: ffmpeg executable.
+- `ffmpeg_log_level`: child ffmpeg log verbosity.
+- `input_preset`: RTSP input flags, `low_latency` or `stable`.
+- `video_encoder`: `software` or Intel `qsv`.
+- `clip_path`: finished bridge MP4 clip directory.
+- `idle_timeout`: unused worker shutdown delay.
+- `start_timeout`: first-frame or initial-playlist timeout.
+- `max_workers`: active media worker/session cap.
+- `frame_rate`: default transcode output rate for quality/default profile work.
+- `stable_frame_rate`: transcode output rate for the `stable` profile.
+- `jpeg_quality`: MJPEG quality argument.
+- `threads`: ffmpeg thread count.
+- `scale_width`: output width; `0` disables scaling.
+- `read_buffer_size`: MJPEG parser buffer size.
+- `hls_segment_time`: HLS/DASH segment duration.
+- `hls_list_size`: live playlist segment count.
+- `hls_tmp_dir`: HLS/DASH working directory.
+- `hls_keep_after_exit`: keep playback HLS/DASH outputs temporarily after worker exit.
+- `hwaccel_args`: optional ffmpeg hardware acceleration input args.
+- `webrtc_ice_servers`: optional STUN/TURN config for WebRTC.
+- `webrtc_uplink_targets`: optional UDP targets for VTO browser microphone RTP export.
 
-Important fields:
-
-- `enabled`
-- `ffmpeg_path`
-- `ffmpeg_log_level`
-- `input_preset`
-- `video_encoder`
-- `clip_path`
-- `idle_timeout`
-- `start_timeout`
-- `max_workers`
-- `frame_rate`
-- `stable_frame_rate`
-- `substream_frame_rate`
-- `jpeg_quality`
-- `threads`
-- `scale_width`
-- `read_buffer_size`
-- `hls_segment_time`
-- `hls_list_size`
-- `hls_tmp_dir`
-- `hls_keep_after_exit`
-- `hwaccel_args`
-- `webrtc_ice_servers`
-- `webrtc_uplink_targets`
-
-This section controls:
-
-- live MJPEG
-- HLS
-- WebRTC helper paths
-- stream-backed snapshots
-- bridge-owned clip recording
-
-Important operational notes:
-
-- `enabled: true` is required for MJPEG, HLS, WebRTC helper pages, generic stream snapshots, and bridge-owned MP4 clip recording
-- `clip_path` defaults to `/data/clips` when omitted
-- `webrtc_uplink_targets` only matter for VTO browser microphone export / external RTP export
-- `webrtc_ice_servers` only matter for WebRTC clients that need STUN or TURN
-
-See:
-
-- [media-and-recording.md](media-and-recording.md)
+Legacy note: `hls_temp_path` is still accepted as an alias for `hls_tmp_dir`, but new configs should use `hls_tmp_dir`.
 
 ## `archive`
 
-Controls the bridge-side archive index and future cache/pretranscode work.
+- `enabled`: starts the archive service.
+- `db_path`: SQLite database for `smd_ivs_events`, `nvr_recording_chunks`, and export metadata.
+- `temp_dir`: staging directory for recorder DAV downloads and iframe-prefix work.
+- `prefetch_days`: recent history window to index.
+- `retain_days`: indexed row retention window.
+- `max_parallel_jobs`: archive MP4 asset prefetch concurrency cap.
+- `prefetch_smd`: index SMD events.
+- `prefetch_ivs`: index IVS events.
+- `cron`: 5-field cron schedule for chunk sync.
 
-Important fields:
-
-- `enabled`
-- `db_path`
-- `cache_dir`
-- `prefetch_days`
-- `retain_days`
-- `max_parallel_jobs`
-- `prefetch_smd`
-- `prefetch_ivs`
-- `cron`
-
-This section controls:
-
-- SQLite indexing of recorder archive files
-- SQLite indexing of SMD/IVS event-backed archive items
-- event-to-file linking
-- persisted transcode job and asset metadata
-- scheduled background sync
-
-Important operational notes:
-
-- `enabled: true` turns on the archive background service
-- `db_path` is the SQLite file used for normalized archive metadata
-- `cache_dir` is reserved for archive cache and future pre-transcoded assets
-- `prefetch_days` defines how far back the bridge indexes recorder data
-- `retain_days` defines when old indexed rows are pruned
-- `cron` uses a 5-field cron shape such as `5,35 * * * *`
-- the current implementation indexes native archive files plus SMD/IVS event-backed archive results
+SMD/IVS list APIs read from SQLite first. Event filters match normalized event codes and Dahua event-type strings stored in the database, including values such as `Event.smdTypeHuman`.
 
 ## `home_assistant`
 
-Controls bridge behavior related to Home Assistant.
+- `public_base_url`: the browser- and Home Assistant-reachable base URL for this bridge.
 
-Important fields:
+When the bridge is mounted under a reverse-proxy prefix, include that prefix here. With an nginx rule such as `location /dahua-bridge/ { ... }`, use `https://ha.example.com/dahua-bridge`, not `https://ha.example.com`.
 
-- `enabled`
-- `node_id`
-- `entity_mode`
-- `camera_snapshot_source`
-- `public_base_url`
-- `api_base_url`
-- `access_token`
-- `request_timeout`
+The bridge no longer publishes MQTT discovery and does not call the Home Assistant API. Native integration discovery uses `/api/v1/home-assistant/native/catalog`.
 
-For the supported setup:
+## `imou`
 
-```yaml
-home_assistant:
-  entity_mode: native
-```
-
-`public_base_url` is especially important because it is used when the bridge generates URLs in the native catalog.
-
-Critical values:
-
-- `entity_mode` must be `native`
-- `camera_snapshot_source` must be `device` or `logo`
-- `public_base_url` should be the exact base URL that Home Assistant and browsers can really open
-- `api_base_url` and `access_token` are only needed when the bridge itself must call back into Home Assistant
+- `enabled`: enables Imou override support.
+- `app_id`, `app_secret`: Imou Open Platform credentials. Environment variables `DAHUABRIDGE_IMOU_APP_ID` and `DAHUABRIDGE_IMOU_APP_SECRET` are also supported.
+- `data_center`: `fk`, `sg`, or `or`.
+- `endpoint`: optional explicit API endpoint override.
+- `request_timeout`: Imou HTTP timeout.
+- `alarm_poll_interval`: cloud event polling interval.
+- `event_active_window`: synthetic active window after cloud alarm events.
 
 ## `state_store`
 
-Controls persistent bridge state.
-
-Important fields:
-
-- `enabled`
-- `path`
-- `flush_interval`
+- `enabled`: writes probe/auth state to disk.
+- `path`: JSON state file path.
+- `flush_interval`: periodic write interval.
 
 ## `devices`
 
-Device inventory is grouped by type:
+Common fields:
 
-- `nvr`
-- `ipc`
-- `vto`
+- `id`: stable bridge ID used in URLs and integration identifiers.
+- `name`: display name.
+- `manufacturer`, `model`: UI/device registry metadata.
+- `base_url`: Dahua HTTP/HTTPS endpoint.
+- `username`, `password`: primary device credentials.
+- `rpc_username`, `rpc_password`: optional RPC credentials when RPC archive/config operations require a different account.
+- `onvif_enabled`, `onvif_username`, `onvif_password`, `onvif_service_url`: optional ONVIF probing.
+- `poll_interval`: probe interval.
+- `request_timeout`: per-device HTTP timeout.
+- `insecure_skip_tls`: allow self-signed/broken HTTPS certs for trusted devices.
+- `enabled`: keep an entry in the file while disabling it.
 
-Each entry typically defines:
+NVR-specific fields:
 
-- `id`
-- `name`
-- `manufacturer`
-- `model`
-- `base_url`
-- `username`
-- `password`
-- `poll_interval`
-- `request_timeout`
-- `insecure_skip_tls`
-- `enabled`
+- `channel_allowlist`: expose only selected 1-based channels.
+- `channel_aux_control_overrides`: correct siren/light/wiper capability mapping.
+- `channel_ptz_control_overrides`: hide/show PTZ when firmware reports it incorrectly.
+- `channel_recording_control_overrides`: override recorder-mode capability/state metadata.
+- `channel_imou_overrides`: map NVR channels to Imou cloud devices for events/lights/siren.
+- `direct_ipc_credentials`: call the real IPC directly for controls behind an NVR.
+- `allow_config_writes`: permit NVR config mutations such as record mode or stream-audio state; default is false.
 
-NVR entries also commonly use:
+VTO-specific fields:
 
-- `channel_allowlist`
-- `onvif_*`
-- `allow_config_writes`, default `false`; set to `true` only when the bridge is allowed to change NVR config values such as record mode or stream-audio state
-- `direct_ipc_credentials`, when direct-camera API calls are needed for a channel; `/admin/test-bridge` uses these credentials for direct IPC lighting, audio, and raw PTZ CGI diagnostics
+- `lock_allowlist`: expose only selected locks.
+- `alarm_allowlist`: expose only selected alarm inputs.
 
-For heavy use of `/admin/test-bridge`, raise `http.admin_rate_limit_per_minute` and `http.admin_rate_limit_burst` enough for repeated button testing.
+## Removed Legacy Settings
 
-## Configuration Advice
+These settings were removed because no live bridge flow used them:
 
-- choose stable device IDs and do not rename them casually
-- keep `public_base_url` aligned with real browser and Home Assistant reachability
-- only enable hardware acceleration after confirming it works in your environment
-- use `media.enabled: false` only if you do not want bridge-hosted snapshots, HLS, MJPEG, WebRTC helpers, or bridge-owned clip recording
-- use `archive.enabled: true` when you want DB-first archive search results and persisted archive metadata
-- keep `channel_allowlist`, `lock_allowlist`, and `alarm_allowlist` narrow if your devices expose unused placeholders
-- leave `allow_config_writes` disabled unless NVR config mutation has been approved for that installation
+- `mqtt.*`
+- `home_assistant.enabled`
+- `home_assistant.node_id`
+- `home_assistant.entity_mode`
+- `home_assistant.camera_snapshot_source`
+- `home_assistant.api_base_url`
+- `home_assistant.access_token`
+- `home_assistant.request_timeout`
+- `media.substream_frame_rate`
+- `archive.cache_dir`
 
 ## Next Step
 

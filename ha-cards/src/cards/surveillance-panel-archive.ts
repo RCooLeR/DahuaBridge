@@ -8,18 +8,18 @@ import type {
   NvrArchiveSearchResultModel,
 } from "../domain/archive";
 import type { CameraViewModel, PanelModel } from "../domain/model";
+import type { Localizer } from "../localization";
 import { renderControlButton } from "./surveillance-panel-primitives";
 import { EVENT_FILTER_ALL, type EventFilterOption } from "./surveillance-panel-state";
 
 interface RenderArchiveRecordingsArgs {
-  title: string;
+  t: Localizer;
   archiveRecordings: NvrArchiveSearchResultModel | null;
   archiveLoading: boolean;
   archiveError: string;
   archiveDate: string;
   archiveEventCode: string;
   archiveEventTypeOptions: readonly EventFilterOption[];
-  playbackSupported: boolean;
   showEventFilter: boolean;
   page: number;
   pageCount: number;
@@ -36,7 +36,7 @@ interface RenderArchiveRecordingsArgs {
 }
 
 interface RenderBridgeRecordingsArgs {
-  title: string;
+  t: Localizer;
   recordings: BridgeRecordingClipListModel | null;
   recordingsLoading: boolean;
   recordingsError: string;
@@ -47,12 +47,10 @@ interface RenderBridgeRecordingsArgs {
   playbackSupported: boolean;
   isPlaybackActive: (recording: BridgeRecordingClipModel) => boolean;
   isDownloadingRecording: (recording: BridgeRecordingClipModel) => boolean;
-  isDeletingRecording: (recording: BridgeRecordingClipModel) => boolean;
   onSelectDate: (value: string) => void;
   onSelectPage: (page: number) => void;
   onPlayRecording: (recording: BridgeRecordingClipModel) => void;
   onDownloadRecording: (recording: BridgeRecordingClipModel) => void;
-  onDeleteRecording: (recording: BridgeRecordingClipModel) => void;
   renderIcon: (icon: string) => TemplateResult;
 }
 
@@ -65,14 +63,13 @@ const archiveDateTimeFormatter = new Intl.DateTimeFormat(undefined, {
 });
 
 export function renderArchiveRecordings({
-  title,
+  t,
   archiveRecordings,
   archiveLoading,
   archiveError,
   archiveDate,
   archiveEventCode,
   archiveEventTypeOptions,
-  playbackSupported,
   showEventFilter,
   page,
   pageCount,
@@ -88,21 +85,13 @@ export function renderArchiveRecordings({
   renderIcon,
 }: RenderArchiveRecordingsArgs): TemplateResult {
   const eventMode = showEventFilter;
-  const statusTone = archiveError ? "warning" : archiveLoading ? "info" : "success";
-  const countText = archiveLoading
-    ? "Loading"
-    : archiveError
-      ? "Archive unavailable"
-      : archiveRecordings
-        ? `${archiveRecordings.items.length} loaded`
-        : "Not loaded";
 
   return html`
     <section class="events archive-panel">
       <div class="archive-head">
         <div class="archive-filter-row">
           <label class="event-filter archive-date-filter">
-            <span class="event-filter-label">Date</span>
+            <span class="event-filter-label">${t("archive.date")}</span>
             <input
               class="event-filter-select archive-date-input"
               type="date"
@@ -114,7 +103,7 @@ export function renderArchiveRecordings({
           ${showEventFilter
             ? html`
                 <label class="event-filter archive-event-filter">
-                  <span class="event-filter-label">SMD/IVS type</span>
+                  <span class="event-filter-label">${t("archive.eventType")}</span>
                   <select
                     class="event-filter-select"
                     .value=${archiveEventCode}
@@ -136,6 +125,7 @@ export function renderArchiveRecordings({
             pageCount,
             onSelectPage: onSelectArchivePage,
             renderIcon,
+            t,
           })}
         </div>
       </div>
@@ -148,10 +138,10 @@ export function renderArchiveRecordings({
                 `${item.channel}:${item.startTime}:${item.endTime}:${item.filePath ?? item.type ?? ""}`,
               (item) => {
                 const metadata = showEventFilter
-                  ? [{ label: "Start", value: formatArchiveDateTime(item.startTime) }]
+                  ? [{ label: t("archive.start"), value: formatArchiveDateTime(item.startTime) }]
                   : [
-                      { label: "Start", value: formatArchiveDateTime(item.startTime) },
-                      { label: "End", value: formatArchiveDateTime(item.endTime) },
+                      { label: t("archive.start"), value: formatArchiveDateTime(item.startTime) },
+                      { label: t("archive.end"), value: formatArchiveDateTime(item.endTime) },
                     ];
                 return html`
                   <div class="event-card info archive-entry-card">
@@ -170,9 +160,9 @@ export function renderArchiveRecordings({
                           </span>
                         </span>
                         <span class="archive-entry-actions">
-                          ${eventMode && (playbackSupported || item.rtspMainUrl || item.rtspSubUrl)
+                          ${eventMode
                             ? renderControlButton(
-                                isPlaybackActive(item) ? "Playing" : "Play",
+                                isPlaybackActive(item) ? t("button.playing") : t("button.play"),
                                 isPlaybackActive(item)
                                   ? "mdi:play-circle"
                                   : "mdi:play-circle-outline",
@@ -188,7 +178,7 @@ export function renderArchiveRecordings({
                             : null}
                           ${eventMode && (item.assetDownloadUrl || item.exportUrl)
                             ? renderControlButton(
-                                "Export",
+                                t("button.export"),
                                 "mdi:download",
                                 () => onDownloadRecording(item, "asset"),
                                 renderIcon,
@@ -200,7 +190,7 @@ export function renderArchiveRecordings({
                             : null}
                           ${!eventMode && item.downloadUrl
                             ? renderControlButton(
-                                "DAV",
+                                t("button.download"),
                                 "mdi:file-download-outline",
                                 () => onDownloadRecording(item, "raw"),
                                 renderIcon,
@@ -222,11 +212,11 @@ export function renderArchiveRecordings({
                 <div class="muted">
                   ${archiveLoading
                     ? showEventFilter
-                      ? "Loading SMD/IVS."
-                      : "Loading recording chunks."
+                      ? t("archive.loadingEvents")
+                      : t("archive.loadingChunks")
                     : showEventFilter
-                      ? `No SMD/IVS found for ${formatArchiveDateBadge(archiveDate).toLowerCase()}.`
-                      : `No recording chunks found for ${formatArchiveDateBadge(archiveDate).toLowerCase()}.`}
+                      ? t("archive.noEventsForDate", {date: formatArchiveDateBadge(archiveDate).toLowerCase()})
+                      : t("archive.noChunksForDate", {date: formatArchiveDateBadge(archiveDate).toLowerCase()})}
                 </div>
               </div>
             `}
@@ -236,7 +226,7 @@ export function renderArchiveRecordings({
 }
 
 export function renderBridgeRecordings({
-  title,
+  t,
   recordings,
   recordingsLoading,
   recordingsError,
@@ -247,29 +237,18 @@ export function renderBridgeRecordings({
   playbackSupported,
   isPlaybackActive,
   isDownloadingRecording,
-  isDeletingRecording,
   onSelectDate,
   onSelectPage,
   onPlayRecording,
   onDownloadRecording,
-  onDeleteRecording,
   renderIcon,
 }: RenderBridgeRecordingsArgs): TemplateResult {
-  const statusTone = recordingsError ? "warning" : recordingsLoading ? "info" : "success";
-  const countText = recordingsLoading
-    ? "Loading"
-    : recordingsError
-      ? "MP4 unavailable"
-      : recordings
-        ? `${recordings.items.length} loaded`
-        : "Not loaded";
-
   return html`
     <section class="events archive-panel">
       <div class="archive-head">
         <div class="archive-filter-row">
           <label class="event-filter archive-date-filter">
-            <span class="event-filter-label">Date</span>
+            <span class="event-filter-label">${t("archive.date")}</span>
             <input
               class="event-filter-select archive-date-input"
               type="date"
@@ -283,6 +262,7 @@ export function renderBridgeRecordings({
             pageCount,
             onSelectPage,
             renderIcon,
+            t,
           })}
         </div>
       </div>
@@ -302,11 +282,11 @@ export function renderBridgeRecordings({
                         </span>
                         <span class="archive-entry-meta">
                           ${renderArchiveInlineDetail(
-                            "Start",
+                            t("archive.start"),
                             formatArchiveDateTime(bridgeRecordingStartTime(item)),
                           )}
                           ${renderArchiveInlineDetail(
-                            "End",
+                            t("archive.end"),
                             formatArchiveDateTime(bridgeRecordingEndTime(item)),
                           )}
                         </span>
@@ -314,7 +294,7 @@ export function renderBridgeRecordings({
                       <span class="archive-entry-actions">
                         ${playbackSupported && item.playbackUrl
                           ? renderControlButton(
-                              isPlaybackActive(item) ? "Playing" : "Play",
+                              isPlaybackActive(item) ? t("button.playing") : t("button.play"),
                               isPlaybackActive(item)
                                 ? "mdi:play-circle"
                                 : "mdi:play-circle-outline",
@@ -329,26 +309,13 @@ export function renderBridgeRecordings({
                           : null}
                         ${item.downloadUrl
                           ? renderControlButton(
-                              "Download",
+                              t("button.download"),
                               "mdi:download",
                               () => onDownloadRecording(item),
                               renderIcon,
                               {
                                 compact: true,
                                 disabled: isDownloadingRecording(item),
-                              },
-                            )
-                          : null}
-                        ${item.deleteUrl
-                          ? renderControlButton(
-                              "Delete",
-                              "mdi:delete-outline",
-                              () => onDeleteRecording(item),
-                              renderIcon,
-                              {
-                                compact: true,
-                                disabled: isDeletingRecording(item),
-                                tone: "danger",
                               },
                             )
                           : null}
@@ -363,8 +330,8 @@ export function renderBridgeRecordings({
               <div class="event-card">
                 <div class="muted">
                   ${recordingsLoading
-                    ? "Loading MP4 clips."
-                    : `No MP4 clips found for ${formatArchiveDateBadge(recordingsDate).toLowerCase()}.`}
+                    ? t("archive.loadingMp4")
+                    : t("archive.noMp4ForDate", {date: formatArchiveDateBadge(recordingsDate).toLowerCase()})}
                 </div>
               </div>
             `}
@@ -382,7 +349,7 @@ export function resolveSelectedNvrArchiveCamera(
 } {
   const channels =
     model.selectedNvr?.rooms.flatMap((room) => room.channels).filter(
-      (channel) => channel.archive?.searchUrl && channel.archive.channel !== null,
+      (channel) => channel.archive?.chunksUrl && channel.archive.channel !== null,
     ) ?? [];
   if (channels.length === 0) {
     return { camera: null, nextChannelNumber: null };
@@ -411,18 +378,20 @@ function renderArchivePagination({
   pageCount,
   onSelectPage,
   renderIcon,
+  t,
 }: {
   page: number;
   pageCount: number;
   onSelectPage: (page: number) => void;
   renderIcon: (icon: string) => TemplateResult;
+  t: Localizer;
 }): TemplateResult {
   const clampedPage = Math.max(0, Math.min(page, Math.max(pageCount - 1, 0)));
 
   return html`
     <div class="archive-pagination">
       ${renderControlButton(
-        "Previous",
+        t("archive.previous"),
         "mdi:chevron-left",
         () => onSelectPage(clampedPage - 1),
         renderIcon,
@@ -433,7 +402,7 @@ function renderArchivePagination({
       )}
       <span class="badge">${clampedPage + 1}/${Math.max(pageCount, 1)}</span>
       ${renderControlButton(
-        "Next",
+        t("archive.next"),
         "mdi:chevron-right",
         () => onSelectPage(clampedPage + 1),
         renderIcon,
@@ -442,23 +411,6 @@ function renderArchivePagination({
           disabled: clampedPage >= pageCount - 1,
         },
       )}
-    </div>
-  `;
-}
-
-function renderArchiveDetail(
-  label: string,
-  value: string | null,
-  wide = false,
-  critical = false,
-): TemplateResult | null {
-  if (!value?.trim()) {
-    return null;
-  }
-  return html`
-    <div class="event-detail ${wide ? "archive-detail-wide" : ""}">
-      <div class="event-detail-label">${label}</div>
-      <div class="event-detail-value ${critical ? "archive-status-error" : ""}">${value}</div>
     </div>
   `;
 }
@@ -528,46 +480,6 @@ function normalizeArchiveRecordingCode(value: string): string {
   return normalized.trim();
 }
 
-function archiveRecordingEventLabel(value: string): string {
-  switch (normalizeArchiveRecordingCode(value).toLowerCase()) {
-    case "motion":
-    case "videomotion":
-    case "movedetection":
-    case "alarmpir":
-      return "Motion";
-    case "human":
-    case "humandetection":
-    case "smartmotionhuman":
-    case "intelliframehuman":
-    case "smdtypehuman":
-      return "Human";
-    case "vehicle":
-    case "vehicledetection":
-    case "smartmotionvehicle":
-    case "motorvehicle":
-    case "smdtypevehicle":
-      return "Vehicle";
-    case "animal":
-    case "animaldetection":
-    case "smdtypeanimal":
-      return "Animal";
-    case "crosslinedetection":
-    case "tripwire":
-      return "Cross Line";
-    case "crossregiondetection":
-    case "intrusion":
-      return "Cross Region";
-    case "leftdetection":
-      return "Left Detection";
-    case "access":
-    case "accesscontrol":
-    case "accessctl":
-      return "Access";
-    default:
-      return humanizeCode(value);
-  }
-}
-
 function archiveRecordingEventIcon(
   recording: NvrArchiveRecordingModel,
   eventMode: boolean,
@@ -623,12 +535,4 @@ function bridgeRecordingStartTime(recording: BridgeRecordingClipModel): string {
 
 function bridgeRecordingEndTime(recording: BridgeRecordingClipModel): string | null {
   return recording.sourceEndTime ?? recording.endedAt;
-}
-
-function humanizeCode(value: string): string {
-  return value
-    .trim()
-    .replace(/[_-]+/g, " ")
-    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
-    .replace(/\b\w/g, (match) => match.toUpperCase());
 }

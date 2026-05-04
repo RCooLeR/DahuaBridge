@@ -8,6 +8,7 @@ import {
   type TimelineEventFilters,
 } from "./surveillance-panel-state";
 import { formatEventTime } from "../utils/format";
+import type { Localizer } from "../localization";
 
 type EventViewMode = "recent" | "history";
 
@@ -17,6 +18,7 @@ export interface EventWindowOption {
 }
 
 interface RenderSurveillancePanelEventsArgs {
+  t: Localizer;
   eventViewMode: EventViewMode;
   eventsLoading: boolean;
   eventError: string;
@@ -41,6 +43,7 @@ interface RenderSurveillancePanelEventsArgs {
 }
 
 export function renderSurveillancePanelEvents({
+  t,
   eventViewMode,
   eventsLoading,
   eventError,
@@ -66,18 +69,18 @@ export function renderSurveillancePanelEvents({
     <section class="events">
       <div class="events-toolbar">
         <div class="panel-title">
-          <span>${eventViewMode === "history" ? "Event History" : "Recent Events"}</span>
+          <span>${eventViewMode === "history" ? t("events.historyTitle") : t("events.recentTitle")}</span>
           <span class="muted">
             ${eventsLoading
-              ? "Syncing"
+              ? t("events.syncing")
               : eventError
-                ? "Bridge sync degraded"
-                : `${filteredEventCount}/${totalEventCount} shown`}
+                ? t("events.degraded")
+                : t("events.shown", { filtered: filteredEventCount, total: totalEventCount })}
           </span>
         </div>
         <div class="chip-row">
-          ${renderEventModeChip("recent", "Recent", eventViewMode, onSelectEventMode)}
-          ${renderEventModeChip("history", "History", eventViewMode, onSelectEventMode)}
+          ${renderEventModeChip("recent", t("events.recent"), eventViewMode, onSelectEventMode)}
+          ${renderEventModeChip("history", t("events.history"), eventViewMode, onSelectEventMode)}
         </div>
       </div>
       <div class="event-toolbar-row">
@@ -98,7 +101,7 @@ export function renderSurveillancePanelEvents({
           ? html`
               <div class="history-range">
                 <div class="event-range-meta">
-                  <span class="muted">Buffered history</span>
+                  <span class="muted">${t("events.bufferedHistory")}</span>
                   <span class="badge">${clampedHistoryPage + 1}/${historyPageCount}</span>
                 </div>
                 <input
@@ -115,7 +118,7 @@ export function renderSurveillancePanelEvents({
       </div>
       <div class="event-filter-grid">
         ${renderFilterSelect(
-          "Event type",
+          t("events.type"),
           "eventCode",
           selectedFilters.eventCode,
           filterOptions.eventCodes,
@@ -125,7 +128,7 @@ export function renderSurveillancePanelEvents({
       ${filtersActive
         ? html`
             <div class="chip-row">
-              <button class="chip" type="button" @click=${onResetFilters}>Reset filters</button>
+              <button class="chip" type="button" @click=${onResetFilters}>${t("events.resetFilters")}</button>
             </div>
           `
         : nothing}
@@ -135,7 +138,7 @@ export function renderSurveillancePanelEvents({
           ? html`
               <div class="event-card">
                 <div class="muted">
-                  ${filtersActive ? "No events match the current filters." : "No recent events."}
+                  ${filtersActive ? t("events.noneForFilters") : t("events.noneRecent")}
                 </div>
               </div>
             `

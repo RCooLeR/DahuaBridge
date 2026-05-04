@@ -2,8 +2,6 @@ import { describe, expect, it } from "vitest";
 
 import {
   createArchiveSearchRequest,
-  createPlaybackSeekRequest,
-  createPlaybackSessionRequest,
 } from "../src/domain/archive";
 import { discoverBridgeTopology } from "../src/domain/devices";
 import type {
@@ -126,13 +124,13 @@ describe("discoverBridgeTopology", () => {
                 actions: ["start", "stop", "pulse"],
               },
               {
-                key: "archive_search",
-                url: "http://bridge.local:9205/api/v1/nvr/west20_nvr/recordings",
+                key: "archive_smd_ivs",
+                url: "http://bridge.local:9205/api/v1/nvr/west20_nvr/smd-ivs",
                 supported: true,
               },
               {
-                key: "archive_playback",
-                url: "http://bridge.local:9205/api/v1/nvr/west20_nvr/playback/sessions",
+                key: "archive_recording_chunks",
+                url: "http://bridge.local:9205/api/v1/nvr/west20_nvr/recording-chunks",
                 supported: true,
               },
             ],
@@ -216,20 +214,6 @@ describe("discoverBridgeTopology", () => {
         "sensor.entry_gate_onvif_profile_token_actual": {
           entity_id: "sensor.entry_gate_onvif_profile_token_actual",
           state: "token-1",
-          attributes: {},
-          last_changed: now,
-          last_updated: now,
-        },
-        "sensor.entry_gate_control_audio_authority_actual": {
-          entity_id: "sensor.entry_gate_control_audio_authority_actual",
-          state: "direct_ipc",
-          attributes: {},
-          last_changed: now,
-          last_updated: now,
-        },
-        "sensor.entry_gate_control_audio_semantic_actual": {
-          entity_id: "sensor.entry_gate_control_audio_semantic_actual",
-          state: "stream_audio_enable",
           attributes: {},
           last_changed: now,
           last_updated: now,
@@ -400,11 +384,6 @@ describe("discoverBridgeTopology", () => {
               lock_urls: [
                 "http://bridge.local:9205/api/v1/vto/front_vto/locks/0/unlock",
               ],
-              output_volume_url:
-                "http://bridge.local:9205/api/v1/vto/front_vto/audio/output-volume",
-              input_volume_url:
-                "http://bridge.local:9205/api/v1/vto/front_vto/audio/input-volume",
-              mute_url: "http://bridge.local:9205/api/v1/vto/front_vto/audio/mute",
               recording_url: "http://bridge.local:9205/api/v1/vto/front_vto/recording",
               bridge_session_reset_url:
                 "http://bridge.local:9205/api/v1/vto/front_vto/intercom/reset",
@@ -419,9 +398,6 @@ describe("discoverBridgeTopology", () => {
               supports_bridge_audio_uplink: true,
               supports_bridge_audio_output: true,
               supports_external_audio_export: true,
-              supports_vto_output_volume_control: true,
-              supports_vto_input_volume_control: true,
-              supports_vto_mute_control: true,
               supports_vto_recording_control: true,
               supports_vto_call_answer: true,
               supports_vto_talkback: true,
@@ -625,16 +601,6 @@ describe("discoverBridgeTopology", () => {
           entity_id: "binary_sensor.entry_gate_onvif_h264_actual",
           device_id: "dev-channel-1",
           unique_id: "west20_nvr_channel_01_onvif_h264_available",
-        },
-        {
-          entity_id: "sensor.entry_gate_control_audio_authority_actual",
-          device_id: "dev-channel-1",
-          unique_id: "west20_nvr_channel_01_control_audio_authority",
-        },
-        {
-          entity_id: "sensor.entry_gate_control_audio_semantic_actual",
-          device_id: "dev-channel-1",
-          unique_id: "west20_nvr_channel_01_control_audio_semantic",
         },
         {
           entity_id: "binary_sensor.entry_gate_nvr_config_writable_actual",
@@ -844,8 +810,6 @@ describe("discoverBridgeTopology", () => {
       },
     });
     expect(topology.nvrs[0]?.channels[0]?.diagnostics).toMatchObject({
-      controlAudioAuthority: "direct_ipc",
-      controlAudioSemantic: "stream_audio_enable",
       nvrConfigWritable: true,
       nvrConfigReason: "ok",
       directIPCConfigured: true,
@@ -918,13 +882,9 @@ describe("discoverBridgeTopology", () => {
       deviceId: "front_vto",
       roomLabel: "Entry",
       callState: "ringing",
-      muted: true,
       autoRecordEnabled: true,
       answerButtonEntityId: "button.answer_front_station",
       hangupButtonEntityId: "button.hangup_front_station",
-      outputVolumeEntityId: "number.front_station_output_level",
-      inputVolumeEntityId: "number.front_station_input_level",
-      mutedEntityId: "switch.front_station_muted_toggle",
       autoRecordEntityId: "switch.front_station_auto_record_toggle",
     });
     expect(topology.vtos[0]?.locks[0]).toMatchObject({
@@ -956,7 +916,7 @@ describe("discoverBridgeTopology", () => {
     });
   });
 
-  it("builds typed archive and playback request models", () => {
+  it("builds typed archive search request models", () => {
     expect(
       createArchiveSearchRequest(
         2,
@@ -968,24 +928,6 @@ describe("discoverBridgeTopology", () => {
       startTime: "2026-04-28T00:00:00Z",
       endTime: "2026-04-28T01:00:00Z",
       limit: 100,
-    });
-
-    expect(
-      createPlaybackSessionRequest(
-        2,
-        "2026-04-28T00:00:00Z",
-        "2026-04-28T01:00:00Z",
-        "2026-04-28T00:20:00Z",
-      ),
-    ).toEqual({
-      channel: 2,
-      startTime: "2026-04-28T00:00:00Z",
-      endTime: "2026-04-28T01:00:00Z",
-      seekTime: "2026-04-28T00:20:00Z",
-    });
-
-    expect(createPlaybackSeekRequest("2026-04-28T00:45:00Z")).toEqual({
-      seekTime: "2026-04-28T00:45:00Z",
     });
   });
 });

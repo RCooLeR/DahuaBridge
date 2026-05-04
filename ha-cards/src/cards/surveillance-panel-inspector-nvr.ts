@@ -2,12 +2,14 @@ import { html, nothing, type TemplateResult } from "lit";
 import { repeat } from "lit/directives/repeat.js";
 
 import type { NvrViewModel } from "../domain/model";
+import { pluralUnit, type Localizer } from "../localization";
 import type { DetailTab } from "./surveillance-panel-state";
 import { renderNvrSummaryChip, type RenderIconFn } from "./surveillance-panel-inspector-shared";
 import { renderSegmentButton } from "./surveillance-panel-primitives";
 
 export function renderNvrInspector(
   nvr: NvrViewModel,
+  t: Localizer,
   renderIcon: RenderIconFn,
   detailTab: DetailTab,
   archiveContent: TemplateResult | typeof nothing,
@@ -23,10 +25,10 @@ export function renderNvrInspector(
       <div class="muted">${nvr.roomLabel}</div>
     </div>
     <div class="detail-tabs">
-      ${renderSegmentButton("overview", "Overview", detailTab, (tab) =>
+      ${renderSegmentButton("overview", t("tab.overview"), detailTab, (tab) =>
         onSelectDetailTab(tab as DetailTab),
       )}
-      ${renderSegmentButton("recordings", "Recordings", detailTab, (tab) =>
+      ${renderSegmentButton("recordings", t("tab.recordings"), detailTab, (tab) =>
         onSelectDetailTab(tab as DetailTab),
       )}
     </div>
@@ -34,25 +36,25 @@ export function renderNvrInspector(
       ${detailTab === "overview"
         ? html`
             <div class="panel">
-              <div class="panel-title">Recorder</div>
+              <div class="panel-title">${t("inspector.recorder")}</div>
               <div class="nvr-summary-chip-grid">
                 ${renderNvrSummaryChip(
                   "mdi:lan-connect",
-                  "Connection",
-                  nvr.online ? "Connected" : "Offline",
+                  t("inspector.connection"),
+                  nvr.online ? t("state.connected") : t("state.offline"),
                   nvr.online ? "success" : "critical",
                   renderIcon,
                 )}
                 ${renderNvrSummaryChip(
                   "mdi:record-rec",
-                  "Recorder",
-                  nvr.recordingActive ? "Recording active" : "Recording idle",
+                  t("inspector.recorder"),
+                  nvr.recordingActive ? t("state.recordingActive") : t("state.recordingIdle"),
                   nvr.recordingActive ? "critical" : "info",
                   renderIcon,
                 )}
                 ${renderNvrSummaryChip(
                   "mdi:harddisk",
-                  "Storage",
+                  t("inspector.storage"),
                   nvr.storageText,
                   nvr.healthy ? "success" : "warning",
                   renderIcon,
@@ -60,31 +62,31 @@ export function renderNvrInspector(
                 ${nvr.nvrConfigWritable !== null
                   ? renderNvrSummaryChip(
                       "mdi:cog-refresh-outline",
-                      "Config Writes",
-                      nvr.nvrConfigWritable ? "Writable" : "Blocked",
+                      t("inspector.configWrites"),
+                      nvr.nvrConfigWritable ? t("state.writable") : t("state.blocked"),
                       nvr.nvrConfigWritable ? "success" : "warning",
                       renderIcon,
                     )
                   : nothing}
                 ${renderNvrSummaryChip(
                   "mdi:cctv",
-                  "Channels recording",
-                  `${recordingCount} recording`,
+                  t("inspector.channelsRecording"),
+                  `${recordingCount} ${t("state.recording").toLowerCase()}`,
                   "info",
                   renderIcon,
                 )}
                 ${alertCount > 0
                   ? renderNvrSummaryChip(
                       "mdi:alert-outline",
-                      "Alerts",
-                      `${alertCount} alert${alertCount === 1 ? "" : "s"}`,
+                      t("inspector.alerts"),
+                      `${alertCount} ${pluralUnit(alertCount, "unit.alert", "unit.alerts", t)}`,
                       "warning",
                       renderIcon,
                     )
                   : nothing}
               </div>
             </div>
-            ${renderNvrDriveBreakdown(nvr, renderIcon)}
+            ${renderNvrDriveBreakdown(nvr, renderIcon, t)}
           `
         : nothing}
       ${detailTab === "recordings" ? archiveContent : nothing}
@@ -95,10 +97,11 @@ export function renderNvrInspector(
 function renderNvrDriveBreakdown(
   nvr: NvrViewModel,
   renderIcon: RenderIconFn,
+  t: Localizer,
 ): TemplateResult {
   return html`
     <div class="panel">
-      <div class="panel-title">Drive Inventory</div>
+      <div class="panel-title">${t("inspector.driveInventory")}</div>
       <div class="storage-drives inspector-storage-drives">
         ${nvr.disks.length > 0
           ? repeat(
@@ -114,7 +117,7 @@ function renderNvrDriveBreakdown(
                       <span class="sidebar-label">${disk.label}</span>
                     </span>
                     <span class="badge ${disk.healthy ? "success" : "critical"}">
-                      ${disk.healthy ? "Healthy" : "Fault"}
+                      ${disk.healthy ? t("state.healthy") : t("state.attention")}
                     </span>
                   </div>
                   <div class="progress">
@@ -125,23 +128,25 @@ function renderNvrDriveBreakdown(
                   </div>
                   <div class="storage-drive-meta">
                     <span class="badge ${disk.online ? "success" : "critical"}">
-                      ${disk.online ? "Online" : "Offline"}
+                      ${disk.online ? t("state.online") : t("state.offline")}
                     </span>
                     <span class="badge info">
-                      ${disk.usedPercent !== null ? `${Math.round(disk.usedPercent)}% used` : "Usage unknown"}
+                      ${disk.usedPercent !== null
+                        ? t("storage.percentUsed", { value: Math.round(disk.usedPercent) })
+                        : t("storage.usageUnknown")}
                     </span>
                     <span class="badge">
-                      ${disk.stateText ?? "State unknown"}
+                      ${disk.stateText ?? t("state.unknown")}
                     </span>
                   </div>
                   <div class="storage-drive-meta">
                     <span class="sidebar-secondary">${disk.usedBytesText} / ${disk.totalBytesText}</span>
-                    <span class="sidebar-secondary">${disk.stateText ?? "State unknown"}</span>
+                    <span class="sidebar-secondary">${disk.stateText ?? t("state.unknown")}</span>
                   </div>
                 </div>
               `,
             )
-          : html`<div class="muted">No drive child devices discovered for this recorder.</div>`}
+          : html`<div class="muted">${t("inspector.noDrives")}</div>`}
       </div>
     </div>
   `;

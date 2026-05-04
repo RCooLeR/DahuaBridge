@@ -15,6 +15,21 @@ https://ha.example.com/dahuabridge
 
 Use the reverse-proxy URL if Home Assistant reaches the bridge through a proxy path. The integration uses this configured URL when it rewrites bridge-hosted links from the catalog.
 
+For example, if nginx exposes the bridge with:
+
+```nginx
+location /dahua-bridge/ {
+  rewrite ^/dahua-bridge/(.*) /$1 break;
+  proxy_pass http://bridge:9205;
+}
+```
+
+configure the integration bridge URL as:
+
+```text
+https://ha.example.com/dahua-bridge
+```
+
 ## Options
 
 The options flow exposes:

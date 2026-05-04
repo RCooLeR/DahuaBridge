@@ -2,9 +2,11 @@ import { html, type TemplateResult } from "lit";
 import { repeat } from "lit/directives/repeat.js";
 
 import { displayCameraLabel, type HeaderMetric, type PanelModel, type VtoViewModel } from "../domain/model";
+import type { Localizer } from "../localization";
 
 interface RenderSurveillancePanelHeaderArgs {
   model: PanelModel;
+  t: Localizer;
   bridgeLogoUrl: string;
   sidebarOpen: boolean;
   inspectorOpen: boolean;
@@ -18,6 +20,7 @@ interface RenderSurveillancePanelHeaderArgs {
 
 export function renderSurveillancePanelHeader({
   model,
+  t,
   bridgeLogoUrl,
   sidebarOpen,
   inspectorOpen,
@@ -49,9 +52,9 @@ export function renderSurveillancePanelHeader({
         <button
           class="header-logo-button"
           type="button"
-          title="Return to overview"
+          title=${t("header.returnOverview")}
           @click=${handleSelectOverview}
-          aria-label="Return to overview"
+          aria-label=${t("header.returnOverview")}
         >
           <img src=${bridgeLogoUrl} alt="" aria-hidden="true" />
         </button>
@@ -64,29 +67,29 @@ export function renderSurveillancePanelHeader({
         )}
         ${model.selectedCamera
           ? renderInteractiveHeaderChip(
-              "Focus",
+              t("metric.focus"),
               displayCameraLabel(model.selectedCamera),
               model.selectedCamera.online ? "success" : "critical",
               renderIcon,
               onSelectOverview,
-              "Return to overview",
+              t("header.returnOverview"),
             )
           : model.selectedVto
             ? renderInteractiveHeaderChip(
-                "Door Station",
+                t("metric.doorStation"),
                 model.selectedVto.label,
                 vtoBadgeTone(model.selectedVto),
                 renderIcon,
                 onSelectOverview,
-                "Return to overview",
+                t("header.returnOverview"),
               )
             : renderInteractiveHeaderChip(
-                "View",
-                "Overview",
+                t("metric.view"),
+                t("kind.overview"),
                 "info",
                 renderIcon,
                 onSelectOverview,
-                "Overview selected",
+                t("header.overviewSelected"),
                 true,
               )}
       </div>
@@ -94,9 +97,9 @@ export function renderSurveillancePanelHeader({
         <button
           class="icon-button"
           type="button"
-          title=${sidebarOpen ? "Hide sidebar" : "Show sidebar"}
+          title=${sidebarOpen ? t("header.hideSidebar") : t("header.showSidebar")}
           @click=${handleToggleSidebar}
-          aria-label=${sidebarOpen ? "Hide sidebar" : "Show sidebar"}
+          aria-label=${sidebarOpen ? t("header.hideSidebar") : t("header.showSidebar")}
           aria-pressed=${String(sidebarOpen)}
         >
           ${renderIcon("mdi:menu")}
@@ -104,9 +107,9 @@ export function renderSurveillancePanelHeader({
         <button
           class="icon-button"
           type="button"
-          title=${inspectorOpen ? "Hide inspector" : "Show inspector"}
+          title=${inspectorOpen ? t("header.hideInspector") : t("header.showInspector")}
           @click=${handleToggleInspector}
-          aria-label=${inspectorOpen ? "Hide inspector" : "Show inspector"}
+          aria-label=${inspectorOpen ? t("header.hideInspector") : t("header.showInspector")}
           aria-pressed=${String(inspectorOpen)}
           ?disabled=${!inspectorAvailable}
         >
@@ -170,6 +173,37 @@ function renderInteractiveHeaderChip(
 }
 
 function headerChipIcon(label: string): string {
+  const normalized = label.toLowerCase();
+  if (normalized.includes("camera") || normalized.includes("камер")) {
+    return "mdi:cctv";
+  }
+  if (normalized.includes("24") || normalized.includes("под")) {
+    return "mdi:calendar-today";
+  }
+  if (normalized.includes("motion") || normalized.includes("рух")) {
+    return "mdi:motion-sensor";
+  }
+  if (normalized.includes("human") || normalized.includes("людин")) {
+    return "mdi:account-alert-outline";
+  }
+  if (normalized.includes("vehicle") || normalized.includes("авто")) {
+    return "mdi:car";
+  }
+  if (normalized.includes("ivs")) {
+    return "mdi:shield-search";
+  }
+  if (normalized.includes("nvr")) {
+    return "mdi:harddisk";
+  }
+  if (normalized.includes("focus") || normalized.includes("фокус")) {
+    return "mdi:crosshairs-gps";
+  }
+  if (normalized.includes("door") || normalized.includes("виклич")) {
+    return "mdi:doorbell-video";
+  }
+  if (normalized.includes("view") || normalized.includes("вигляд")) {
+    return "mdi:view-grid-outline";
+  }
   switch (label) {
     case "Cameras Online":
       return "mdi:cctv";

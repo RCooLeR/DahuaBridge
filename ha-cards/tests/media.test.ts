@@ -9,15 +9,16 @@ import {
   defaultSelectedStreamProfileKey,
   preserveCameraViewportSourceSelection,
   preserveCameraViewportSourceSelectionOnProfileChange,
-  preservePlaybackViewportSourceSelection,
   resolveInitialPlaybackViewportSource,
+  resolveBridgeFirstStreamViewportSource,
   resolveOverviewCameraViewportSource,
-  resolvePlaybackViewportSource,
+  resolvePreferredCameraViewportSource,
   resolveSelectedCameraStreamProfile,
   resolveSelectedCameraViewportSource,
+  resolvePlaybackViewportSource,
   type CameraViewportSource,
 } from "../src/cards/surveillance-panel-media";
-import type { NvrPlaybackSessionModel } from "../src/domain/archive";
+import { selectedCameraLiveStreamModel } from "../src/cards/surveillance-panel-live-stream-model";
 import type { CameraViewModel } from "../src/domain/model";
 
 function buildCamera(overrides: Partial<CameraViewModel> = {}): CameraViewModel {
@@ -112,12 +113,8 @@ function buildCamera(overrides: Partial<CameraViewModel> = {}): CameraViewModel 
     audioCodec: "",
     microphoneAvailable: false,
     speakerAvailable: false,
-    audioMuted: true,
     audioMuteSupported: false,
-    audioMuteActionUrl: null,
     validationNotes: [],
-    audioControlAuthority: null,
-    audioControlSemantic: null,
     nvrConfigWritable: null,
     nvrConfigReason: null,
     directIPCConfigured: false,
@@ -214,6 +211,115 @@ describe("camera media helpers", () => {
     expect(resolveOverviewCameraViewportSource(camera, overviewProfileKey)).toBe("hls");
   });
 
+  it("keeps native as a detail preference but uses bridge media for overview tiles", () => {
+    const camera = buildCamera({
+      cameraEntity: {
+        entity_id: "camera.west20_nvr_channel_01_camera",
+        state: "streaming",
+        attributes: {},
+        last_changed: "",
+        last_updated: "",
+      },
+      stream: {
+        ...buildCamera().stream,
+        recommendedHaIntegration: "native",
+        preferredVideoSource: "rtsp",
+      },
+    });
+
+    const overviewProfileKey = defaultOverviewStreamProfileKey(camera.stream);
+    expect(resolveOverviewCameraViewportSource(camera, overviewProfileKey)).toBe("hls");
+    expect(resolvePreferredCameraViewportSource(camera, overviewProfileKey)).toBe("native");
+
+    const hlsPreferredCamera = buildCamera({
+      ...camera,
+      stream: {
+        ...camera.stream,
+        preferredVideoSource: "hls",
+      },
+    });
+    expect(resolveOverviewCameraViewportSource(hlsPreferredCamera, overviewProfileKey)).toBe("hls");
+    expect(resolvePreferredCameraViewportSource(hlsPreferredCamera, overviewProfileKey)).toBe("hls");
+  });
+
+  it("falls back to native overview when it is the only available source", () => {
+    const camera = buildCamera({
+      cameraEntity: {
+        entity_id: "camera.west20_nvr_channel_01_camera",
+        state: "streaming",
+        attributes: {},
+        last_changed: "",
+        last_updated: "",
+      },
+      stream: {
+        ...buildCamera().stream,
+        profiles: [
+          {
+            ...buildCamera().stream.profiles[0]!,
+            localDashUrl: null,
+            localHlsUrl: null,
+            localMjpegUrl: null,
+          },
+        ],
+      },
+    });
+
+    expect(resolveOverviewCameraViewportSource(camera, "quality")).toBe("native");
+  });
+
+  it("uses the configured source for the selected detail player", () => {
+    const camera = buildCamera({
+      cameraEntity: {
+        entity_id: "camera.west20_nvr_channel_01_camera",
+        state: "streaming",
+        attributes: {},
+        last_changed: "",
+        last_updated: "",
+      },
+      stream: {
+        ...buildCamera().stream,
+        recommendedHaIntegration: "native",
+        preferredVideoSource: "rtsp",
+      },
+    });
+
+    expect(selectedCameraLiveStreamModel(camera, null, null, null).selectedSource).toBe("native");
+    expect(selectedCameraLiveStreamModel(camera, null, "hls", null).selectedSource).toBe("hls");
+    expect(selectedCameraLiveStreamModel(camera, null, "native", null).selectedSource).toBe("native");
+  });
+
+  it("prefers bridge media for VTO auto-selection but preserves explicit native", () => {
+    const stream = {
+      ...buildCamera().stream,
+      recommendedHaIntegration: "native",
+      preferredVideoSource: "rtsp",
+    };
+    const overviewProfileKey = defaultOverviewStreamProfileKey(stream);
+
+    expect(resolveBridgeFirstStreamViewportSource(stream, null, overviewProfileKey, true)).toBe(
+      "hls",
+    );
+    expect(
+      resolveBridgeFirstStreamViewportSource(stream, "native", overviewProfileKey, true),
+    ).toBe("native");
+  });
+
+  it("falls back to native for VTO only when no bridge media source exists", () => {
+    const stream = {
+      ...buildCamera().stream,
+      profiles: [
+        {
+          ...buildCamera().stream.profiles[0]!,
+          localDashUrl: null,
+          localHlsUrl: null,
+          localMjpegUrl: null,
+        },
+      ],
+    };
+
+    expect(resolveBridgeFirstStreamViewportSource(stream, null, "quality", true)).toBe("native");
+  });
+
   it("defaults the selected camera view to the main stream even when stable is recommended", () => {
     const camera = buildCamera({
       stream: {
@@ -224,68 +330,6 @@ describe("camera media helpers", () => {
     });
 
     expect(defaultSelectedStreamProfileKey(camera.stream)).toBe("quality");
-  });
-
-  it("keeps playback on HLS/MJPEG even when the session exposes WebRTC", () => {
-    const session: NvrPlaybackSessionModel = {
-      id: "nvrpb_test",
-      streamId: "nvrpb_test",
-      deviceId: "west20_nvr",
-      sourceStreamId: "west20_nvr_channel_01",
-      name: "Entrance",
-      channel: 1,
-      startTime: "2026-05-01T10:00:00Z",
-      endTime: "2026-05-01T10:10:00Z",
-      seekTime: "2026-05-01T10:00:00Z",
-      recommendedProfile: "quality",
-      snapshotUrl: null,
-      createdAt: "2026-05-01T10:00:00Z",
-      expiresAt: "2026-05-01T10:10:00Z",
-      profiles: {
-        quality: {
-          name: "quality",
-          dashUrl: null,
-          hlsUrl: "http://bridge.local:9205/api/v1/media/hls/nvrpb_test/quality/index.m3u8",
-          mjpegUrl: null,
-          webrtcOfferUrl: "http://bridge.local:9205/api/v1/media/webrtc/nvrpb_test/quality/offer",
-        },
-      },
-    };
-
-    expect(availablePlaybackViewportSources(session, "quality")).toEqual([
-      "hls",
-    ] satisfies CameraViewportSource[]);
-    expect(resolvePlaybackViewportSource(session, "hls", "quality")).toBe("hls");
-  });
-
-  it("starts playback on HLS instead of inheriting live MJPEG", () => {
-    const session: NvrPlaybackSessionModel = {
-      id: "nvrpb_test",
-      streamId: "nvrpb_test",
-      deviceId: "west20_nvr",
-      sourceStreamId: "west20_nvr_channel_01",
-      name: "Entrance",
-      channel: 1,
-      startTime: "2026-05-01T10:00:00Z",
-      endTime: "2026-05-01T10:10:00Z",
-      seekTime: "2026-05-01T10:00:00Z",
-      recommendedProfile: "quality",
-      snapshotUrl: null,
-      createdAt: "2026-05-01T10:00:00Z",
-      expiresAt: "2026-05-01T10:10:00Z",
-      profiles: {
-        quality: {
-          name: "quality",
-          dashUrl: null,
-          hlsUrl: "http://bridge.local:9205/api/v1/media/hls/nvrpb_test/quality/index.m3u8",
-          mjpegUrl: "http://bridge.local:9205/api/v1/media/mjpeg/nvrpb_test/quality",
-          webrtcOfferUrl: "http://bridge.local:9205/api/v1/media/webrtc/nvrpb_test/quality/offer",
-        },
-      },
-    };
-
-    expect(resolveInitialPlaybackViewportSource(session, "quality", "mjpeg")).toBe("hls");
-    expect(resolveInitialPlaybackViewportSource(session, "quality", null)).toBe("hls");
   });
 
   it("preserves an explicit source selection only while it stays valid", () => {
@@ -303,41 +347,6 @@ describe("camera media helpers", () => {
     expect(preserveCameraViewportSourceSelectionOnProfileChange(camera, "stable", "native")).toBe(
       "native",
     );
-
-    const session: NvrPlaybackSessionModel = {
-      id: "nvrpb_test",
-      streamId: "nvrpb_test",
-      deviceId: "west20_nvr",
-      sourceStreamId: "west20_nvr_channel_01",
-      name: "Entrance",
-      channel: 1,
-      startTime: "2026-05-01T10:00:00Z",
-      endTime: "2026-05-01T10:10:00Z",
-      seekTime: "2026-05-01T10:00:00Z",
-      recommendedProfile: "quality",
-      snapshotUrl: null,
-      createdAt: "2026-05-01T10:00:00Z",
-      expiresAt: "2026-05-01T10:10:00Z",
-      profiles: {
-        quality: {
-          name: "quality",
-          dashUrl: null,
-          hlsUrl: "http://bridge.local:9205/api/v1/media/hls/nvrpb_test/quality/index.m3u8",
-          mjpegUrl: "http://bridge.local:9205/api/v1/media/mjpeg/nvrpb_test?profile=quality",
-          webrtcOfferUrl: null,
-        },
-        stable: {
-          name: "stable",
-          dashUrl: null,
-          hlsUrl: null,
-          mjpegUrl: "http://bridge.local:9205/api/v1/media/mjpeg/nvrpb_test?profile=stable",
-          webrtcOfferUrl: null,
-        },
-      },
-    };
-
-    expect(preservePlaybackViewportSourceSelection(session, "quality", "mjpeg")).toBe("mjpeg");
-    expect(preservePlaybackViewportSourceSelection(session, "stable", "hls")).toBeNull();
   });
 
   it("prefers the bridge snapshot URL over the entity picture fallback", () => {
@@ -358,43 +367,55 @@ describe("camera media helpers", () => {
     ).toBe("http://bridge.local:9205/api/v1/nvr/west20_nvr/channels/1/snapshot");
   });
 
-  it("rewrites native historical playback URLs to the playback RTSP path", () => {
-    expect(
-      buildRtspPlaybackUrl({
-        streamUrl: "rtsp://example-user:example-password@192.0.2.10:554/cam/realmonitor?channel=1&subtype=0",
-        channel: 9,
-        subtype: 0,
-        seekTime: "2026-05-01T08:10:00Z",
-        endTime: "2026-05-01T08:40:00Z",
-      }),
-    ).toBe(
-      "rtsp://example-user:example-password@192.0.2.10:554/cam/playback?channel=9&subtype=0&starttime=2026_05_01_11_10_00&endtime=2026_05_01_11_40_00",
-    );
+  it("orders playback session sources as HLS, DASH, then MJPEG", () => {
+    const session = {
+      id: "nvrpb_test",
+      streamId: "nvrpb_test",
+      deviceId: "west20_nvr",
+      sourceStreamId: "west20_nvr_channel_01",
+      name: "Channel 1",
+      channel: 1,
+      startTime: "2026-05-01T10:15:30Z",
+      endTime: "2026-05-01T10:45:30Z",
+      seekTime: "2026-05-01T10:15:30Z",
+      recommendedProfile: "quality",
+      snapshotUrl: null,
+      createdAt: "2026-05-01T10:15:30Z",
+      expiresAt: "2026-05-01T10:45:30Z",
+      profiles: {
+        quality: {
+          name: "Quality",
+          dashUrl: "http://bridge.local:9205/api/v1/media/dash/nvrpb_test/quality/manifest.mpd",
+          hlsUrl: "http://bridge.local:9205/api/v1/media/hls/nvrpb_test/quality/index.m3u8",
+          mjpegUrl: "http://bridge.local:9205/api/v1/media/mjpeg/nvrpb_test?profile=quality",
+          webrtcOfferUrl: null,
+        },
+      },
+    };
+
+    expect(availablePlaybackViewportSources(session, "quality")).toEqual([
+      "hls",
+      "dash",
+      "mjpeg",
+    ] satisfies CameraViewportSource[]);
+    expect(resolveInitialPlaybackViewportSource(session, "quality", null)).toBe("hls");
+    expect(resolvePlaybackViewportSource(session, "dash", "quality")).toBe("dash");
   });
 
-  it("allows native historical playback URLs without an end time", () => {
-    expect(
-      buildRtspPlaybackUrl({
-        streamUrl: "rtsp://example-user:example-password@192.0.2.10:554/cam/realmonitor?channel=1&subtype=0",
-        channel: 9,
-        subtype: 0,
-        seekTime: "2026-05-01T08:10:00Z",
-      }),
-    ).toBe(
-      "rtsp://example-user:example-password@192.0.2.10:554/cam/playback?channel=9&subtype=0&starttime=2026_05_01_11_10_00",
-    );
-  });
+  it("builds direct Dahua RTSP playback URLs with seek timestamps", () => {
+    const start = new Date(2026, 4, 1, 10, 15, 30);
+    const end = new Date(2026, 4, 1, 10, 45, 30);
 
-  it("keeps Dahua playback query order and encodes credentials", () => {
     expect(
       buildRtspPlaybackUrl({
-        streamUrl: "rtsp://example-user:example-password@192.0.2.10:554/cam/realmonitor?channel=1&subtype=1",
-        channel: 9,
-        subtype: 0,
-        seekTime: "2026-05-01T06:59:30Z",
+        streamUrl: "rtsp://user:pass@192.0.2.10:554/cam/realmonitor?channel=1&subtype=0",
+        channel: 4,
+        subtype: 1,
+        seekTime: start.toISOString(),
+        endTime: end.toISOString(),
       }),
     ).toBe(
-      "rtsp://example-user:example-password@192.0.2.10:554/cam/playback?channel=9&subtype=0&starttime=2026_05_01_09_59_30",
+      "rtsp://user:pass@192.0.2.10:554/cam/playback?channel=4&subtype=1&starttime=2026_05_01_10_15_30&endtime=2026_05_01_10_45_30",
     );
   });
 });

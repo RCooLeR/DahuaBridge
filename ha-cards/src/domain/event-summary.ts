@@ -1,4 +1,5 @@
 import type { HeaderMetric } from "./model";
+import { createLocalizer, type Localizer } from "../localization";
 
 export interface NvrEventSummaryCountModel {
   code: string;
@@ -104,6 +105,7 @@ export function summarizePanelTodayEvents(
 
 export function buildTodayEventHeaderMetrics(
   summary: PanelTodayEventSummaryModel | null,
+  t: Localizer = createLocalizer("en"),
 ): HeaderMetric[] | null {
   if (!summary) {
     return null;
@@ -111,22 +113,22 @@ export function buildTodayEventHeaderMetrics(
 
   return [
     {
-      label: "Events 24H",
+      label: t("metric.events24h"),
       value: String(summary.totalCount),
       tone: summary.totalCount > 0 ? "warning" : "neutral",
     },
     {
-      label: "Human",
+      label: t("metric.human"),
       value: String(summary.humanCount),
       tone: summary.humanCount > 0 ? "info" : "neutral",
     },
     {
-      label: "Vehicle",
+      label: t("metric.vehicle"),
       value: String(summary.vehicleCount),
       tone: summary.vehicleCount > 0 ? "info" : "neutral",
     },
     {
-      label: "IVS",
+      label: t("metric.ivs"),
       value: String(summary.ivsCount),
       tone: summary.ivsCount > 0 ? "warning" : "neutral",
     },

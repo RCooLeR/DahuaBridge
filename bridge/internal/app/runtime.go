@@ -284,15 +284,6 @@ func (r *runtimeServices) NVRRecordings(ctx context.Context, deviceID string, qu
 	return result, nil
 }
 
-func isAllRecordingEventFilter(eventCode string) bool {
-	switch strings.ToLower(strings.TrimSpace(eventCode)) {
-	case "", "*", "all", "any", "__all__":
-		return true
-	default:
-		return false
-	}
-}
-
 func (r *runtimeServices) NVRDownloadRecording(ctx context.Context, deviceID string, filePath string) (dahua.NVRRecordingDownload, error) {
 	r.mu.RLock()
 	downloader, ok := r.nvrDownloads[deviceID]
@@ -496,8 +487,6 @@ func (r *runtimeServices) AdminSettings() map[string]any {
 			"media_rate_limit_burst":         cfg.HTTP.MediaRateLimitBurst,
 		},
 		"home_assistant": map[string]any{
-			"enabled":         cfg.HomeAssistant.Enabled,
-			"node_id":         cfg.HomeAssistant.NodeID,
 			"public_base_url": cfg.HomeAssistant.PublicBaseURL,
 		},
 		"media": map[string]any{
@@ -511,7 +500,6 @@ func (r *runtimeServices) AdminSettings() map[string]any {
 			"max_workers":           cfg.Media.MaxWorkers,
 			"frame_rate":            cfg.Media.FrameRate,
 			"stable_frame_rate":     cfg.Media.StableFrameRate,
-			"substream_frame_rate":  cfg.Media.SubstreamFrameRate,
 			"jpeg_quality":          cfg.Media.JPEGQuality,
 			"threads":               cfg.Media.Threads,
 			"scale_width":           cfg.Media.ScaleWidth,
@@ -519,7 +507,6 @@ func (r *runtimeServices) AdminSettings() map[string]any {
 			"hls_segment_time":      cfg.Media.HLSSegmentTime.String(),
 			"hls_list_size":         cfg.Media.HLSListSize,
 			"hls_tmp_dir":           cfg.Media.HLSTmpDir,
-			"hls_temp_path":         cfg.Media.HLSTempPath,
 			"hls_keep_after_exit":   cfg.Media.HLSKeepAfterExit.String(),
 			"hwaccel_args":          append([]string(nil), cfg.Media.HWAccelArgs...),
 			"webrtc_ice_servers":    redactICEServers(cfg.Media.WebRTCICEServers),
@@ -528,7 +515,6 @@ func (r *runtimeServices) AdminSettings() map[string]any {
 		"archive": map[string]any{
 			"enabled":           cfg.Archive.Enabled,
 			"db_path":           cfg.Archive.DBPath,
-			"cache_dir":         cfg.Archive.CacheDir,
 			"temp_dir":          cfg.Archive.TempDir,
 			"prefetch_days":     cfg.Archive.PrefetchDays,
 			"retain_days":       cfg.Archive.RetainDays,

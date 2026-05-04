@@ -115,7 +115,6 @@ func TestServiceSyncNowIndexesArchiveWindows(t *testing.T) {
 	service, err := New(config.ArchiveConfig{
 		Enabled:      true,
 		DBPath:       filepath.Join(tempDir, "archive.db"),
-		CacheDir:     filepath.Join(tempDir, "cache"),
 		TempDir:      filepath.Join(tempDir, "tmp"),
 		PrefetchDays: 1,
 		RetainDays:   7,
@@ -198,7 +197,6 @@ func TestServiceSMDIVSSyncIsNotBlockedByChunkSync(t *testing.T) {
 	service, err := New(config.ArchiveConfig{
 		Enabled:      true,
 		DBPath:       filepath.Join(tempDir, "archive.db"),
-		CacheDir:     filepath.Join(tempDir, "cache"),
 		TempDir:      filepath.Join(tempDir, "tmp"),
 		PrefetchDays: 0,
 		RetainDays:   7,
@@ -304,7 +302,6 @@ func TestServicePrefetchPendingEventAssetsUsesDBRows(t *testing.T) {
 	service, err := New(config.ArchiveConfig{
 		Enabled:         true,
 		DBPath:          filepath.Join(tempDir, "archive.db"),
-		CacheDir:        filepath.Join(tempDir, "cache"),
 		TempDir:         filepath.Join(tempDir, "tmp"),
 		PrefetchDays:    7,
 		RetainDays:      7,
@@ -380,7 +377,6 @@ func TestServiceRefreshActiveClipAssetsAllowsNextPendingMP4(t *testing.T) {
 	service, err := New(config.ArchiveConfig{
 		Enabled:         true,
 		DBPath:          filepath.Join(tempDir, "archive.db"),
-		CacheDir:        filepath.Join(tempDir, "cache"),
 		TempDir:         filepath.Join(tempDir, "tmp"),
 		PrefetchDays:    7,
 		RetainDays:      7,
@@ -495,7 +491,6 @@ func TestServiceRefreshActiveClipAssetsClearsMissingClip(t *testing.T) {
 	service, err := New(config.ArchiveConfig{
 		Enabled:         true,
 		DBPath:          filepath.Join(tempDir, "archive.db"),
-		CacheDir:        filepath.Join(tempDir, "cache"),
 		TempDir:         filepath.Join(tempDir, "tmp"),
 		PrefetchDays:    7,
 		RetainDays:      7,
@@ -562,7 +557,6 @@ func TestServiceEnrichRecordingsAppliesStoredAssetStates(t *testing.T) {
 	service, err := New(config.ArchiveConfig{
 		Enabled:      true,
 		DBPath:       filepath.Join(tempDir, "archive.db"),
-		CacheDir:     filepath.Join(tempDir, "cache"),
 		TempDir:      filepath.Join(tempDir, "tmp"),
 		PrefetchDays: 1,
 		RetainDays:   7,
@@ -683,7 +677,6 @@ func TestServiceEventSummaryUsesIndexedSMDIVSRows(t *testing.T) {
 	service, err := New(config.ArchiveConfig{
 		Enabled:      true,
 		DBPath:       filepath.Join(tempDir, "archive.db"),
-		CacheDir:     filepath.Join(tempDir, "cache"),
 		TempDir:      filepath.Join(tempDir, "tmp"),
 		PrefetchDays: 1,
 		RetainDays:   7,
@@ -822,12 +815,99 @@ func TestSQLiteStoreSearchRecordingsUsesIndexedAllEventScope(t *testing.T) {
 	}
 }
 
+func TestSQLiteStoreSearchRecordingsFiltersEventBeforeLimit(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	defer db.Close()
+
+	archiveStore := NewSQLiteStore(db)
+	if err := archiveStore.InitSchema(context.Background()); err != nil {
+		t.Fatalf("init schema: %v", err)
+	}
+
+	seenAt := time.Date(2026, 5, 2, 12, 0, 0, 0, time.UTC)
+	items := []dahua.NVRRecording{
+		{
+			Source:      "nvr_event",
+			Channel:     1,
+			StartTime:   "2026-05-01 12:04:00",
+			EndTime:     "2026-05-01 12:04:20",
+			FilePath:    "/mnt/dvr/vehicle-4.dav",
+			Type:        "Event.smdTypeVehicle",
+			VideoStream: "Main",
+			Flags:       []string{"Event", "smdTypeVehicle"},
+		},
+		{
+			Source:      "nvr_event",
+			Channel:     1,
+			StartTime:   "2026-05-01 12:03:00",
+			EndTime:     "2026-05-01 12:03:20",
+			FilePath:    "/mnt/dvr/vehicle-3.dav",
+			Type:        "Event.smdTypeVehicle",
+			VideoStream: "Main",
+			Flags:       []string{"Event", "smdTypeVehicle"},
+		},
+		{
+			Source:      "nvr_event",
+			Channel:     1,
+			StartTime:   "2026-05-01 12:02:00",
+			EndTime:     "2026-05-01 12:02:20",
+			FilePath:    "/mnt/dvr/vehicle-2.dav",
+			Type:        "Event.smdTypeVehicle",
+			VideoStream: "Main",
+			Flags:       []string{"Event", "smdTypeVehicle"},
+		},
+		{
+			Source:      "nvr_event",
+			Channel:     1,
+			StartTime:   "2026-05-01 12:01:00",
+			EndTime:     "2026-05-01 12:01:20",
+			FilePath:    "/mnt/dvr/vehicle-1.dav",
+			Type:        "Event.smdTypeVehicle",
+			VideoStream: "Main",
+			Flags:       []string{"Event", "smdTypeVehicle"},
+		},
+		{
+			Source:      "nvr_event",
+			Channel:     1,
+			StartTime:   "2026-05-01 11:00:00",
+			EndTime:     "2026-05-01 11:00:20",
+			FilePath:    "/mnt/dvr/human.dav",
+			Type:        "Event.smdTypeHuman",
+			VideoStream: "Main",
+			Flags:       []string{"Event", "smdTypeHuman"},
+		},
+	}
+	if err := archiveStore.UpsertArchiveEvents(context.Background(), "west20_nvr", items, seenAt); err != nil {
+		t.Fatalf("upsert archive events: %v", err)
+	}
+
+	result, err := archiveStore.SearchRecordings(context.Background(), "west20_nvr", dahua.NVRRecordingQuery{
+		Channel:   1,
+		StartTime: time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC),
+		EndTime:   time.Date(2026, 5, 2, 0, 0, 0, 0, time.UTC),
+		Limit:     1,
+		EventOnly: true,
+		EventCode: "smdTypeHuman",
+	})
+	if err != nil {
+		t.Fatalf("search recordings: %v", err)
+	}
+	if len(result.Items) != 1 {
+		t.Fatalf("expected 1 indexed human row, got %+v", result.Items)
+	}
+	if got := result.Items[0].Type; got != "Event.smdTypeHuman" {
+		t.Fatalf("unexpected event type %q", got)
+	}
+}
+
 func TestServiceArchiveCoverageUsesIndexedFileChunks(t *testing.T) {
 	tempDir := t.TempDir()
 	service, err := New(config.ArchiveConfig{
 		Enabled:      true,
 		DBPath:       filepath.Join(tempDir, "archive.db"),
-		CacheDir:     filepath.Join(tempDir, "cache"),
 		TempDir:      filepath.Join(tempDir, "tmp"),
 		PrefetchDays: 1,
 		RetainDays:   7,

@@ -5,11 +5,9 @@ import { SurveillancePanelActions } from "./surveillance-panel-actions";
 import {
   cameraImageSrc,
   defaultOverviewStreamProfileKey,
-  defaultSelectedStreamProfileKey,
   renderSelectedCameraViewport,
   renderSelectedVtoViewport,
-  resolveOverviewCameraViewportSource,
-  resolveStreamViewportSource,
+  resolveBridgeFirstStreamViewportSource,
   syncViewportAudioState,
 } from "./surveillance-panel-media";
 import { renderIconButton } from "./surveillance-panel-primitives";
@@ -38,6 +36,10 @@ import {
   resolveIntercomOfferUrl,
 } from "../ha/bridge-intercom";
 import {
+  localizeIntercomError,
+  localizeIntercomStatus,
+} from "./surveillance-panel-intercom-status";
+import {
   summarizePanelTodayEvents,
   type NvrEventSummaryModel,
   type PanelTodayEventSummaryModel,
@@ -49,15 +51,13 @@ import { surveillancePanelBaseStyles, surveillancePanelOverviewStyles } from "./
 import { renderCameraEventCountBadges } from "./surveillance-panel-event-badges";
 import { openExternalUrl } from "../utils/browser";
 import { logCardInfo, redactUrlForLog } from "../utils/logging";
+import { createLocalizer, resolvePanelLanguage, type Localizer } from "../localization";
 
 const vtoSchema = z
   .object({
     device_id: z.string().min(1).optional(),
     label: z.string().min(1).optional(),
     lock_button_entity: z.string().min(1).optional(),
-    input_volume_entity: z.string().min(1).optional(),
-    output_volume_entity: z.string().min(1).optional(),
-    muted_entity: z.string().min(1).optional(),
     auto_record_entity: z.string().min(1).optional(),
   })
   .optional();
@@ -74,8 +74,6 @@ type CompactCardConfig = z.infer<typeof configSchema> & LovelaceCardConfig;
 
 const DISCOVERY_CONFIG_BASE: SurveillancePanelCardConfig = {
   type: "custom:dahuabridge-surveillance-panel",
-  title: "DahuaBridge Surveillance",
-  subtitle: "Compact tile",
   event_lookback_hours: 12,
   bridge_event_poll_seconds: 15,
   max_events: 14,
@@ -265,7 +263,7 @@ export class DahuaBridgeSurveillanceTileCard
       const previousState = this._vtoMicrophoneState;
       this._vtoMicrophoneState = snapshot;
       if (snapshot.error) {
-        this._errorMessage = snapshot.error;
+        this._errorMessage = localizeIntercomError(snapshot.error, this.t());
       } else if (this._errorMessage === previousState.error) {
         this._errorMessage = "";
       }
@@ -338,10 +336,24 @@ export class DahuaBridgeSurveillanceTileCard
     if (this._viewportAudioSyncTimer !== null) {
       window.clearTimeout(this._viewportAudioSyncTimer);
     }
-    this._viewportAudioSyncTimer = window.setTimeout(() => {
-      this._viewportAudioSyncTimer = null;
+
+    const syncDelays = [0, 50, 150, 400, 1000, 2500, 5000];
+
+    const runSyncAt = (index: number): void => {
       this.syncCameraViewportAudioState(this._cameraAudioMuted);
-    }, 0);
+
+      if (index >= syncDelays.length - 1) {
+        this._viewportAudioSyncTimer = null;
+        return;
+      }
+
+      this._viewportAudioSyncTimer = window.setTimeout(
+        () => runSyncAt(index + 1),
+        syncDelays[index + 1]!,
+      );
+    };
+
+    this._viewportAudioSyncTimer = window.setTimeout(() => runSyncAt(0), 0);
   }
 
   private shouldSyncMediaAfterUpdate(
@@ -385,11 +397,12 @@ export class DahuaBridgeSurveillanceTileCard
   }
 
   render(): TemplateResult {
+    const t = this.t();
     if (!this._config) {
-      return html`<ha-card><div class="tile-shell"><div class="muted">Card configuration missing.</div></div></ha-card>`;
+      return html`<ha-card><div class="tile-shell"><div class="muted">${t("panel.configMissing")}</div></div></ha-card>`;
     }
     if (!this.hass) {
-      return html`<ha-card><div class="tile-shell"><div class="muted">Home Assistant state unavailable.</div></div></ha-card>`;
+      return html`<ha-card><div class="tile-shell"><div class="muted">${t("panel.hassMissing")}</div></div></ha-card>`;
     }
 
     const model = buildPanelModel(
@@ -409,26 +422,31 @@ export class DahuaBridgeSurveillanceTileCard
     const vto = model.vtos.find((item) => item.deviceId === this._config?.device_id) ?? null;
 
     if (camera) {
-      return this.renderCameraTile(camera);
+      return this.renderCameraTile(camera, createLocalizer(model.language));
     }
     if (vto) {
-      return this.renderVtoTile(vto);
+      return this.renderVtoTile(vto, createLocalizer(model.language));
     }
 
     return html`
       <ha-card>
         <div class="tile-shell">
           <div class="muted">
-            Device ${this._config.device_id} was not found in DahuaBridge camera discovery.
+            ${t("panel.deviceNotFound", { deviceId: this._config.device_id })}
           </div>
         </div>
       </ha-card>
     `;
   }
 
-  private renderCameraTile(camera: CameraViewModel): TemplateResult {
+  private renderCameraTile(camera: CameraViewModel, t: Localizer): TemplateResult {
     const selectedProfileKey = defaultOverviewStreamProfileKey(camera.stream);
-    const selectedSource = resolveOverviewCameraViewportSource(camera, selectedProfileKey);
+    const selectedSource = resolveBridgeFirstStreamViewportSource(
+      camera.stream,
+      null,
+      selectedProfileKey,
+      Boolean(camera.cameraEntity),
+    );
     const lightAvailable = supportsAuxTarget(camera, "light");
     const warningLightAvailable = supportsAuxTarget(camera, "warning_light");
     const sirenAvailable = supportsAuxTarget(camera, "siren");
@@ -449,10 +467,13 @@ export class DahuaBridgeSurveillanceTileCard
                 selectedProfileKey,
                 selectedSource,
                 this._cameraAudioMuted,
+                1,
                 {
                   controls: false,
                   preload: "none",
-                  fallbackOrder: ["hls", "mjpeg"],
+                  fallbackOrder: ["hls", "dash", "mjpeg"],
+                  manageAudioExternally: true,
+                  t,
                 },
               )}
               <div class="tile-topbar">
@@ -465,12 +486,12 @@ export class DahuaBridgeSurveillanceTileCard
               <div class="media-overlay">
                 <div class="media-bottom">
                   <div class="tile-overlay-badges">
-                    ${renderCameraEventCountBadges(camera, "inline")}
+                    ${renderCameraEventCountBadges(camera, "inline", t)}
                     ${camera.bridgeRecordingActive
                       ? html`<span class="badge warning">MP4</span>`
                       : nothing}
                     ${!camera.streamAvailable
-                      ? html`<span class="badge critical">Stream Down</span>`
+                      ? html`<span class="badge critical">${t("badge.streamDown")}</span>`
                       : nothing}
                     ${camera.detections.map(
                       (badge) => html`<span class="badge ${badge.tone}">${badge.label}</span>`,
@@ -479,7 +500,7 @@ export class DahuaBridgeSurveillanceTileCard
                   <div class="tile-controls">
                     ${this.hasSnapshot(camera)
                       ? renderIconButton(
-                          "Snapshot",
+                          t("button.snapshot"),
                           "mdi:camera",
                           () => this.openWindow(this.resolveSnapshotUrl(camera)),
                           this.renderIcon,
@@ -487,7 +508,7 @@ export class DahuaBridgeSurveillanceTileCard
                       : nothing}
                     ${camera.supportsRecording
                       ? renderIconButton(
-                          camera.bridgeRecordingActive ? "Stop MP4" : "Start MP4",
+                          camera.bridgeRecordingActive ? t("button.stopMp4") : t("button.startMp4"),
                           camera.bridgeRecordingActive ? "mdi:record-rec" : "mdi:record-circle-outline",
                           () =>
                             void this._actions.triggerRecordingAction(
@@ -506,7 +527,7 @@ export class DahuaBridgeSurveillanceTileCard
                       : nothing}
                     ${lightAvailable
                       ? renderIconButton(
-                          lightActive ? "Return to Smart Light" : "Turn on White Light",
+                          lightActive ? t("button.lightSmart") : t("button.lightWhite"),
                           "mdi:lightbulb-on-outline",
                           () => void this._actions.triggerAuxAction(camera, "light", lightActive),
                           this.renderIcon,
@@ -519,7 +540,7 @@ export class DahuaBridgeSurveillanceTileCard
                       : nothing}
                     ${warningLightAvailable
                       ? renderIconButton(
-                          warningLightActive ? "Turn Warning Light Off" : "Turn Warning Light On",
+                          warningLightActive ? t("button.warningLightOff") : t("button.warningLightOn"),
                           "mdi:alarm-light-outline",
                           () => void this._actions.triggerAuxAction(camera, "warning_light", warningLightActive),
                           this.renderIcon,
@@ -532,7 +553,7 @@ export class DahuaBridgeSurveillanceTileCard
                       : nothing}
                     ${sirenAvailable
                       ? renderIconButton(
-                          sirenActive ? "Turn Siren Off" : "Turn Siren On",
+                          sirenActive ? t("button.sirenOff") : t("button.sirenOn"),
                           "mdi:bullhorn",
                           () => void this._actions.triggerAuxAction(camera, "siren", sirenActive),
                           this.renderIcon,
@@ -546,9 +567,9 @@ export class DahuaBridgeSurveillanceTileCard
                     ${camera.audioCodec.trim()
                       ? renderIconButton(
                           this._cameraAudioMuted
-                            ? "Enable Stream Audio"
-                            : "Disable Stream Audio",
-                          this._cameraAudioMuted ? "mdi:volume-high" : "mdi:volume-off",
+                            ? t("button.enableStreamAudio")
+                            : t("button.disableStreamAudio"),
+                          this._cameraAudioMuted ? "mdi:volume-off" : "mdi:volume-high",
                           () => void this.toggleCameraAudio(camera),
                           this.renderIcon,
                           {
@@ -569,9 +590,9 @@ export class DahuaBridgeSurveillanceTileCard
     `;
   }
 
-  private renderVtoTile(vto: VtoViewModel): TemplateResult {
-    const selectedProfileKey = defaultSelectedStreamProfileKey(vto.stream);
-    const selectedSource = resolveStreamViewportSource(
+  private renderVtoTile(vto: VtoViewModel, t: Localizer): TemplateResult {
+    const selectedProfileKey = defaultOverviewStreamProfileKey(vto.stream);
+    const selectedSource = resolveBridgeFirstStreamViewportSource(
       vto.stream,
       null,
       selectedProfileKey,
@@ -586,10 +607,12 @@ export class DahuaBridgeSurveillanceTileCard
           <article class="tile-card">
             <div class="tile-media">
               ${renderSelectedVtoViewport(
+                this.hass,
                 vto,
                 this._vtoStreamPlaying,
                 selectedProfileKey,
                 selectedSource,
+                t,
               )}
               <div class="tile-topbar">
                 <div class="tile-title-banner">
@@ -600,16 +623,16 @@ export class DahuaBridgeSurveillanceTileCard
                 <div class="media-bottom">
                   <div class="tile-overlay-badges">
                     <span class="badge ${this.vtoBadgeTone(vto)}">${vto.callStateText}</span>
-                    ${vto.doorbell ? html`<span class="badge warning">Doorbell</span>` : nothing}
-                    ${vto.tamper ? html`<span class="badge critical">Tamper</span>` : nothing}
+                    ${vto.doorbell ? html`<span class="badge warning">${t("badge.doorbell")}</span>` : nothing}
+                    ${vto.tamper ? html`<span class="badge critical">${t("badge.tamper")}</span>` : nothing}
                     ${this._vtoMicrophoneState.enabled
-                      ? html`<span class="badge info">${this._vtoMicrophoneState.statusText}</span>`
+                      ? html`<span class="badge info">${localizeIntercomStatus(this._vtoMicrophoneState, t)}</span>`
                       : nothing}
                   </div>
                   <div class="tile-controls">
                     ${this.hasPlayableVtoStream(vto)
                       ? renderIconButton(
-                          this._vtoStreamPlaying ? "Stop Stream" : "Play Stream",
+                          this._vtoStreamPlaying ? t("button.stopStream") : t("button.playStream"),
                           this._vtoStreamPlaying ? "mdi:stop-circle-outline" : "mdi:play-circle-outline",
                           () => {
                             const previousPlaying = this._vtoStreamPlaying;
@@ -628,7 +651,7 @@ export class DahuaBridgeSurveillanceTileCard
                       : nothing}
                     ${this.hasVtoSnapshot(vto)
                       ? renderIconButton(
-                          "Snapshot",
+                          t("button.snapshot"),
                           "mdi:camera",
                           () => this.openWindow(this.resolveVtoSnapshotUrl(vto)),
                           this.renderIcon,
@@ -636,7 +659,7 @@ export class DahuaBridgeSurveillanceTileCard
                       : nothing}
                     ${vto.recordingStartUrl || vto.recordingStopUrl
                       ? renderIconButton(
-                          vto.bridgeRecordingActive ? "Stop MP4" : "Start MP4",
+                          vto.bridgeRecordingActive ? t("button.stopMp4") : t("button.startMp4"),
                           vto.bridgeRecordingActive ? "mdi:record-rec" : "mdi:record-circle-outline",
                           () => void this.triggerVtoBridgeRecording(vto),
                           this.renderIcon,
@@ -649,7 +672,7 @@ export class DahuaBridgeSurveillanceTileCard
                       : nothing}
                     ${showCallActions && (vto.hasUnlockButtonEntity || Boolean(vto.unlockActionUrl))
                       ? renderIconButton(
-                          "Unlock",
+                          t("button.unlock"),
                           "mdi:lock-open-variant",
                           () =>
                             void this._actions.triggerVtoButtonAction(
@@ -667,7 +690,7 @@ export class DahuaBridgeSurveillanceTileCard
                     ${vto.callState === "ringing" &&
                     (vto.hasAnswerButtonEntity || Boolean(vto.answerActionUrl))
                       ? renderIconButton(
-                          "Answer Call",
+                          t("button.answerCall"),
                           "mdi:phone",
                           () =>
                             void this._actions.triggerVtoButtonAction(
@@ -685,7 +708,7 @@ export class DahuaBridgeSurveillanceTileCard
                     ${showCallActions &&
                     (vto.hasHangupButtonEntity || Boolean(vto.hangupActionUrl))
                       ? renderIconButton(
-                          "Hang Up",
+                          t("button.hangUp"),
                           "mdi:phone-hangup",
                           () =>
                             void this._actions.triggerVtoButtonAction(
@@ -701,29 +724,9 @@ export class DahuaBridgeSurveillanceTileCard
                           },
                         )
                       : nothing}
-                    ${(vto.hasMutedEntity || Boolean(vto.mutedActionUrl))
-                      ? renderIconButton(
-                          vto.muted ? "Unmute" : "Mute",
-                          vto.muted ? "mdi:volume-off" : "mdi:volume-high",
-                          () =>
-                            void this._actions.triggerVtoSwitchAction(
-                              "vto:mute",
-                              vto.mutedEntityId,
-                              !vto.muted,
-                              vto.mutedActionUrl,
-                              "muted",
-                            ),
-                          this.renderIcon,
-                          {
-                            disabled: this._actions.isBusy("vto:mute"),
-                            tone: vto.muted ? "warning" : undefined,
-                            active: vto.muted,
-                          },
-                        )
-                      : nothing}
                     ${vto.capabilities.browserMicrophoneSupported && this.hasAvailableVtoIntercom(vto)
                       ? renderIconButton(
-                          this._vtoMicrophoneState.enabled ? "Disable Mic" : "Enable Mic",
+                          this._vtoMicrophoneState.enabled ? t("button.disableMic") : t("button.enableMic"),
                           this._vtoMicrophoneState.enabled ? "mdi:microphone-off" : "mdi:microphone",
                           () =>
                             void (this._vtoMicrophoneState.enabled
@@ -758,18 +761,13 @@ export class DahuaBridgeSurveillanceTileCard
     this.logMedia("card tile camera audio toggled", {
       device_id: camera.deviceId,
       muted: nextMuted,
-      audio_supported: camera.audioMuteSupported,
     });
-
-    if (!camera.audioMuteSupported) {
-      return;
-    }
   }
 
   private async triggerVtoBridgeRecording(vto: VtoViewModel): Promise<void> {
     const targetUrl = vto.bridgeRecordingActive ? vto.recordingStopUrl : vto.recordingStartUrl;
     if (!targetUrl) {
-      this._errorMessage = "Bridge MP4 recording is unavailable for this door station.";
+      this._errorMessage = this.t()("error.bridgeMp4VtoUnavailable");
       return;
     }
     if (this._actions.isBusy("vto:bridge_recording")) {
@@ -792,7 +790,7 @@ export class DahuaBridgeSurveillanceTileCard
       });
     } catch (error) {
       this._errorMessage =
-        error instanceof Error ? error.message : "Bridge MP4 recording request failed.";
+        error instanceof Error ? error.message : this.t()("error.vtoBridgeRecordingFailed");
     } finally {
       const reducedBusy = new Set(this._busyActions);
       reducedBusy.delete("vto:bridge_recording");
@@ -803,7 +801,7 @@ export class DahuaBridgeSurveillanceTileCard
   private async startVtoMicrophone(vto: VtoViewModel): Promise<void> {
     const offerUrl = resolveIntercomOfferUrl(vto.stream);
     if (!offerUrl) {
-      this._errorMessage = "Bridge intercom offer URL is unavailable for this door station.";
+      this._errorMessage = this.t()("error.intercomOfferUnavailable");
       return;
     }
     if (!this._vtoStreamPlaying) {
@@ -840,6 +838,7 @@ export class DahuaBridgeSurveillanceTileCard
     syncViewportAudioState(
       this.renderRoot.querySelector(".tile-media"),
       muted,
+      1,
     );
   }
 
@@ -900,6 +899,10 @@ export class DahuaBridgeSurveillanceTileCard
       return "warning";
     }
     return vto.online ? "success" : "critical";
+  }
+
+  private t(): Localizer {
+    return createLocalizer(this.hass ? resolvePanelLanguage(this.hass) : "en");
   }
 
   private renderIcon(icon: string): TemplateResult {

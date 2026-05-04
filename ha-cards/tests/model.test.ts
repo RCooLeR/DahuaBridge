@@ -69,6 +69,47 @@ describe("buildPanelModel", () => {
     expect(model.headerMetrics[0]?.value).toBe("1/1");
   });
 
+  it("uses the integration language exposed on bridge camera attributes", () => {
+    const now = new Date().toISOString();
+    const hass: HomeAssistant = {
+      states: {
+        "camera.west20_nvr_channel_01_camera": {
+          entity_id: "camera.west20_nvr_channel_01_camera",
+          state: "recording",
+          attributes: {
+            friendly_name: "Entrance Gate",
+            bridge_device_id: "west20_nvr_channel_01",
+            bridge_root_device_id: "west20_nvr",
+            bridge_device_kind: "nvr_channel",
+            bridge_integration_language: "uk",
+            stream_source: "http://bridge.local:9205/api/v1/media/hls/west20_nvr_channel_01/quality",
+          },
+          last_changed: now,
+          last_updated: now,
+        },
+        "binary_sensor.west20_nvr_channel_01_online": {
+          entity_id: "binary_sensor.west20_nvr_channel_01_online",
+          state: "on",
+          attributes: {},
+          last_changed: now,
+          last_updated: now,
+        },
+      },
+      callService: async () => undefined,
+    };
+
+    const model = buildPanelModel(
+      hass,
+      { type: "custom:dahuabridge-surveillance-panel" },
+      { kind: "overview" },
+    );
+
+    expect(model.language).toBe("uk");
+    expect(model.title).toBe("Відеонагляд DahuaBridge");
+    expect(model.cameras[0]?.kindLabel).toBe("Канал NVR");
+    expect(model.headerMetrics[0]?.label).toBe("Камери онлайн");
+  });
+
   it("applies today event summary counts to matching NVR channel cameras", () => {
     const now = new Date().toISOString();
     const hass: HomeAssistant = {
@@ -310,11 +351,6 @@ describe("buildPanelModel", () => {
               lock_urls: [
                 "http://bridge.local:9205/api/v1/vto/front_vto/locks/0/unlock",
               ],
-              output_volume_url:
-                "http://bridge.local:9205/api/v1/vto/front_vto/audio/output-volume",
-              input_volume_url:
-                "http://bridge.local:9205/api/v1/vto/front_vto/audio/input-volume",
-              mute_url: "http://bridge.local:9205/api/v1/vto/front_vto/audio/mute",
               recording_url: "http://bridge.local:9205/api/v1/vto/front_vto/recording",
             },
           },
@@ -338,20 +374,6 @@ describe("buildPanelModel", () => {
         "sensor.west20_nvr_channel_01_nvr_config_reason": {
           entity_id: "sensor.west20_nvr_channel_01_nvr_config_reason",
           state: "ok",
-          attributes: {},
-          last_changed: now,
-          last_updated: now,
-        },
-        "sensor.west20_nvr_channel_01_control_audio_authority": {
-          entity_id: "sensor.west20_nvr_channel_01_control_audio_authority",
-          state: "direct_ipc",
-          attributes: {},
-          last_changed: now,
-          last_updated: now,
-        },
-        "sensor.west20_nvr_channel_01_control_audio_semantic": {
-          entity_id: "sensor.west20_nvr_channel_01_control_audio_semantic",
-          state: "stream_audio_enable",
           attributes: {},
           last_changed: now,
           last_updated: now,
@@ -459,8 +481,6 @@ describe("buildPanelModel", () => {
       url: "http://bridge.local:9205/api/v1/nvr/west20_nvr/channels/1/recording",
     });
     expect(model.cameras[0]).toMatchObject({
-      audioControlAuthority: "direct_ipc",
-      audioControlSemantic: "stream_audio_enable",
       nvrConfigWritable: true,
       nvrConfigReason: "ok",
       directIPCConfigured: true,
@@ -1259,10 +1279,10 @@ describe("buildPanelModel", () => {
             bridge_root_device_id: "west20_nvr",
             bridge_device_kind: "nvr_channel",
             stream_source: "http://bridge.local:9205/api/v1/media/hls/west20_nvr_channel_01/quality",
-            bridge_archive_recordings_url_template:
-              "http://bridge.local:9205/api/v1/nvr/west20_nvr/recordings?channel={channel}&start={start}&end={end}&limit={limit}&event={event}",
-            bridge_playback_sessions_url:
-              "http://bridge.local:9205/api/v1/nvr/west20_nvr/playback/sessions",
+            bridge_archive_smd_ivs_url_template:
+              "http://bridge.local:9205/api/v1/nvr/west20_nvr/smd-ivs?channel={channel}&start={start}&end={end}&limit={limit}&event={event}",
+            bridge_archive_recording_chunks_url_template:
+              "http://bridge.local:9205/api/v1/nvr/west20_nvr/recording-chunks?channel={channel}&start={start}&end={end}&limit={limit}",
           },
           last_changed: now,
           last_updated: now,
@@ -1286,8 +1306,8 @@ describe("buildPanelModel", () => {
 
     expect(model.cameras[0]?.archive).toMatchObject({
       supported: true,
-      searchUrl: "http://bridge.local:9205/api/v1/nvr/west20_nvr/recordings",
-      playbackUrl: "http://bridge.local:9205/api/v1/nvr/west20_nvr/playback/sessions",
+      smdIvsUrl: "http://bridge.local:9205/api/v1/nvr/west20_nvr/smd-ivs",
+      chunksUrl: "http://bridge.local:9205/api/v1/nvr/west20_nvr/recording-chunks",
       channel: 1,
       defaultLimit: 100,
     });
@@ -1344,7 +1364,5 @@ describe("buildPanelModel", () => {
     const model = buildPanelModel(hass, config, { kind: "overview" });
 
     expect(model.cameras[0]?.audioMuteSupported).toBe(true);
-    expect(model.cameras[0]?.audioMuteActionUrl).toBeNull();
-    expect(model.cameras[0]?.audioMuted).toBe(true);
   });
 });

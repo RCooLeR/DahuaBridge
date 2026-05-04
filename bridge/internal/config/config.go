@@ -16,7 +16,6 @@ import (
 type Config struct {
 	Log           LogConfig           `yaml:"log"`
 	HTTP          HTTPConfig          `yaml:"http"`
-	MQTT          MQTTConfig          `yaml:"mqtt"`
 	Media         MediaConfig         `yaml:"media"`
 	Archive       ArchiveConfig       `yaml:"archive"`
 	HomeAssistant HomeAssistantConfig `yaml:"home_assistant"`
@@ -45,31 +44,8 @@ type HTTPConfig struct {
 	MediaRateLimitBurst        int           `yaml:"media_rate_limit_burst"`
 }
 
-type MQTTConfig struct {
-	Enabled         bool          `yaml:"enabled"`
-	Broker          string        `yaml:"broker"`
-	ClientID        string        `yaml:"client_id"`
-	Username        string        `yaml:"username"`
-	Password        string        `yaml:"password"`
-	TopicPrefix     string        `yaml:"topic_prefix"`
-	DiscoveryPrefix string        `yaml:"discovery_prefix"`
-	QoS             byte          `yaml:"qos"`
-	Retain          bool          `yaml:"retain"`
-	CleanSession    bool          `yaml:"clean_session"`
-	KeepAlive       time.Duration `yaml:"keep_alive"`
-	ConnectTimeout  time.Duration `yaml:"connect_timeout"`
-	PublishTimeout  time.Duration `yaml:"publish_timeout"`
-}
-
 type HomeAssistantConfig struct {
-	Enabled              bool          `yaml:"enabled"`
-	NodeID               string        `yaml:"node_id"`
-	EntityMode           string        `yaml:"entity_mode"`
-	CameraSnapshotSource string        `yaml:"camera_snapshot_source"`
-	PublicBaseURL        string        `yaml:"public_base_url"`
-	APIBaseURL           string        `yaml:"api_base_url"`
-	AccessToken          string        `yaml:"access_token"`
-	RequestTimeout       time.Duration `yaml:"request_timeout"`
+	PublicBaseURL string `yaml:"public_base_url"`
 }
 
 type MediaConfig struct {
@@ -84,7 +60,6 @@ type MediaConfig struct {
 	MaxWorkers          int                     `yaml:"max_workers"`
 	FrameRate           int                     `yaml:"frame_rate"`
 	StableFrameRate     int                     `yaml:"stable_frame_rate"`
-	SubstreamFrameRate  int                     `yaml:"substream_frame_rate"`
 	JPEGQuality         int                     `yaml:"jpeg_quality"`
 	Threads             int                     `yaml:"threads"`
 	ScaleWidth          int                     `yaml:"scale_width"`
@@ -102,7 +77,6 @@ type MediaConfig struct {
 type ArchiveConfig struct {
 	Enabled         bool   `yaml:"enabled"`
 	DBPath          string `yaml:"db_path"`
-	CacheDir        string `yaml:"cache_dir"`
 	TempDir         string `yaml:"temp_dir"`
 	PrefetchDays    int    `yaml:"prefetch_days"`
 	RetainDays      int    `yaml:"retain_days"`
@@ -253,45 +227,31 @@ func defaultConfig() Config {
 			MediaRateLimitPerMinute:    60,
 			MediaRateLimitBurst:        12,
 		},
-		MQTT: MQTTConfig{
-			Enabled:         false,
-			ClientID:        "dahuabridge",
-			TopicPrefix:     "dahuabridge",
-			DiscoveryPrefix: "homeassistant",
-			QoS:             1,
-			Retain:          true,
-			CleanSession:    false,
-			KeepAlive:       30 * time.Second,
-			ConnectTimeout:  15 * time.Second,
-			PublishTimeout:  10 * time.Second,
-		},
 		Media: MediaConfig{
-			Enabled:            true,
-			FFmpegPath:         "ffmpeg",
-			FFmpegLogLevel:     "error",
-			VideoEncoder:       "software",
-			InputPreset:        "low_latency",
-			ClipPath:           "/data/clips",
-			IdleTimeout:        30 * time.Second,
-			StartTimeout:       15 * time.Second,
-			MaxWorkers:         32,
-			FrameRate:          5,
-			StableFrameRate:    5,
-			SubstreamFrameRate: 5,
-			JPEGQuality:        7,
-			Threads:            1,
-			ScaleWidth:         960,
-			ReadBufferSize:     1024 * 1024,
-			HLSSegmentTime:     2 * time.Second,
-			HLSListSize:        6,
-			HLSTmpDir:          "/data/tmp/dahuabridge/hls",
-			HLSTempPath:        "/data/tmp/dahuabridge/hls",
-			HLSKeepAfterExit:   6 * time.Hour,
+			Enabled:          true,
+			FFmpegPath:       "ffmpeg",
+			FFmpegLogLevel:   "error",
+			VideoEncoder:     "software",
+			InputPreset:      "low_latency",
+			ClipPath:         "/data/clips",
+			IdleTimeout:      30 * time.Second,
+			StartTimeout:     15 * time.Second,
+			MaxWorkers:       32,
+			FrameRate:        5,
+			StableFrameRate:  5,
+			JPEGQuality:      7,
+			Threads:          1,
+			ScaleWidth:       960,
+			ReadBufferSize:   1024 * 1024,
+			HLSSegmentTime:   2 * time.Second,
+			HLSListSize:      6,
+			HLSTmpDir:        "/data/tmp/dahuabridge/hls",
+			HLSTempPath:      "/data/tmp/dahuabridge/hls",
+			HLSKeepAfterExit: 6 * time.Hour,
 		},
 		Archive: ArchiveConfig{
 			Enabled:         false,
 			DBPath:          "/data/archive/archive.db",
-			CacheDir:        "/data/archive/cache",
 			TempDir:         "/data/archive/tmp",
 			PrefetchDays:    7,
 			RetainDays:      7,
@@ -299,13 +259,6 @@ func defaultConfig() Config {
 			PrefetchSMD:     true,
 			PrefetchIVS:     true,
 			Cron:            "5,35 * * * *",
-		},
-		HomeAssistant: HomeAssistantConfig{
-			Enabled:              true,
-			NodeID:               "dahuabridge",
-			EntityMode:           "native",
-			CameraSnapshotSource: "device",
-			RequestTimeout:       15 * time.Second,
 		},
 		StateStore: StateStoreConfig{
 			FlushInterval: 5 * time.Second,
@@ -335,25 +288,6 @@ func (c *Config) normalize() error {
 		c.HTTP.MediaRateLimitBurst = 12
 	}
 	c.HomeAssistant.PublicBaseURL = strings.TrimRight(strings.TrimSpace(c.HomeAssistant.PublicBaseURL), "/")
-	c.HomeAssistant.EntityMode = strings.ToLower(strings.TrimSpace(c.HomeAssistant.EntityMode))
-	if c.HomeAssistant.EntityMode == "" || c.HomeAssistant.EntityMode == "hybrid" {
-		c.HomeAssistant.EntityMode = "native"
-	}
-	c.HomeAssistant.CameraSnapshotSource = strings.ToLower(strings.TrimSpace(c.HomeAssistant.CameraSnapshotSource))
-	if c.HomeAssistant.CameraSnapshotSource == "" {
-		c.HomeAssistant.CameraSnapshotSource = "device"
-	}
-	if c.HomeAssistant.APIBaseURL != "" {
-		normalizedAPIBaseURL, err := normalizeBaseURL(c.HomeAssistant.APIBaseURL)
-		if err != nil {
-			return fmt.Errorf("normalize home_assistant.api_base_url: %w", err)
-		}
-		c.HomeAssistant.APIBaseURL = normalizedAPIBaseURL
-	}
-	c.HomeAssistant.AccessToken = strings.TrimSpace(c.HomeAssistant.AccessToken)
-	if c.HomeAssistant.RequestTimeout <= 0 {
-		c.HomeAssistant.RequestTimeout = 15 * time.Second
-	}
 	c.Imou.AppID = firstNonEmpty(strings.TrimSpace(c.Imou.AppID), strings.TrimSpace(os.Getenv("DAHUABRIDGE_IMOU_APP_ID")))
 	c.Imou.AppSecret = firstNonEmpty(strings.TrimSpace(c.Imou.AppSecret), strings.TrimSpace(os.Getenv("DAHUABRIDGE_IMOU_APP_SECRET")))
 	c.Imou.DataCenter = strings.ToLower(firstNonEmpty(strings.TrimSpace(c.Imou.DataCenter), strings.TrimSpace(os.Getenv("DAHUABRIDGE_IMOU_DATA_CENTER"))))
@@ -426,9 +360,6 @@ func (c *Config) normalize() error {
 	if c.Media.StableFrameRate <= 0 {
 		c.Media.StableFrameRate = 5
 	}
-	if c.Media.SubstreamFrameRate <= 0 {
-		c.Media.SubstreamFrameRate = c.Media.StableFrameRate
-	}
 	if c.Media.JPEGQuality <= 0 {
 		c.Media.JPEGQuality = 7
 	}
@@ -450,10 +381,6 @@ func (c *Config) normalize() error {
 	c.Archive.DBPath = strings.TrimSpace(c.Archive.DBPath)
 	if c.Archive.DBPath == "" {
 		c.Archive.DBPath = "/data/archive/archive.db"
-	}
-	c.Archive.CacheDir = strings.TrimSpace(c.Archive.CacheDir)
-	if c.Archive.CacheDir == "" {
-		c.Archive.CacheDir = "/data/archive/cache"
 	}
 	c.Archive.TempDir = strings.TrimSpace(c.Archive.TempDir)
 	if c.Archive.TempDir == "" {
@@ -527,15 +454,9 @@ func (c *Config) normalize() error {
 }
 
 func (c Config) validate() error {
-	if c.MQTT.Enabled && c.MQTT.Broker == "" {
-		return errors.New("mqtt.broker is required when mqtt.enabled=true")
-	}
 	if c.Archive.Enabled {
 		if c.Archive.DBPath == "" {
 			return errors.New("archive.db_path is required when archive.enabled=true")
-		}
-		if c.Archive.CacheDir == "" {
-			return errors.New("archive.cache_dir is required when archive.enabled=true")
 		}
 		if c.Archive.TempDir == "" {
 			return errors.New("archive.temp_dir is required when archive.enabled=true")
@@ -553,22 +474,6 @@ func (c Config) validate() error {
 
 	if c.StateStore.Enabled && c.StateStore.Path == "" {
 		return errors.New("state_store.path is required when state_store.enabled=true")
-	}
-	if c.HomeAssistant.APIBaseURL != "" && c.HomeAssistant.AccessToken == "" {
-		return errors.New("home_assistant.access_token is required when home_assistant.api_base_url is set")
-	}
-	if c.HomeAssistant.AccessToken != "" && c.HomeAssistant.APIBaseURL == "" {
-		return errors.New("home_assistant.api_base_url is required when home_assistant.access_token is set")
-	}
-	switch c.HomeAssistant.EntityMode {
-	case "native":
-	default:
-		return fmt.Errorf("home_assistant.entity_mode must be native")
-	}
-	switch c.HomeAssistant.CameraSnapshotSource {
-	case "device", "logo":
-	default:
-		return fmt.Errorf("home_assistant.camera_snapshot_source must be one of: device, logo")
 	}
 	switch c.Media.VideoEncoder {
 	case "software", "qsv":
@@ -830,14 +735,6 @@ func (d DeviceConfig) ONVIFPasswordValue() string {
 		return d.OnvifPassword
 	}
 	return d.Password
-}
-
-func (c HomeAssistantConfig) NativeEntityMode() bool {
-	return strings.EqualFold(strings.TrimSpace(c.EntityMode), "native")
-}
-
-func (c HomeAssistantConfig) LogoCameraSnapshots() bool {
-	return strings.EqualFold(strings.TrimSpace(c.CameraSnapshotSource), "logo")
 }
 
 func normalizeBaseURL(raw string) (string, error) {

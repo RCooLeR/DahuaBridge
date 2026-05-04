@@ -1,86 +1,112 @@
 # Card Features
 
-This page lists the current Lovelace card feature set.
-
-## 1. Dashboard Surfaces
-
-The workspace currently provides:
+The bundle registers two Lovelace cards:
 
 - `custom:dahuabridge-surveillance-panel`
 - `custom:dahuabridge-surveillance-tile`
 
-The panel is the full command surface. The tile is the compact single-device surface.
+## Languages
 
-## 2. Bridge-Aware URL Handling
+The cards render their built-in UI text in English or Ukrainian. They use the
+resolved integration language exposed on DahuaBridge camera attributes, so the
+same integration option controls entity labels and card labels.
 
-The cards can use:
+The cards fall back in this order:
 
-- bridge-generated URLs from the Home Assistant catalog
-- a browser-side `browser_bridge_url` override when Home Assistant and the browser reach the bridge differently
+- `bridge_integration_language` or `integration_language` from any DahuaBridge camera entity
+- Home Assistant frontend language when it is `en` or `uk`
+- English
 
-This is important for reverse-proxy and split-network deployments.
-It is also the supported fix when the bridge emits `public_base_url` media URLs that the local browser must rewrite to a different reachable base.
+## Live Streams
 
-## 3. Topology And Presentation
+The panel shows live camera and VTO streams in the overview grid and selected
+device viewport. The tile shows one selected camera or VTO.
 
-The panel can discover and present:
+Supported live paths are the stream sources exposed by the integration:
 
-- NVR roots
-- NVR channels
-- VTO devices
-- room grouping from Home Assistant areas
-- device metadata and capability state
+- HLS
+- DASH
+- MJPEG
+- native Home Assistant camera view when available
+- snapshots as a visual fallback
 
-## 4. Event Workflows
+The selected stream profile and source are browser-side UI choices. They do not
+create archive playback sessions.
 
-The panel supports:
+## Events And Summaries
 
-- bridge event polling
-- recent event timeline display
-- event window selection
-- filtering by event type and date window
+The panel shows bridge events from the configured lookback window and can poll
+for updates. It also shows daily event summary counters for cameras/NVR channels
+when the bridge exposes summary endpoints.
 
-## 5. Archive And Playback Workflows
+Visible event workflows:
 
-The panel supports:
+- recent event list
+- history window selection
+- event type filtering
+- daily human, vehicle, and IVS counters
 
-- SMD/IVS browsing from `/api/v1/nvr/{deviceID}/smd-ivs`
-- normal recording chunk browsing from `/api/v1/nvr/{deviceID}/recording-chunks`
-- SMD/IVS type and date filters
-- selected-camera archive browsing
-- direct native RTSP playback for SMD/IVS rows
-- direct native RTSP seek from a date picker and visible time-of-day slider, up to 90 days back
-- SMD/IVS MP4 export through the bridge, followed by download when the export clip completes
-- direct original DAV download for recording chunks
-- manual bridge MP4 clip browsing with download and delete actions
-- daily human, vehicle, and IVS counters on overview tiles and in the selected-camera toolbar
+## SMD/IVS Archive
 
-The card does not call archive coverage before seek playback. It recreates the native Home Assistant camera player with a Dahua `/cam/playback` RTSP URL.
+The Events tab queries `bridge_archive_smd_ivs_url_template`.
 
-Browser viewport playback currently uses:
+Visible SMD/IVS workflows:
 
-- HLS as the primary stream path
-- MJPEG as the fallback path
+- list events for the selected date
+- filter by SMD/IVS type
+- play an event through direct RTSP archive playback via the Home Assistant timeframe proxy
+- download an existing bridge MP4 asset from `asset_download_url`
+- ask the bridge to create an MP4 from `export_url`, then download it
 
-This is an intentional stability choice for multi-camera dashboards.
+The selected camera viewport also has an archive seek control. Moving the seek
+slider builds a Dahua `/cam/playback` RTSP window and plays it through the
+Home Assistant camera timeframe proxy.
 
-For the selected live camera view, the card can also stay on the native Home Assistant camera element while overriding the selected main/sub stream source.
+## Recording Chunks
 
-## 6. Device Actions
+The Recordings tab queries `bridge_archive_recording_chunks_url_template`.
+If that attribute is missing, `bridge_archive_recordings_url_template` is used
+only as a compatibility fallback.
 
-Depending on what the bridge exposes for a device, the cards can surface:
+Visible chunk workflow:
 
-- PTZ actions
-- aux/light/warning light/siren actions
-- browser-local stream audio toggles
-- bridge clip recording actions
-- VTO call, lock, and intercom actions
+- list 30-minute recording chunks for the selected date
+- download a chunk from row-level `download_url`
 
-The cards do not invent capabilities on their own. They render what the bridge and integration already expose.
+Recording chunks are download-only in the card. There is no chunk playback or
+coverage timeline.
 
-Controls without a real Home Assistant entity or bridge action URL are hidden in overview, tile, and selected-device views rather than shown as dead buttons.
+## Manual MP4 Clips
 
-## Related Docs
+The MP4 tab lists bridge MP4 clips created with the card recording button.
 
-- [configuration.md](configuration.md)
-- [../../docs/ha-cards.md](../../docs/ha-cards.md)
+Visible MP4 workflows:
+
+- start or stop a bridge MP4 recording when the integration exposes recording action URLs
+- list MP4 clips for the selected date
+- play completed clips in the selected camera viewport
+- download completed clips
+
+The card does not delete MP4 clips.
+
+## Device Controls
+
+Depending on the capabilities exposed by the integration, the cards can show:
+
+- PTZ controls
+- aux, light, warning light, or siren actions
+- browser-local stream mute and volume controls
+- VTO call, lock, intercom, and auto-record controls
+
+Controls without a real entity or bridge action URL are hidden.
+VTO device mute and VTO speaker/microphone volume controls are not shown.
+
+## Removed From HA Cards
+
+These workflows are intentionally not present:
+
+- playback sessions from `bridge_playback_sessions_url`
+- archive coverage from `bridge_archive_coverage_url`
+- coverage timeline UI
+- playback profile selection for archive sessions
+- card-side MP4 delete actions

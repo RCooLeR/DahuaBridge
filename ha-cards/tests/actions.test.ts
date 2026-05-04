@@ -7,7 +7,6 @@ import type { HomeAssistant } from "../src/types/home-assistant";
 const actionMocks = vi.hoisted(() => ({
   pressButton: vi.fn(async () => undefined),
   toggleSwitch: vi.fn(async () => undefined),
-  setNumberValue: vi.fn(async () => undefined),
   postBridgeRequest: vi.fn(async () => undefined),
   readBridgeJson: vi.fn<
     () => Promise<{ items: Array<{ status: string; stop_url?: string }> }>
@@ -17,7 +16,6 @@ const actionMocks = vi.hoisted(() => ({
 vi.mock("../src/ha/actions", () => ({
   pressButton: actionMocks.pressButton,
   toggleSwitch: actionMocks.toggleSwitch,
-  setNumberValue: actionMocks.setNumberValue,
   postBridgeRequest: actionMocks.postBridgeRequest,
   readBridgeJson: actionMocks.readBridgeJson,
 }));
@@ -85,12 +83,8 @@ function buildCamera(overrides: Partial<CameraViewModel> = {}): CameraViewModel 
     audioCodec: "",
     microphoneAvailable: false,
     speakerAvailable: false,
-    audioMuted: true,
     audioMuteSupported: false,
-    audioMuteActionUrl: null,
     validationNotes: [],
-    audioControlAuthority: null,
-    audioControlSemantic: null,
     nvrConfigWritable: null,
     nvrConfigReason: null,
     directIPCConfigured: false,
@@ -139,7 +133,6 @@ describe("SurveillancePanelActions", () => {
   beforeEach(() => {
     actionMocks.pressButton.mockClear();
     actionMocks.toggleSwitch.mockClear();
-    actionMocks.setNumberValue.mockClear();
     actionMocks.postBridgeRequest.mockClear();
     actionMocks.readBridgeJson.mockClear();
   });
@@ -419,7 +412,13 @@ describe("SurveillancePanelActions", () => {
     const { host, getErrorMessage } = buildHost(hass);
     const actions = new SurveillancePanelActions(host);
 
-    await actions.triggerVtoSwitchAction("vto:mute", "switch.front_station_muted", true, null, "muted");
+    await actions.triggerVtoSwitchAction(
+      "vto:auto-record",
+      "switch.front_station_auto_record",
+      true,
+      null,
+      "auto_record_enabled",
+    );
 
     expect(actionMocks.toggleSwitch).not.toHaveBeenCalled();
     expect(actionMocks.postBridgeRequest).not.toHaveBeenCalled();

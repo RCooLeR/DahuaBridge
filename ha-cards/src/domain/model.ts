@@ -39,6 +39,13 @@ import {
 } from "../ha/bridge-url";
 import type { RegistrySnapshot } from "../ha/registry";
 import { formatBytes } from "../utils/format";
+import {
+  createLocalizer,
+  pluralUnit,
+  resolvePanelLanguage,
+  type Localizer,
+  type PanelLanguage,
+} from "../localization";
 
 export interface HeaderMetric {
   label: string;
@@ -98,12 +105,8 @@ export interface CameraViewModel {
   audioCodec: string;
   microphoneAvailable: boolean;
   speakerAvailable: boolean;
-  audioMuted: boolean;
   audioMuteSupported: boolean;
-  audioMuteActionUrl: string | null;
   validationNotes: string[];
-  audioControlAuthority: string | null;
-  audioControlSemantic: string | null;
   nvrConfigWritable: boolean | null;
   nvrConfigReason: string | null;
   directIPCConfigured: boolean;
@@ -147,11 +150,8 @@ export interface CameraRecordingViewModel {
 
 export interface CameraArchiveViewModel {
   supported: boolean;
-  searchUrl: string | null;
   smdIvsUrl: string | null;
   chunksUrl: string | null;
-  playbackUrl: string | null;
-  coverageUrl: string | null;
   channel: number | null;
   defaultLimit: number;
 }
@@ -252,9 +252,6 @@ export interface VtoViewModel {
   lastCallStartedAt: string;
   lastCallEndedAt: string;
   lastCallDuration: string;
-  outputVolume: number | null;
-  inputVolume: number | null;
-  muted: boolean;
   autoRecordEnabled: boolean;
   answerButtonEntityId: string;
   answerActionUrl: string | null;
@@ -265,15 +262,6 @@ export interface VtoViewModel {
   unlockButtonEntityId: string;
   unlockActionUrl: string | null;
   hasUnlockButtonEntity: boolean;
-  outputVolumeEntityId: string;
-  outputVolumeActionUrl: string | null;
-  hasOutputVolumeEntity: boolean;
-  inputVolumeEntityId: string;
-  inputVolumeActionUrl: string | null;
-  hasInputVolumeEntity: boolean;
-  mutedEntityId: string;
-  mutedActionUrl: string | null;
-  hasMutedEntity: boolean;
   autoRecordEntityId: string;
   autoRecordActionUrl: string | null;
   hasAutoRecordEntity: boolean;
@@ -335,9 +323,6 @@ export interface VtoCapabilityViewModel {
   bridgeAudioUplinkSupported: boolean;
   bridgeAudioOutputSupported: boolean;
   externalAudioExportSupported: boolean;
-  outputVolumeSupported: boolean;
-  inputVolumeSupported: boolean;
-  muteSupported: boolean;
   recordingSupported: boolean;
   talkbackSupported: boolean;
   fullCallAcceptanceSupported: boolean;
@@ -365,6 +350,7 @@ export interface PanelSelection {
 }
 
 export interface PanelModel {
+  language: PanelLanguage;
   title: string;
   subtitle: string;
   headerMetrics: HeaderMetric[];
@@ -392,14 +378,16 @@ export function buildPanelModel(
 ): PanelModel {
   const browserBridgeUrl = normalizeBrowserBridgeUrl(config.browser_bridge_url);
   const topology = discoverBridgeTopology(hass, registrySnapshot);
+  const language = resolvePanelLanguage(hass);
+  const t = createLocalizer(language);
   const activeEventSummary = todayEventSummary ?? null;
   const cameras = topology.cameras
-    .map((camera) => buildCameraViewModel(camera, browserBridgeUrl, activeEventSummary))
+    .map((camera) => buildCameraViewModel(camera, browserBridgeUrl, activeEventSummary, t))
     .sort(compareCameraViewModels);
   const nvrs = topology.nvrs
-    .map((nvr) => buildNvrViewModel(nvr, browserBridgeUrl, activeEventSummary))
+    .map((nvr) => buildNvrViewModel(nvr, browserBridgeUrl, activeEventSummary, t))
     .sort((left, right) => left.label.localeCompare(right.label));
-  const vtos = buildVtoViewModels(hass, topology.vtos, config.vto, browserBridgeUrl);
+  const vtos = buildVtoViewModels(hass, topology.vtos, config.vto, browserBridgeUrl, t);
   const vto = vtos[0];
 
   const selectedCamera =
@@ -419,12 +407,12 @@ export function buildPanelModel(
     cameras.filter((camera) => camera.online).length + vtos.filter((entry) => entry.online).length;
   const headerMetrics: HeaderMetric[] = [
     {
-      label: "Cameras Online",
+      label: t("metric.camerasOnline"),
       value: `${onlineCount}/${cameras.length + vtos.length}`,
       tone: onlineCount > 0 ? "success" : "critical",
     },
   ];
-  const eventHeaderMetrics = buildTodayEventHeaderMetrics(activeEventSummary);
+  const eventHeaderMetrics = buildTodayEventHeaderMetrics(activeEventSummary, t);
   if (eventHeaderMetrics) {
     headerMetrics.push(...eventHeaderMetrics);
   } else {
@@ -439,17 +427,17 @@ export function buildPanelModel(
     ).length;
     headerMetrics.push(
       {
-        label: "Motion",
+        label: t("metric.motion"),
         value: `${motionCount}`,
         tone: motionCount > 0 ? "warning" : "neutral",
       },
       {
-        label: "Human",
+        label: t("metric.human"),
         value: `${humanCount}`,
         tone: humanCount > 0 ? "info" : "neutral",
       },
       {
-        label: "Vehicle",
+        label: t("metric.vehicle"),
         value: `${vehicleCount}`,
         tone: vehicleCount > 0 ? "info" : "neutral",
       },
@@ -459,13 +447,13 @@ export function buildPanelModel(
   if (nvrs.length > 0) {
     const healthy = nvrs.every((nvr) => nvr.healthy);
     headerMetrics.push({
-      label: "NVR Health",
-      value: healthy ? "Healthy" : "Attention",
+      label: t("metric.nvrHealth"),
+      value: healthy ? t("state.healthy") : t("state.attention"),
       tone: healthy ? "success" : "warning",
     });
   }
 
-  const vtoHeaderMetric = buildVtoHeaderMetric(vtos);
+  const vtoHeaderMetric = buildVtoHeaderMetric(vtos, t);
   if (vtoHeaderMetric) {
     headerMetrics.push(vtoHeaderMetric);
   }
@@ -481,16 +469,17 @@ export function buildPanelModel(
         camera.roomLabel,
         camera.deviceKind,
         lookbackMs,
+        t,
       ),
     ),
     ...vtos.flatMap((entry) =>
-      collectVtoEvents(hass, entry.deviceId, entry.label, entry.roomLabel, lookbackMs),
+      collectVtoEvents(hass, entry.deviceId, entry.label, entry.roomLabel, lookbackMs, t),
     ),
   ].sort((left, right) => right.timestamp - left.timestamp);
 
   const contextByDeviceId = buildEventContextLookup(cameras, nvrs, vtos);
   const bridgeTimeline = bridgeEvents
-    ? bridgeEventsToTimeline(bridgeEvents, contextByDeviceId, lookbackMs)
+    ? bridgeEventsToTimeline(bridgeEvents, contextByDeviceId, lookbackMs, t)
     : [];
   const eventFeed = filterTimelineForSelection(
     mergeTimelineEvents(bridgeTimeline, syntheticTimeline),
@@ -499,8 +488,9 @@ export function buildPanelModel(
   const timeline = eventFeed.slice(0, config.max_events ?? 14);
 
   return {
-    title: config.title ?? "DahuaBridge Surveillance",
-    subtitle: config.subtitle ?? "Full-panel command center",
+    language,
+    title: config.title ?? t("app.title"),
+    subtitle: config.subtitle ?? t("app.subtitle"),
     headerMetrics,
     cameras,
     nvrs,
@@ -512,7 +502,7 @@ export function buildPanelModel(
     selectedCamera,
     selectedVto,
     selection,
-    sidebarItems: buildSidebarItems(cameras, nvrs, vtos, selection),
+    sidebarItems: buildSidebarItems(cameras, nvrs, vtos, selection, t),
   };
 }
 
@@ -520,6 +510,7 @@ function buildCameraViewModel(
   camera: CameraDeviceModel,
   browserBridgeUrl: string | null,
   todayEventSummary: PanelTodayEventSummaryModel | null,
+  t: Localizer,
 ): CameraViewModel {
   const aux = buildCameraAuxViewModel(camera.capabilities.aux ?? null, browserBridgeUrl);
   const recording = buildCameraRecordingViewModel(
@@ -534,7 +525,7 @@ function buildCameraViewModel(
   return {
     type: "camera",
     deviceKind: camera.kind,
-    kindLabel: camera.kind === "ipc" ? "IPC Camera" : "NVR Channel",
+    kindLabel: camera.kind === "ipc" ? t("kind.ipcCamera") : t("kind.nvrChannel"),
     deviceId: camera.deviceId,
     rootDeviceId: camera.rootDeviceId,
     channelNumber: camera.kind === "nvr_channel" ? camera.channelNumber : null,
@@ -548,8 +539,8 @@ function buildCameraViewModel(
     eventsUrl: rewriteBridgeUrl(camera.eventsUrl, browserBridgeUrl),
     snapshotUrl: rewriteBridgeUrl(camera.media.snapshotUrl, browserBridgeUrl),
     captureSnapshotUrl: rewriteBridgeUrl(camera.media.capture?.snapshotUrl ?? null, browserBridgeUrl),
-    stream: buildCameraStreamViewModel(camera, browserBridgeUrl),
-    detections: buildDetectionBadges(camera),
+    stream: buildCameraStreamViewModel(camera, browserBridgeUrl, t),
+    detections: buildDetectionBadges(camera, t),
     supportsPtz: camera.capabilities.ptz?.supported === true,
     supportsPtzPan: camera.capabilities.ptz?.pan === true,
     supportsPtzTilt: camera.capabilities.ptz?.tilt === true,
@@ -589,12 +580,8 @@ function buildCameraViewModel(
     audioCodec: camera.media.audioCodec,
     microphoneAvailable: camera.media.audioCodec.trim().length > 0,
     speakerAvailable: camera.capabilities.audio.playback.supported,
-    audioMuted: true,
     audioMuteSupported: camera.media.audioCodec.trim().length > 0,
-    audioMuteActionUrl: null,
     validationNotes: [...camera.capabilities.validationNotes],
-    audioControlAuthority: camera.diagnostics.controlAudioAuthority,
-    audioControlSemantic: camera.diagnostics.controlAudioSemantic,
     nvrConfigWritable: camera.diagnostics.nvrConfigWritable,
     nvrConfigReason: camera.diagnostics.nvrConfigReason,
     directIPCConfigured: camera.diagnostics.directIPCConfigured === true,
@@ -695,6 +682,7 @@ function buildCameraRecordingViewModel(
 function buildCameraStreamViewModel(
   camera: { media: CameraDeviceModel["media"] },
   browserBridgeUrl: string | null,
+  t: Localizer = createLocalizer("en"),
 ): CameraStreamViewModel {
   return {
     available: camera.media.streamAvailable,
@@ -716,7 +704,7 @@ function buildCameraStreamViewModel(
     profiles: Object.entries(camera.media.profiles)
       .map(([key, profile]) => ({
         key,
-        name: streamProfileDisplayName(key, profile.name),
+        name: streamProfileDisplayName(key, profile.name, t),
         streamUrl: rewriteBridgeUrl(profile.streamUrl, browserBridgeUrl),
         localMjpegUrl: rewriteBridgeUrl(profile.localMjpegUrl, browserBridgeUrl),
         localHlsUrl: rewriteBridgeUrl(profile.localHlsUrl, browserBridgeUrl),
@@ -740,14 +728,18 @@ function buildCameraStreamViewModel(
   };
 }
 
-function streamProfileDisplayName(key: string, fallback: string | null): string {
+function streamProfileDisplayName(
+  key: string,
+  fallback: string | null,
+  t: Localizer = createLocalizer("en"),
+): string {
   switch (key.trim().toLowerCase()) {
     case "quality":
     case "default":
-      return "Quality (Main Stream)";
+      return t("profile.quality");
     case "stable":
     case "substream":
-      return "Stable (Substream)";
+      return t("profile.stable");
     default:
       return fallback?.trim() || key.trim();
   }
@@ -770,12 +762,13 @@ function buildNvrViewModel(
   nvr: DeviceNvrModel,
   browserBridgeUrl: string | null,
   todayEventSummary: PanelTodayEventSummaryModel | null,
+  t: Localizer,
 ): NvrViewModel {
   const usedBytesTotal = sumNullable(nvr.drives.map((drive) => drive.usedBytes));
   const rooms = nvr.roomGroups.map((roomGroup) => ({
     label: roomGroup.label,
-    channels: roomGroup.channels
-      .map((channel) => buildCameraViewModel(channel, browserBridgeUrl, todayEventSummary))
+      channels: roomGroup.channels
+      .map((channel) => buildCameraViewModel(channel, browserBridgeUrl, todayEventSummary, t))
       .sort(compareCameraViewModels),
   }));
 
@@ -791,16 +784,26 @@ function buildNvrViewModel(
     storageUsedPercent: nvr.storageUsedPercent,
     storageText:
       usedBytesTotal !== null && nvr.totalBytes !== null
-        ? `${formatBytes(usedBytesTotal)} / ${formatBytes(nvr.totalBytes)} used${
-            nvr.storageUsedPercent !== null ? ` (${Math.round(nvr.storageUsedPercent)}%)` : ""
-          }`
+        ? nvr.storageUsedPercent !== null
+          ? t("storage.summaryUsedPercent", {
+              used: formatBytes(usedBytesTotal),
+              total: formatBytes(nvr.totalBytes),
+              percent: Math.round(nvr.storageUsedPercent),
+            })
+          : t("storage.summaryUsed", {
+              used: formatBytes(usedBytesTotal),
+              total: formatBytes(nvr.totalBytes),
+            })
         : nvr.totalBytes !== null
-          ? `${formatBytes(nvr.totalBytes)} total`
+          ? t("storage.total", { value: formatBytes(nvr.totalBytes) })
           : nvr.storageUsedPercent !== null
-            ? `${Math.round(nvr.storageUsedPercent)}% used`
+            ? t("storage.percentUsed", { value: Math.round(nvr.storageUsedPercent) })
           : nvr.drives.length > 0
-            ? `${nvr.drives.length} drives`
-            : "Storage unknown",
+            ? t("storage.driveCount", {
+                count: nvr.drives.length,
+                unit: pluralUnit(nvr.drives.length, "unit.drive", "unit.drives", t),
+              })
+            : t("storage.unknown"),
     recordingActive: nvr.recordingActive,
     healthy: nvr.healthy,
     nvrConfigWritable: nvr.diagnostics.nvrConfigWritable,
@@ -830,25 +833,23 @@ function buildCameraArchiveViewModel(
   archive: CameraArchiveCapabilities,
   browserBridgeUrl: string | null,
 ): CameraArchiveViewModel | null {
-  if (!archive.supported && !archive.search.supported && !archive.playback.supported) {
+  if (!archive.supported && !archive.smdIvsSearch.supported && !archive.chunkSearch.supported) {
     return null;
   }
 
   return {
     supported: archive.supported,
-    searchUrl: rewriteBridgeUrl(archive.search.url, browserBridgeUrl),
     smdIvsUrl: rewriteBridgeUrl(archive.smdIvsSearch.url, browserBridgeUrl),
     chunksUrl: rewriteBridgeUrl(archive.chunkSearch.url, browserBridgeUrl),
-    playbackUrl: rewriteBridgeUrl(archive.playback.url, browserBridgeUrl),
-    coverageUrl: rewriteBridgeUrl(archive.coverage.url, browserBridgeUrl),
-    channel: archive.search.channel ?? archive.smdIvsSearch.channel ?? archive.chunkSearch.channel ?? archive.playback.channel,
-    defaultLimit: archive.search.defaultLimit,
+    channel: archive.smdIvsSearch.channel ?? archive.chunkSearch.channel,
+    defaultLimit: archive.smdIvsSearch.defaultLimit || archive.chunkSearch.defaultLimit,
   };
 }
 
 function buildVtoViewModel(
   vto: DeviceVtoModel,
   browserBridgeUrl: string | null,
+  t: Localizer,
 ): VtoViewModel {
   const firstLock = vto.locks[0];
   const locks = vto.locks.map((lock) => buildVtoLockViewModel(lock, browserBridgeUrl));
@@ -866,7 +867,7 @@ function buildVtoViewModel(
     snapshotUrl: rewriteBridgeUrl(vto.media.snapshotUrl, browserBridgeUrl),
     captureSnapshotUrl: rewriteBridgeUrl(vto.media.capture?.snapshotUrl ?? null, browserBridgeUrl),
     streamAvailable: vto.media.streamAvailable,
-    stream: buildCameraStreamViewModel(vto, browserBridgeUrl),
+    stream: buildCameraStreamViewModel(vto, browserBridgeUrl, t),
     bridgeRecordingActive: vto.media.capture?.recordingActive === true,
     recordingStartUrl: rewriteBridgeUrl(
       vto.media.capture?.startRecordingUrl ?? null,
@@ -887,14 +888,11 @@ function buildVtoViewModel(
     accessActive: vto.accessActive,
     tamper: vto.tamper,
     callState: vto.callState,
-    callStateText: vto.callStateText,
+    callStateText: callStateLabel(vto.callState, t),
     lastCallSource: vto.lastCallSource,
     lastCallStartedAt: vto.lastCallStartedAt,
     lastCallEndedAt: vto.lastCallEndedAt,
     lastCallDuration: String(vto.lastCallDurationSeconds ?? 0),
-    outputVolume: vto.outputVolume,
-    inputVolume: vto.inputVolume,
-    muted: vto.muted,
     autoRecordEnabled: vto.autoRecordEnabled,
     answerButtonEntityId: vto.answerButtonEntityId,
     answerActionUrl: rewriteBridgeUrl(vto.intercom?.answerUrl ?? null, browserBridgeUrl),
@@ -905,21 +903,6 @@ function buildVtoViewModel(
     unlockButtonEntityId: firstLock?.unlockButtonEntityId ?? "",
     unlockActionUrl: rewriteBridgeUrl(firstLock?.unlockActionUrl ?? null, browserBridgeUrl),
     hasUnlockButtonEntity: firstLock?.hasUnlockButtonEntity ?? false,
-    outputVolumeEntityId: vto.outputVolumeEntityId,
-    outputVolumeActionUrl: rewriteBridgeUrl(
-      vto.intercom?.outputVolumeUrl ?? null,
-      browserBridgeUrl,
-    ),
-    hasOutputVolumeEntity: vto.hasOutputVolumeEntity,
-    inputVolumeEntityId: vto.inputVolumeEntityId,
-    inputVolumeActionUrl: rewriteBridgeUrl(
-      vto.intercom?.inputVolumeUrl ?? null,
-      browserBridgeUrl,
-    ),
-    hasInputVolumeEntity: vto.hasInputVolumeEntity,
-    mutedEntityId: vto.mutedEntityId,
-    mutedActionUrl: rewriteBridgeUrl(vto.intercom?.muteUrl ?? null, browserBridgeUrl),
-    hasMutedEntity: vto.hasMutedEntity,
     autoRecordEntityId: vto.autoRecordEntityId,
     autoRecordActionUrl: rewriteBridgeUrl(
       vto.intercom?.recordingUrl ?? null,
@@ -951,9 +934,6 @@ function buildVtoViewModel(
       bridgeAudioUplinkSupported: vto.vtoCapabilities.bridgeAudioUplinkSupported,
       bridgeAudioOutputSupported: vto.vtoCapabilities.bridgeAudioOutputSupported,
       externalAudioExportSupported: vto.vtoCapabilities.externalAudioExportSupported,
-      outputVolumeSupported: vto.vtoCapabilities.outputVolumeSupported,
-      inputVolumeSupported: vto.vtoCapabilities.inputVolumeSupported,
-      muteSupported: vto.vtoCapabilities.muteSupported,
       recordingSupported: vto.vtoCapabilities.recordingSupported,
       talkbackSupported: vto.vtoCapabilities.talkbackSupported,
       fullCallAcceptanceSupported: vto.vtoCapabilities.fullCallAcceptanceSupported,
@@ -1009,11 +989,25 @@ function buildVtoAlarmViewModel(
   };
 }
 
+function callStateLabel(callState: VtoCallState, t: Localizer): string {
+  switch (callState) {
+    case "active":
+      return t("state.activeCall");
+    case "ringing":
+      return t("state.ringing");
+    case "offline":
+      return t("state.offline");
+    case "idle":
+      return t("state.idle");
+  }
+}
+
 function buildVtoViewModels(
   hass: HomeAssistant,
   vtos: DeviceVtoModel[],
   overrides?: NonNullable<SurveillancePanelCardConfig["vto"]>,
   browserBridgeUrl?: string | null,
+  t: Localizer = createLocalizer("en"),
 ): VtoViewModel[] {
   const preferredVtoId = stringValue(overrides?.device_id);
   const ordered = [...vtos].sort((left, right) => {
@@ -1029,7 +1023,7 @@ function buildVtoViewModels(
   });
 
   return ordered.map((vto) => {
-    const viewModel = buildVtoViewModel(vto, browserBridgeUrl ?? null);
+    const viewModel = buildVtoViewModel(vto, browserBridgeUrl ?? null, t);
     if (!preferredVtoId || vto.deviceId !== preferredVtoId) {
       return viewModel;
     }
@@ -1040,15 +1034,6 @@ function buildVtoViewModels(
       unlockButtonEntityId: overrides?.lock_button_entity ?? viewModel.unlockButtonEntityId,
       hasUnlockButtonEntity:
         hass.states[overrides?.lock_button_entity ?? viewModel.unlockButtonEntityId] !== undefined,
-      outputVolumeEntityId: overrides?.output_volume_entity ?? viewModel.outputVolumeEntityId,
-      hasOutputVolumeEntity:
-        hass.states[overrides?.output_volume_entity ?? viewModel.outputVolumeEntityId] !== undefined,
-      inputVolumeEntityId: overrides?.input_volume_entity ?? viewModel.inputVolumeEntityId,
-      hasInputVolumeEntity:
-        hass.states[overrides?.input_volume_entity ?? viewModel.inputVolumeEntityId] !== undefined,
-      mutedEntityId: overrides?.muted_entity ?? viewModel.mutedEntityId,
-      hasMutedEntity:
-        hass.states[overrides?.muted_entity ?? viewModel.mutedEntityId] !== undefined,
       autoRecordEntityId: overrides?.auto_record_entity ?? viewModel.autoRecordEntityId,
       hasAutoRecordEntity:
         hass.states[overrides?.auto_record_entity ?? viewModel.autoRecordEntityId] !== undefined,
@@ -1076,6 +1061,7 @@ function buildSidebarItems(
   nvrs: NvrViewModel[],
   vtos: VtoViewModel[],
   selection: PanelSelection,
+  t: Localizer = createLocalizer("en"),
 ): SidebarItem[] {
   const items: SidebarItem[] = [];
   const nvrDeviceIds = new Set(nvrs.map((nvr) => nvr.deviceId));
@@ -1084,17 +1070,17 @@ function buildSidebarItems(
     items.push({
       id: vto.deviceId,
       label: vto.label,
-      secondary: "Door Station",
+      secondary: t("kind.doorStation"),
       kind: "vto",
       selected: selection.kind === "vto" && selection.deviceId === vto.deviceId,
       highlighted: vto.callState === "ringing" || vto.callState === "active",
-      badge: vto.callState === "ringing" ? "Ringing" : undefined,
+      badge: vto.callState === "ringing" ? t("state.ringing") : undefined,
     });
     if (vto.lockCount > 0) {
       items.push({
         id: `${vto.deviceId}:lock`,
-        label: `${vto.label} Lock`,
-        secondary: "Accessory",
+        label: `${vto.label} ${t("unit.lock")}`,
+        secondary: t("kind.doorStation"),
         kind: "accessory",
         selected: false,
         highlighted: false,
@@ -1103,12 +1089,12 @@ function buildSidebarItems(
     if (vto.alarmCount > 0 || vto.tamper) {
       items.push({
         id: `${vto.deviceId}:alarm`,
-        label: `${vto.label} Alarm`,
-        secondary: "Accessory",
+        label: `${vto.label} ${t("unit.alarm")}`,
+        secondary: t("kind.doorStation"),
         kind: "accessory",
         selected: false,
         highlighted: vto.tamper,
-        badge: vto.tamper ? "Tamper" : undefined,
+        badge: vto.tamper ? t("event.tamper") : undefined,
       });
     }
   }
@@ -1121,7 +1107,7 @@ function buildSidebarItems(
       kind: "nvr",
       selected: selection.kind === "nvr" && selection.deviceId === nvr.deviceId,
       highlighted: !nvr.healthy,
-      badge: !nvr.healthy ? "Alert" : undefined,
+      badge: !nvr.healthy ? t("unit.alert") : undefined,
     });
     for (const room of nvr.rooms) {
       for (const channel of room.channels) {
@@ -1310,7 +1296,10 @@ function buildEventContextLookup(
   return contextByDeviceId;
 }
 
-function buildVtoHeaderMetric(vtos: VtoViewModel[]): HeaderMetric | null {
+function buildVtoHeaderMetric(
+  vtos: VtoViewModel[],
+  t: Localizer = createLocalizer("en"),
+): HeaderMetric | null {
   if (vtos.length === 0) {
     return null;
   }
@@ -1322,7 +1311,7 @@ function buildVtoHeaderMetric(vtos: VtoViewModel[]): HeaderMetric | null {
   if (vtos.length === 1) {
     const vto = vtos[0]!;
     return {
-      label: "VTO State",
+      label: t("metric.doorStation"),
       value: vto.callStateText,
       tone:
         vto.callState === "active"
@@ -1336,13 +1325,13 @@ function buildVtoHeaderMetric(vtos: VtoViewModel[]): HeaderMetric | null {
   }
 
   return {
-    label: "Door Stations",
+    label: t("sidebar.doorStations"),
     value:
       ringingCount > 0
-        ? `${ringingCount} ringing`
+        ? `${ringingCount} ${t("state.ringing").toLowerCase()}`
         : activeCount > 0
-          ? `${activeCount} active`
-          : `${onlineCount}/${vtos.length} online`,
+          ? `${activeCount} ${t("state.active").toLowerCase()}`
+          : `${onlineCount}/${vtos.length} ${t("state.online").toLowerCase()}`,
     tone:
       ringingCount > 0
         ? "warning"
@@ -1374,24 +1363,27 @@ function filterTimelineForSelection(
   );
 }
 
-function buildDetectionBadges(camera: NvrChannelModel | IpcModel): DetectionBadge[] {
+function buildDetectionBadges(
+  camera: NvrChannelModel | IpcModel,
+  t: Localizer = createLocalizer("en"),
+): DetectionBadge[] {
   const badges: DetectionBadge[] = [];
   if (camera.detections.motion) {
-    badges.push({ key: "motion", label: "Motion", icon: "mdi:motion-sensor", tone: "warning" });
+    badges.push({ key: "motion", label: t("event.motion"), icon: "mdi:motion-sensor", tone: "warning" });
   }
   if (camera.detections.human) {
-    badges.push({ key: "human", label: "Human", icon: "mdi:account", tone: "info" });
+    badges.push({ key: "human", label: t("event.human"), icon: "mdi:account", tone: "info" });
   }
   if (camera.detections.vehicle) {
-    badges.push({ key: "vehicle", label: "Vehicle", icon: "mdi:car", tone: "info" });
+    badges.push({ key: "vehicle", label: t("event.vehicle"), icon: "mdi:car", tone: "info" });
   }
   if (camera.detections.tripwire) {
-    badges.push({ key: "tripwire", label: "Tripwire", icon: "mdi:vector-line", tone: "warning" });
+    badges.push({ key: "tripwire", label: t("event.tripwire"), icon: "mdi:vector-line", tone: "warning" });
   }
   if (camera.detections.intrusion) {
     badges.push({
       key: "intrusion",
-      label: "Intrusion",
+      label: t("event.intrusion"),
       icon: "mdi:shield-alert",
       tone: "critical",
     });

@@ -148,3 +148,11 @@ func TestBuildNativeCatalogFlattensIntercomSummaryIntoStateInfo(t *testing.T) {
 		t.Fatalf("expected bridge_forwarded_packets to be preserved, got %#v", info["bridge_forwarded_packets"])
 	}
 }
+
+func TestBuildNativeCatalogIncludesMetaBaseURL(t *testing.T) {
+	catalog := BuildNativeCatalog(nil, nil, " http://bridge.local:9205/ ")
+
+	if catalog.Meta.BaseURL != "http://bridge.local:9205" {
+		t.Fatalf("expected meta base url to be normalized, got %q", catalog.Meta.BaseURL)
+	}
+}

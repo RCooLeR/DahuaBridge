@@ -70,6 +70,7 @@ The integration registers:
 
 ```text
 /api/camera_proxy/{entity_id}/timeframe
+/api/camera_proxy/{entity_id}/timeframe/
 ```
 
 This endpoint accepts Dahua-style timeframe query parameters such as:
@@ -88,6 +89,19 @@ Flow:
 5. Stream the bridge MJPEG response back to Home Assistant.
 
 Naive Dahua-style timestamps are sent to the bridge as NVR wall-clock time. ISO timestamps with a timezone are converted to UTC ISO strings for playback requests.
+
+The integration does not build Dahua RTSP URLs itself. The selected bridge MJPEG endpoint resolves the playback session inside the bridge media layer, and that bridge path requests a credentialed RTSP input from the runtime. The bridge RTSP builder keeps Dahua's required query order:
+
+```text
+rtsp://user:pass@host:554/cam/playback?channel=5&subtype=0&starttime=2026_05_04_04_30_00&endtime=2026_05_04_05_00_00
+```
+
+The endpoint accepts the same authentication styles as the camera proxy path:
+
+- a Home Assistant signed path using `authSig`
+- the camera entity access token using `token`
+
+Signed `authSig` URLs are short-lived and include the exact path plus non-safe query parameters in the signature. If you add, remove, or reorder query parameters after signing, generate a new signed URL.
 
 ## Boundaries
 

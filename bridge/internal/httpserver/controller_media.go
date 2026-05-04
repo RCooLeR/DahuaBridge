@@ -21,7 +21,15 @@ import (
 func (c *controller) registerCatalogRoutes(router chi.Router) {
 	router.Get("/api/v1/home-assistant/native/catalog", func(w http.ResponseWriter, r *http.Request) {
 		includeCredentials := r.URL.Query().Get("include_credentials") == "true"
-		writeJSON(w, http.StatusOK, ha.BuildNativeCatalog(c.probes.List(), c.snapshots.ListStreams(includeCredentials)))
+		writeJSON(
+			w,
+			http.StatusOK,
+			ha.BuildNativeCatalog(
+				c.probes.List(),
+				c.snapshots.ListStreams(includeCredentials),
+				nativeCatalogBaseURL(c.snapshots.AdminSettings()),
+			),
+		)
 	})
 	router.Get("/api/v1/streams", func(w http.ResponseWriter, r *http.Request) {
 		includeCredentials := r.URL.Query().Get("include_credentials") == "true"
@@ -48,6 +56,18 @@ func (c *controller) registerCatalogRoutes(router chi.Router) {
 		}
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "stream not found"})
 	})
+}
+
+func nativeCatalogBaseURL(settings map[string]any) string {
+	homeAssistant, ok := settings["home_assistant"].(map[string]any)
+	if !ok {
+		return ""
+	}
+	value, ok := homeAssistant["public_base_url"].(string)
+	if !ok {
+		return ""
+	}
+	return strings.TrimRight(strings.TrimSpace(value), "/")
 }
 
 func (c *controller) registerMediaRoutes(router chi.Router) {

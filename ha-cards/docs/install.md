@@ -1,8 +1,9 @@
 # Card Install
 
-The cards are distributed as a Lovelace JavaScript bundle built from the `ha-cards/` workspace.
+The HA cards are distributed as one Lovelace JavaScript bundle built from the
+`ha-cards/` workspace.
 
-## 1. Build The Bundle
+## Build
 
 From `ha-cards/`:
 
@@ -13,38 +14,38 @@ npm run build
 
 Build output:
 
-- `dist/dahuabridge-surveillance-panel.js`
+```text
+dist/dahuabridge-surveillance-panel.js
+```
 
-That single bundle registers both custom cards.
+That single bundle registers both:
 
-## 2. Copy The Bundle Into Home Assistant
+- `custom:dahuabridge-surveillance-panel`
+- `custom:dahuabridge-surveillance-tile`
 
-Typical manual install path:
+## Manual Home Assistant Install
+
+Copy the bundle to a Home Assistant `www` path, for example:
 
 ```text
 /config/www/dahuabridge/dahuabridge-surveillance-panel.js
 ```
 
-Typical Lovelace resource URL:
+Add this Lovelace resource:
 
 ```text
 /local/dahuabridge/dahuabridge-surveillance-panel.js
 ```
 
-## 3. Add A Card
-
-Available types:
-
-- `custom:dahuabridge-surveillance-panel`
-- `custom:dahuabridge-surveillance-tile`
+Then add either custom card type to a dashboard.
 
 ## Requirements
 
-The supported setup is:
+The supported order is:
 
-1. run the Go bridge
-2. install the Home Assistant integration
-3. let the integration create the underlying devices and entities
-4. add cards on top of those entities
+1. Run the DahuaBridge Go bridge.
+2. Install the DahuaBridge Home Assistant integration.
+3. Let the integration create devices, entities, attributes, and bridge action URLs.
+4. Build and add the Lovelace card bundle.
 
-The cards are not a replacement for the integration.
+The cards are not a replacement for the bridge or integration.
