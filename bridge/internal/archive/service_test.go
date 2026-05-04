@@ -553,6 +553,12 @@ func TestServiceRefreshActiveClipAssetsClearsMissingClip(t *testing.T) {
 }
 
 func TestServiceEnrichRecordingsAppliesStoredAssetStates(t *testing.T) {
+	previousLocal := time.Local
+	time.Local = time.FixedZone("EEST", 3*60*60)
+	defer func() {
+		time.Local = previousLocal
+	}()
+
 	tempDir := t.TempDir()
 	service, err := New(config.ArchiveConfig{
 		Enabled:      true,
@@ -904,6 +910,12 @@ func TestSQLiteStoreSearchRecordingsFiltersEventBeforeLimit(t *testing.T) {
 }
 
 func TestServiceArchiveCoverageUsesIndexedFileChunks(t *testing.T) {
+	previousLocal := time.Local
+	time.Local = time.FixedZone("EEST", 3*60*60)
+	defer func() {
+		time.Local = previousLocal
+	}()
+
 	tempDir := t.TempDir()
 	service, err := New(config.ArchiveConfig{
 		Enabled:      true,
