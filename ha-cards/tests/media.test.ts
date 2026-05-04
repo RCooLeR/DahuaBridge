@@ -447,4 +447,20 @@ describe("camera media helpers", () => {
       "rtsp://user:pass@192.0.2.10:554/cam/playback?channel=4&subtype=1&starttime=2026_05_01_10_15_30&endtime=2026_05_01_10_45_30",
     );
   });
+
+  it("omits RTSP playback endtime when direct archive playback is open ended", () => {
+    const start = new Date(2026, 4, 4, 4, 30, 0);
+
+    expect(
+      buildRtspPlaybackUrl({
+        streamUrl: "rtsp://user:pass@192.0.2.10:554/cam/realmonitor?channel=1&subtype=0",
+        channel: 1,
+        subtype: 0,
+        seekTime: start.toISOString(),
+        endTime: null,
+      }),
+    ).toBe(
+      "rtsp://user:pass@192.0.2.10:554/cam/playback?channel=1&subtype=0&starttime=2026_05_04_04_30_00",
+    );
+  });
 });

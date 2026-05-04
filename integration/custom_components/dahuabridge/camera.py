@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from functools import partial
+from inspect import isawaitable
 from typing import Any
 
 import voluptuous as vol
@@ -237,17 +238,33 @@ class DahuaBridgeCamera(DahuaBridgeEntity, Camera):
         if not source.lower().startswith("rtsp://"):
             raise HomeAssistantError("Native playback source must be an RTSP URL")
 
+        changed = self._native_playback_source != source
         self._native_playback_source = source
+        if changed:
+            await self._reset_cached_ha_stream()
         self._write_state_if_added()
 
     async def async_clear_native_playback_source(self) -> None:
         if not self._native_playback_source:
             return
         self._native_playback_source = None
+        await self._reset_cached_ha_stream()
         self._write_state_if_added()
 
     async def _placeholder_logo_bytes(self) -> bytes | None:
         return await async_placeholder_logo_bytes(self.hass)
+
+    async def _reset_cached_ha_stream(self) -> None:
+        stream = getattr(self, "stream", None)
+        if stream is None:
+            return
+        self.stream = None
+        stop = getattr(stream, "stop", None)
+        if not callable(stop):
+            return
+        result = stop()
+        if isawaitable(result):
+            await result
 
     def _write_state_if_added(self) -> None:
         write_state = getattr(self, "async_write_ha_state", None)

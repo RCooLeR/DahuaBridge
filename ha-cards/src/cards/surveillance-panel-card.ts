@@ -55,7 +55,6 @@ import {
 import {
     archiveCurrentTimeOfDaySecond,
     archiveDefaultTimeframeEndTime,
-    buildArchiveTimeframeProxyPath,
     buildArchiveTimeframeSnapshotProxyPath,
     archiveMaxSecondForDate,
     dateRangeForArchiveDay,
@@ -2832,15 +2831,25 @@ export class DahuaBridgeSurveillancePanelCard
         recording: NvrArchiveRecordingModel,
     ): Promise<void> {
         const archiveSource = this.resolveArchiveSource(model);
-        const nativeEventOnly = isArchiveEventRecording(recording);
-        if (archiveSource && await this.startNativeArchiveEventPlayback(archiveSource, recording)) {
-            return;
-        }
-        if (nativeEventOnly) {
-            if (!archiveSource) {
-                this._errorMessage = this.t()("error.smdPlaybackUnavailable");
+        if (isArchiveEventRecording(recording)) {
+            if (archiveSource) {
+                this.activateArchiveSourceForPlayback(archiveSource);
+                await this.startNativeArchiveEventPlayback(archiveSource, recording);
+                return;
             }
-            return;
+            if (recording.assetPlaybackUrl) {
+                this.playIndexedArchiveRecording(
+                    model,
+                    recording,
+                    null,
+                    null,
+                );
+                return;
+            }
+            if (recording.exportUrl) {
+                await this.launchArchiveClipPlayback(model, recording);
+                return;
+            }
         }
 
         await this.launchArchiveMp4Playback(model, recording);
@@ -3006,6 +3015,33 @@ export class DahuaBridgeSurveillancePanelCard
             recording_id: recording.id,
             playback_url: recording.playbackUrl ? redactUrlForLog(recording.playbackUrl) : null,
         });
+    }
+
+    private activateArchiveSourceForPlayback(archiveSource: CameraViewModel): void {
+        const previousSelection = this._selection;
+        const nextState = selectCameraState(archiveSource);
+        const detailTab =
+            this._detailTab === "events" || this._detailTab === "recordings"
+                ? this._detailTab
+                : nextState.detailTab;
+        const cameraProfile =
+            this._selectedCameraStreamProfile ??
+            defaultSelectedStreamProfileKey(archiveSource.stream) ??
+            null;
+        this.resetSharedSelectionViewState();
+        this.clearVtoSelectionState();
+        this.applySelectionTransition(
+            {
+                ...nextState,
+                detailTab,
+            },
+            {
+                openInspector: true,
+                cameraProfile,
+                cameraSource: "native",
+            },
+        );
+        this.requestUpdate("_selection", previousSelection);
     }
 
     private stopSelectedPlayback(): void {
@@ -3399,7 +3435,7 @@ export class DahuaBridgeSurveillancePanelCard
     private buildNativeArchivePlaybackSource(
         camera: CameraViewModel,
         seekTime: Date,
-        endTime: Date,
+        endTime: Date | null,
         selectedProfileKey: string | null,
         recording?: NvrArchiveRecordingModel,
     ): string | null {
@@ -3419,7 +3455,7 @@ export class DahuaBridgeSurveillancePanelCard
                 channel: camera.channelNumber,
                 subtype: profile?.subtype ?? null,
                 seekTime: seekTime.toISOString(),
-                endTime: endTime.toISOString(),
+                endTime: endTime ? endTime.toISOString() : null,
             });
             if (playbackUrl) {
                 if (rtspUrlHasCredentials(playbackUrl)) {
@@ -3443,48 +3479,30 @@ export class DahuaBridgeSurveillancePanelCard
         const nativeStreamSource = this.buildNativeArchivePlaybackSource(
             camera,
             seekTime,
-            endTime,
+            null,
             selectedProfile?.key ?? null,
         );
         const previousNativeEntityId = this._selectedNativePlayback?.cameraEntityId ?? null;
-        let streamSource: string | null = null;
-        let fallbackStreamSource: string | null = null;
-        let playbackMode: "native" | "timeframe_proxy" = "native";
-        if (nativeStreamSource && await this.setCameraNativePlaybackSource(camera, nativeStreamSource)) {
-            streamSource = nativeStreamSource;
-            fallbackStreamSource = await this.buildArchiveTimeframeProxyUrl(
-                camera,
-                seekTime,
-                endTime,
-                selectedProfile?.key ?? null,
-            );
-            const nextNativeEntityId = camera.cameraEntity?.entity_id?.trim() || camera.cameraEntityId.trim();
-            if (previousNativeEntityId && previousNativeEntityId !== nextNativeEntityId) {
-                void this.clearCameraNativePlaybackSource(previousNativeEntityId);
-            }
-        } else {
-            playbackMode = "timeframe_proxy";
-            void this.clearCameraNativePlaybackSource(previousNativeEntityId);
-            streamSource = await this.buildArchiveTimeframeProxyUrl(
-                camera,
-                seekTime,
-                endTime,
-                selectedProfile?.key ?? null,
-            );
-            if (!streamSource) {
-                this._errorMessage = this.t()("error.historicalUrlUnavailable");
-                this.logMedia("card panel native archive playback unavailable", {
-                    device_id: camera.deviceId,
-                    channel: camera.channelNumber,
-                    seek_time: seekTime.toISOString(),
-                    profile_key: selectedProfile?.key ?? null,
-                    native_stream_source: nativeStreamSource ? redactUrlForLog(nativeStreamSource) : null,
-                });
-                return false;
-            }
-        }
-        if (!streamSource) {
+        const nextNativeEntityId =
+            camera.cameraEntity?.entity_id?.trim() || camera.cameraEntityId.trim() || null;
+        if (!nativeStreamSource) {
+            await this.clearCameraNativePlaybackSource(previousNativeEntityId);
+            this._errorMessage = this.t()("error.historicalUrlUnavailable");
+            this.logMedia("card panel native archive playback unavailable", {
+                device_id: camera.deviceId,
+                channel: camera.channelNumber,
+                seek_time: seekTime.toISOString(),
+                profile_key: selectedProfile?.key ?? null,
+                rtsp_source: null,
+            });
             return false;
+        }
+        if (!await this.setCameraNativePlaybackSource(camera, nativeStreamSource)) {
+            await this.clearCameraNativePlaybackSource(previousNativeEntityId);
+            return false;
+        }
+        if (previousNativeEntityId && previousNativeEntityId !== nextNativeEntityId) {
+            await this.clearCameraNativePlaybackSource(previousNativeEntityId);
         }
 
         this._selectedPlayback = null;
@@ -3493,12 +3511,11 @@ export class DahuaBridgeSurveillancePanelCard
         this._selectedBridgeRecordingPlayback = null;
         this._selectedNativePlayback = createSelectedNativePlaybackState(
             camera,
-            streamSource,
+            nativeStreamSource,
             seekTime,
             endTime,
             seekTime,
             selectedProfile?.key ?? null,
-            fallbackStreamSource,
         );
         this.suppressNextArchiveRefresh();
         this._archiveDate = toDateInputValue(seekTime);
@@ -3511,10 +3528,8 @@ export class DahuaBridgeSurveillancePanelCard
             device_id: camera.deviceId,
             channel: camera.channelNumber,
             seek_time: seekTime.toISOString(),
-            stream_source: redactUrlForLog(streamSource),
-            native_stream_source: nativeStreamSource ? redactUrlForLog(nativeStreamSource) : null,
-            fallback_stream_source: fallbackStreamSource ? redactUrlForLog(fallbackStreamSource) : null,
-            playback_mode: playbackMode,
+            stream_source: redactUrlForLog(nativeStreamSource),
+            playback_mode: "native_rtsp",
         });
         return true;
     }
@@ -3541,48 +3556,30 @@ export class DahuaBridgeSurveillancePanelCard
         const nativeStreamSource = this.buildNativeArchivePlaybackSource(
             camera,
             startTime,
-            endTime,
+            null,
             selectedProfile?.key ?? null,
             recording,
         );
         const previousNativeEntityId = this._selectedNativePlayback?.cameraEntityId ?? null;
-        let streamSource: string | null = null;
-        let fallbackStreamSource: string | null = null;
-        let playbackMode: "native" | "timeframe_proxy" = "native";
-        if (nativeStreamSource && await this.setCameraNativePlaybackSource(camera, nativeStreamSource)) {
-            streamSource = nativeStreamSource;
-            fallbackStreamSource = await this.buildArchiveTimeframeProxyUrl(
-                camera,
-                startTime,
-                endTime,
-                selectedProfile?.key ?? null,
-            );
-            const nextNativeEntityId = camera.cameraEntity?.entity_id?.trim() || camera.cameraEntityId.trim();
-            if (previousNativeEntityId && previousNativeEntityId !== nextNativeEntityId) {
-                void this.clearCameraNativePlaybackSource(previousNativeEntityId);
-            }
-        } else {
-            playbackMode = "timeframe_proxy";
-            void this.clearCameraNativePlaybackSource(previousNativeEntityId);
-            streamSource = await this.buildArchiveTimeframeProxyUrl(
-                camera,
-                startTime,
-                endTime,
-                selectedProfile?.key ?? null,
-            );
-            if (!streamSource) {
-                this._errorMessage = this.t()("error.historicalEventProxyUnavailable");
-                this.logMedia("card panel native event playback unavailable", {
-                    ...this.archiveRecordingLogContext(recording),
-                    device_id: camera.deviceId,
-                    profile_key: selectedProfile?.key ?? null,
-                    native_stream_source: nativeStreamSource ? redactUrlForLog(nativeStreamSource) : null,
-                });
-                return false;
-            }
-        }
-        if (!streamSource) {
+        const nextNativeEntityId =
+            camera.cameraEntity?.entity_id?.trim() || camera.cameraEntityId.trim() || null;
+        if (!nativeStreamSource) {
+            await this.clearCameraNativePlaybackSource(previousNativeEntityId);
+            this._errorMessage = this.t()("error.historicalUrlUnavailable");
+            this.logMedia("card panel native event playback unavailable", {
+                ...this.archiveRecordingLogContext(recording),
+                device_id: camera.deviceId,
+                profile_key: selectedProfile?.key ?? null,
+                rtsp_source: null,
+            });
             return false;
+        }
+        if (!await this.setCameraNativePlaybackSource(camera, nativeStreamSource)) {
+            await this.clearCameraNativePlaybackSource(previousNativeEntityId);
+            return false;
+        }
+        if (previousNativeEntityId && previousNativeEntityId !== nextNativeEntityId) {
+            await this.clearCameraNativePlaybackSource(previousNativeEntityId);
         }
 
         this._selectedPlayback = null;
@@ -3591,12 +3588,11 @@ export class DahuaBridgeSurveillancePanelCard
         this._selectedBridgeRecordingPlayback = null;
         this._selectedNativePlayback = createSelectedNativePlaybackState(
             camera,
-            streamSource,
+            nativeStreamSource,
             recording.startTime,
             recording.endTime,
             recording.startTime,
             selectedProfile?.key ?? null,
-            fallbackStreamSource,
         );
         this.suppressNextArchiveRefresh();
         this._archiveDate = toDateInputValue(startTime);
@@ -3606,27 +3602,11 @@ export class DahuaBridgeSurveillancePanelCard
         this.logMedia("card panel native event playback selected", {
             ...this.archiveRecordingLogContext(recording),
             device_id: camera.deviceId,
-            stream_url: redactUrlForLog(streamSource),
-            native_stream_source: nativeStreamSource ? redactUrlForLog(nativeStreamSource) : null,
-            fallback_stream_source: fallbackStreamSource ? redactUrlForLog(fallbackStreamSource) : null,
-            playback_mode: playbackMode,
+            stream_url: redactUrlForLog(nativeStreamSource),
+            playback_mode: "native_rtsp",
             profile_key: selectedProfile?.key ?? null,
         });
         return true;
-    }
-
-    private async buildArchiveTimeframeProxyUrl(
-        camera: CameraViewModel,
-        startTime: Date,
-        endTime: Date,
-        profileKey: string | null,
-    ): Promise<string | null> {
-        const entityID = (camera.cameraEntityId || camera.cameraEntity?.entity_id || "").trim();
-        if (!entityID || camera.channelNumber === null) {
-            return null;
-        }
-        const proxyPath = buildArchiveTimeframeProxyPath(entityID, startTime, endTime, profileKey);
-        return signHomeAssistantPath(this.hass, proxyPath);
     }
 
     private archiveRecordingLogContext(recording: NvrArchiveRecordingModel): Record<string, unknown> {

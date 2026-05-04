@@ -261,6 +261,28 @@ class CameraCaptureTests(unittest.IsolatedAsyncioTestCase):
             "http://bridge.local:8080/api/v1/media/hls/cam1/stable/index.m3u8",
         )
 
+    async def test_native_playback_source_resets_cached_ha_stream(self) -> None:
+        camera = DahuaBridgeCamera(FakeCoordinator(make_record()), "cam1")
+        playback_url = (
+            "rtsp://user:pass@192.0.2.10:554/cam/playback"
+            "?channel=5&subtype=1&starttime=2026_05_01_10_15_30"
+        )
+        live_stream = FakeCameraStream()
+        camera.stream = live_stream
+
+        await camera.async_set_native_playback_source(playback_url)
+
+        self.assertIsNone(camera.stream)
+        self.assertEqual(live_stream.stop_count, 1)
+
+        playback_stream = FakeCameraStream()
+        camera.stream = playback_stream
+
+        await camera.async_clear_native_playback_source()
+
+        self.assertIsNone(camera.stream)
+        self.assertEqual(playback_stream.stop_count, 1)
+
     async def test_native_playback_source_rejects_non_rtsp_urls(self) -> None:
         camera = DahuaBridgeCamera(FakeCoordinator(make_record()), "cam1")
 
@@ -268,6 +290,14 @@ class CameraCaptureTests(unittest.IsolatedAsyncioTestCase):
             await camera.async_set_native_playback_source(
                 "http://bridge.local:8080/api/v1/media/hls/cam1/stable/index.m3u8"
             )
+
+
+class FakeCameraStream:
+    def __init__(self) -> None:
+        self.stop_count = 0
+
+    async def stop(self) -> None:
+        self.stop_count += 1
 
 
 if __name__ == "__main__":

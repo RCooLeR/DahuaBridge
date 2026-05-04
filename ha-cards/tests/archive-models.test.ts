@@ -96,7 +96,7 @@ describe("archive seek model", () => {
 });
 
 describe("native archive playback model", () => {
-    it("identifies SMD/IVS event rows for timeframe proxy playback", () => {
+    it("identifies SMD/IVS event rows for native playback", () => {
         expect(isArchiveEventRecording({recordKind: "smd_ivs"} as NvrArchiveRecordingModel)).toBe(true);
         expect(isArchiveEventRecording({recordKind: "chunk", type: "Regular"} as NvrArchiveRecordingModel)).toBe(false);
     });
@@ -105,7 +105,7 @@ describe("native archive playback model", () => {
         const camera = {deviceId: "channel-1"} as CameraViewModel;
         const playback = createSelectedNativePlaybackState(
             camera,
-            "/api/camera_proxy/camera.channel_1/timeframe/",
+            "rtsp://user:pass@192.0.2.10:554/cam/playback?channel=1&subtype=0&starttime=2026_05_01_10_00_00",
             "2026-05-01T10:00:00.000Z",
             "2026-05-01T10:30:00.000Z",
             "2026-05-01T10:00:00.000Z",
