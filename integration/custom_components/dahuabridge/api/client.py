@@ -8,40 +8,11 @@ from urllib.parse import urlsplit, urlunsplit
 
 from aiohttp import ClientError, ClientSession
 
-from .const import CATALOG_PATH, STATUS_PATH
+from ..const import CATALOG_PATH, STATUS_PATH
+from .errors import DahuaBridgeAPIError
+from .urls import apply_base_path, is_absolute_target, normalize_bridge_url
 
 _LOGGER = logging.getLogger(__name__)
-
-
-class DahuaBridgeAPIError(Exception):
-    """Raised when the bridge API request fails."""
-
-
-def normalize_bridge_url(raw: str) -> str:
-    value = raw.strip().rstrip("/")
-    parsed = urlsplit(value)
-    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-        raise ValueError("bridge URL must include http:// or https:// and a host")
-    return urlunsplit((parsed.scheme, parsed.netloc, parsed.path.rstrip("/"), "", ""))
-
-
-def _is_absolute_target(target: str) -> bool:
-    parsed = urlsplit(target.strip())
-    return bool(parsed.scheme)
-
-
-def _apply_base_path(base_path: str, target_path: str) -> str:
-    normalized_base = base_path.rstrip("/")
-    normalized_target = target_path or "/"
-    if not normalized_target.startswith("/"):
-        normalized_target = "/" + normalized_target
-    if not normalized_base:
-        return normalized_target
-    if normalized_target == normalized_base or normalized_target.startswith(
-        normalized_base + "/"
-    ):
-        return normalized_target
-    return normalized_base + normalized_target
 
 
 class DahuaBridgeAPI:
@@ -66,7 +37,7 @@ class DahuaBridgeAPI:
             (
                 parsed_base.scheme,
                 parsed_base.netloc,
-                _apply_base_path(parsed_base.path, parsed_target.path),
+                apply_base_path(parsed_base.path, parsed_target.path),
                 parsed_target.query,
                 parsed_target.fragment,
             )
@@ -241,7 +212,7 @@ class DahuaBridgeAPI:
         return payload
 
     def _absolute_url(self, target: str) -> str:
-        if _is_absolute_target(target):
+        if is_absolute_target(target):
             return target
         if not target.startswith("/"):
             target = "/" + target

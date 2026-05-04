@@ -1,123 +1,67 @@
-# Integration Features
+# Feature Summary
 
-This page lists the integration feature set with drill-down by area.
+## Integration Core
 
-## 1. Native Bridge Catalog Consumption
+- UI config flow and options flow.
+- Bridge URL validation through `GET /api/v1/status`.
+- Polling coordinator for `GET /api/v1/home-assistant/native/catalog`.
+- Reverse-proxy-safe bridge URL rewriting.
+- Direct `rtsp://` passthrough when RTSP is selected or used as fallback.
+- English and Ukrainian translations.
+- Integration language option for generated entity/control labels.
+- Diagnostics export with URL-shaped sensitive fields redacted.
 
-The integration consumes:
+## Platforms
 
-- `GET /api/v1/home-assistant/native/catalog`
+- `camera`
+- `binary_sensor`
+- `sensor`
+- `button`
+- `number`
+- `switch`
 
-It does not talk directly to Dahua devices.
+## Cameras
 
-## 2. Config Flow And Options Flow
+- Stream source selection by preferred profile and source.
+- Snapshot fetching through bridge capture metadata.
+- MJPEG frame fallback for camera images.
+- Bridge live clip capture services.
+- Bridge capture/recording attributes.
+- NVR archive search/playback/export attributes.
+- Timeframe MJPEG playback proxy for NVR channel cameras.
 
-The integration provides:
+## State Entities
 
-- initial setup through Home Assistant UI
-- runtime options updates for poll/media preferences
+- Online binary sensor for every catalog record.
+- Boolean state fields as binary sensors.
+- Scalar fields as sensors.
+- Timestamp/device-class/unit classification based on field names.
+- Diagnostic category for metadata-heavy fields.
 
-## 3. Device Grouping
+## Controls
 
-The integration groups Home Assistant entities around the normalized device model from the bridge.
+Controls appear only when the catalog advertises a backing URL.
 
-Examples:
+- Probe root devices.
+- Refresh NVR inventory.
+- VTO answer/hangup/reset/RTP export actions.
+- VTO unlock actions.
+- VTO input/output volume.
+- VTO mute and auto record.
+- Camera output feature toggles for light, warning light, and siren.
 
-- NVR root as recorder device
-- NVR channel as camera-like device
-- IPC as camera device
-- VTO as door station device
+## Boundaries
 
-## 4. Platforms
+The integration does not:
 
-The integration provides these Home Assistant platforms:
+- talk directly to Dahua devices
+- own recorder schedules
+- synthesize unsupported controls
+- delete Home Assistant registry entries
+- download recorder DAV files directly
 
-- camera
-- binary sensor
-- sensor
-- button
-- number
-- switch
+## Related
 
-## 5. Camera Behavior
-
-The integration camera entity provides:
-
-- stream support
-- bridge snapshot fetching
-- stream source resolution from bridge-generated URLs
-- direct `rtsp://` passthrough when the bridge catalog advertises RTSP sources
-- reverse-proxy-safe bridge URL rewriting when the configured bridge base URL includes a path prefix
-- bridge capture metadata in attributes
-- bridge recording state exposure
-- bridge-backed start/stop recording services
-- archive workflow attributes for NVR channels so Home Assistant can discover bridge search, playback, export, and archive coverage endpoints for regular recordings and event-backed recordings such as SMD and IVS
-
-Read more:
-
-- [camera-recording.md](camera-recording.md)
-
-## 6. Binary Sensors
-
-The integration exposes:
-
-- online/connectivity state
-- event-derived boolean state such as motion, human, vehicle, tripwire, intrusion, tamper, doorbell, and call-related state where applicable
-
-## 7. Sensors
-
-The integration exposes:
-
-- scalar diagnostic fields
-- timestamps
-- device and stream metadata
-
-## 8. Buttons
-
-The integration can expose bridge-backed actions such as:
-
-- probe now
-- refresh inventory
-- answer call
-- hang up call
-- reset bridge session
-- enable RTP export
-- disable RTP export
-- unlock outputs
-
-## 9. Numbers
-
-The integration can expose bridge-backed numeric controls such as:
-
-- VTO output volume
-- VTO input volume
-
-## 10. Switches
-
-The integration can expose bridge-backed toggles such as:
-
-- VTO mute
-- VTO auto record
-
-## 11. Diagnostics
-
-The integration supports diagnostics downloads for troubleshooting.
-
-Bridge and archive URLs are redacted from diagnostics payloads.
-
-## 12. Archive Playback And Export
-
-For NVR channel cameras, the integration exposes bridge endpoints that support:
-
-- archive search
-- playback session creation
-- MP4 export through the bridge
-
-This is the supported path for event-backed recordings such as SMD and IVS.
-
-The integration does not depend on direct recorder file transfer for those workflows.
-
-## Related Docs
-
-- [entities-and-controls.md](entities-and-controls.md)
-- [camera-recording.md](camera-recording.md)
+- [How it works](architecture.md)
+- [Entities and controls](entities-and-controls.md)
+- [Camera recording and archive access](camera-recording.md)

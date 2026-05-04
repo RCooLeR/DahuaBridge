@@ -1,108 +1,91 @@
 # Configuration
 
-The integration is configured through the Home Assistant UI.
+All configuration is done through the Home Assistant UI.
 
-## Config Entry Input
+## Bridge URL
 
-The main required value is:
+The bridge URL must be reachable by Home Assistant. It must include `http://` or `https://`.
 
-- bridge URL
-
-This should point to the running bridge, for example:
+Examples:
 
 ```text
 http://bridge-host:9205
+https://ha.example.com/dahuabridge
 ```
 
-The setup flow validates this URL by calling the bridge status endpoint before it creates the config entry.
-
-If Home Assistant reaches the bridge through a reverse proxy path such as `https://ha.example.com/dahuabridge`, use that full public URL. The integration preserves that base path when it rewrites bridge-hosted HTTP links from the catalog.
+Use the reverse-proxy URL if Home Assistant reaches the bridge through a proxy path. The integration uses this configured URL when it rewrites bridge-hosted links from the catalog.
 
 ## Options
 
-The integration currently exposes runtime options for:
+The options flow exposes:
 
 - poll interval
 - preferred video profile
 - preferred video source
+- integration language
 
-Current defaults:
+Defaults:
 
-- poll interval: `15` seconds
-- preferred video profile: `quality`
-- preferred video source: `hls`
-- allowed poll interval range: `5` to `300` seconds
+| Option | Default | Allowed values |
+| --- | --- | --- |
+| Poll interval | `15` seconds | `5` to `300` seconds |
+| Preferred video profile | `quality` | `auto`, `quality`, `stable` |
+| Preferred video source | `hls` | `auto`, `hls`, `mjpeg`, `rtsp` |
+| Integration language | `auto` | `auto`, `en`, `uk` |
 
-## Polling Model
+## Poll Interval
 
-The integration is polling-based.
+The coordinator polls the native catalog. Entity state comes from the latest successful catalog refresh.
 
-It periodically refreshes the bridge-native catalog and updates entities from that data.
-
-This means:
-
-- device behavior is ultimately owned by the bridge
-- entity availability follows the most recent successful catalog refresh
-- repeated bridge snapshot and archive-search requests are still reduced on the bridge side by short caching and in-flight request coalescing
+Changing the interval changes how quickly Home Assistant sees bridge-side state changes. It does not change device-side event handling inside the bridge.
 
 ## Preferred Video Profile
 
-This controls which bridge-provided profile the camera entity prefers when choosing stream-related URLs.
+This controls which bridge profile is preferred when choosing stream URLs.
 
-Examples:
+| Value | Behavior |
+| --- | --- |
+| `auto` | Use the bridge `recommended_profile`, then fallback profiles. |
+| `quality` | Prefer the main/quality profile, then fallback. |
+| `stable` | Prefer the lower-bandwidth stable profile, then fallback. |
 
-- `auto`
-- `quality`
-- `stable`
+Aliases accepted internally:
 
-Behavior:
-
-- `auto` follows the bridge `recommended_profile`
-- `quality` prioritizes the bridge main-stream style profiles
-- `stable` prefers lower-bandwidth bridge-generated variants when available
+- `default` and `main` map to `quality`
+- `substream` and `sub` map to `stable`
 
 ## Preferred Video Source
 
-This controls which generated stream URL type the integration prefers.
+This controls which URL type the camera entity prefers.
 
-Typical choices:
+| Value | Source order |
+| --- | --- |
+| `auto` | HLS, RTSP, MJPEG |
+| `hls` | HLS, RTSP, MJPEG |
+| `mjpeg` | MJPEG, HLS, RTSP |
+| `rtsp` | RTSP, HLS, MJPEG |
 
-- auto
-- HLS
-- MJPEG
-- RTSP where relevant
+HTTP URLs from the bridge are rewritten through the configured bridge URL. Direct `rtsp://` URLs are preserved as-is.
 
-Current option values:
+When `rtsp` is selected, the integration asks the bridge catalog to include stream credentials.
 
-- `auto`
-- `hls`
-- `mjpeg`
-- `rtsp`
+## Integration Language
 
-Behavior:
+This controls labels owned by the integration, including entity names such as camera, online sensors, bridge-generated field names, and bridge-backed controls.
 
-- `hls` is the default and prefers bridge HLS, then falls back to RTSP or MJPEG as needed
-- `mjpeg` prefers bridge MJPEG
-- `rtsp` prefers direct RTSP URLs from the bridge catalog
-- `auto` currently uses the same source ordering as the default path
+| Value | Behavior |
+| --- | --- |
+| `auto` | Use Home Assistant's configured language when it is supported; otherwise use English. |
+| `en` | Use English integration labels. |
+| `uk` | Use Ukrainian integration labels. |
 
-Current source order is:
-
-1. bridge HLS
-2. direct RTSP
-3. bridge MJPEG
-
-RTSP selections keep the direct `rtsp://` URL from the catalog. They are not rewritten into bridge HTTP URLs.
-
-If Home Assistant cannot play the chosen source well in your environment, change this option before changing bridge-side stream modeling.
+Home Assistant's own UI language still controls the surrounding Home Assistant interface. This option exists so integration-generated entity/control labels can be predictable even when Home Assistant is used from multiple browsers or accounts.
 
 ## Diagnostics
 
-The integration supports diagnostics export for support and troubleshooting.
+Diagnostics export includes config-entry details, coordinator state, bridge status, and the native catalog. Sensitive URL-shaped fields are redacted.
 
-Diagnostics redact sensitive bridge and stream URLs where appropriate.
+## Next
 
-## Next Step
-
-- [features.md](features.md)
-- [entities-and-controls.md](entities-and-controls.md)
+- [Entities and controls](entities-and-controls.md)
+- [How it works](architecture.md)

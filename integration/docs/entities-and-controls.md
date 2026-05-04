@@ -1,25 +1,10 @@
 # Entities And Controls
 
-This page explains what the integration creates and which bridge-backed controls appear in Home Assistant.
+Entities are generated from the native catalog. The integration does not hard-code a list of Dahua models.
 
-## Device Model
+## Platforms
 
-The integration follows the bridge-normalized model.
-
-Important mental model:
-
-- NVR root = recorder
-- NVR channel = actual camera-like device
-- IPC = actual camera device
-- VTO = actual door station device
-
-Bridge-side model details:
-
-- [../../bridge/docs/device-and-stream-model.md](../../bridge/docs/device-and-stream-model.md)
-
-## Platform Mapping
-
-The integration registers these Home Assistant platforms:
+The integration registers:
 
 - `camera`
 - `binary_sensor`
@@ -28,82 +13,50 @@ The integration registers these Home Assistant platforms:
 - `number`
 - `switch`
 
-Platform creation is driven by the native catalog, not by hard-coded Dahua model names.
+Each platform receives the same catalog and creates only the entities it can back with current catalog data.
 
-Exact device-kind behavior:
+## Device Model
 
-- `nvr`
-  - no camera entity
-  - gets `Online`
-  - gets scalar and boolean state entities from the root recorder record
-  - gets `Probe Now`
-  - gets `Refresh Inventory`
-- `nvr_channel`
-  - gets `Camera`
-  - gets `Online`
-  - gets event/state binary sensors and scalar sensors
-  - does not get root-only action buttons
-- `nvr_disk`
-  - no camera entity
-  - gets `Online`
-  - gets disk-related binary sensors and scalar sensors surfaced by the bridge
-- `ipc`
-  - gets `Camera`
-  - gets `Online`
-  - gets event/state binary sensors and scalar sensors
-  - gets `Probe Now`
-- `vto`
-  - gets `Camera`
-  - gets `Online`
-  - gets call, doorbell, tamper, access, and intercom-related state entities
-  - gets `Probe Now`
-  - gets VTO/intercom action buttons
-  - gets VTO volume numbers
-  - gets VTO mute and auto-record switches
-- `vto_lock`
-  - no camera entity
-  - gets `Online`
-  - gets lock-related state entities exposed by the bridge
-  - unlock actions are exposed on the VTO root device, not on the lock child record
-- `vto_alarm`
-  - no camera entity
-  - gets `Online`
-  - gets alarm-related binary sensors and scalar sensors if the bridge surfaces them
+The bridge normalizes Dahua devices into records. The integration follows those records.
 
-## Camera
+| Bridge kind | Home Assistant behavior |
+| --- | --- |
+| `nvr` | Recorder device, no camera entity, root state sensors, `Probe Now`, `Refresh Inventory`. |
+| `nvr_channel` | Camera-like child device, camera entity, state sensors, archive attributes. |
+| `nvr_disk` | Disk child device, online/state entities only. |
+| `ipc` | Camera device, camera entity, state sensors, `Probe Now`. |
+| `vto` | Door station, camera entity, call/intercom state, intercom buttons, volume numbers, switches. |
+| `vto_lock` | Lock child record, online/state entities only; unlock buttons live on the VTO root. |
+| `vto_alarm` | Alarm child record, online/state entities when advertised. |
 
-Camera entities are created only for records that contain a `stream` object in the native catalog.
+## Cameras
 
-That currently means:
+A camera entity is created for any catalog record that has a stream section.
 
-- NVR channels
-- IPC cameras
-- VTO devices
+Unique ID:
 
-The camera entity can expose:
+```text
+<device_id>_camera
+```
 
-- stream support
-- bridge snapshot path
+The camera can expose:
+
+- stream support when a usable stream URL is resolved
+- snapshot fetching
 - bridge capture metadata
 - bridge recording state
-- bridge profiles
-- bridge controls
-- bridge features
-- bridge intercom metadata for VTO devices
+- stream profiles
+- controls and feature metadata
+- VTO intercom metadata
+- NVR archive/playback/export URLs for NVR channels
 
-Important notes:
-
-- the entity unique ID is based on `<device_id>_camera`
-- the integration enables stream support only when it can resolve a usable stream source from the preferred profile and preferred source settings
-- entity availability follows successful catalog refresh, not only the last cached record
-- bridge-backed `start_recording` and `stop_recording` services are attached to this camera entity
-
-Useful attributes commonly exposed on the camera:
+Common attributes:
 
 - `recommended_profile`
 - `snapshot_url`
 - `stream_source`
 - `bridge_capture`
+- `bridge_recording_active`
 - `bridge_profiles`
 - `bridge_controls`
 - `bridge_features`
@@ -111,150 +64,140 @@ Useful attributes commonly exposed on the camera:
 - `preferred_video_profile`
 - `preferred_video_source`
 
-For NVR channel cameras, archive workflow attributes can also be exposed:
+NVR channel archive attributes:
 
 - `bridge_archive_smd_ivs_url_template`
 - `bridge_archive_recording_chunks_url_template`
 - `bridge_archive_recordings_url_template`
 - `bridge_archive_export_url`
 - `bridge_playback_sessions_url`
+- `bridge_archive_coverage_url`
 
-Those attributes point to the supported bridge archive APIs for:
-
-- searching SMD/IVS rows
-- searching normal NVR recording chunks
-- exporting matching archive windows to bridge MP4 clips
-- creating playback sessions for HLS, MJPEG, or WebRTC access
-
-`bridge_archive_recordings_url_template` is kept as a compatibility alias for recording chunks. New automations should use the explicit SMD/IVS and recording chunk templates.
+`bridge_archive_recordings_url_template` remains as a compatibility alias for recording chunks. New code should prefer the explicit SMD/IVS and recording chunk attributes.
 
 ## Binary Sensors
 
-Every catalog record gets:
+Every catalog record gets an `Online` binary sensor.
 
-- `Online`
-
-Additional boolean fields are turned into binary sensors from the merged catalog record, which includes:
+Additional boolean fields become binary sensors when they are present in the merged catalog fields:
 
 - device attributes
-- stream fields
+- selected stream fields
 - state info
 
-Typical boolean sensors include:
+Typical fields:
 
-- online
-- motion
-- human
-- vehicle
-- tripwire
-- intrusion
-- tamper
-- doorbell
-- call-active style states
+- `motion`
+- `human`
+- `vehicle`
+- `tripwire`
+- `intrusion`
+- `tamper`
+- `doorbell`
+- `call`
+- `stream_available`
 
-Behavior details:
-
-- event-derived fields such as motion, human, vehicle, tripwire, intrusion, doorbell, tamper, and call-like states follow bridge state rather than direct device polling from Home Assistant
-- transient event-style binary sensors are treated more conservatively when a device is offline so the integration does not manufacture a misleading live event state
+Transient event fields are exposed only when the bridge state or latest event indicates the field is meaningful.
 
 ## Sensors
 
-Scalar fields from the merged catalog record become normal Home Assistant sensors.
+Scalar fields become sensors.
 
-Typical sensors include:
+Examples:
 
 - call state
 - last call timestamps
 - codec and resolution metadata
 - storage counters
-- other normalized scalar fields from the bridge catalog
+- bridge session counters
 
-Behavior details:
+Field suffix rules:
 
-- fields ending in `_at` are exposed as timestamp sensors
-- fields ending in `_bytes`, `_percent`, `_seconds`, and `_packets` get matching units
-- many metadata sensors are diagnostic-category entities rather than primary user-facing state
+| Suffix | Home Assistant handling |
+| --- | --- |
+| `_at` | Timestamp device class |
+| `_bytes` | `B` unit |
+| `_percent` | `%` unit |
+| `_seconds` | `s` unit |
+| `_packets` | `packets` unit |
+
+Metadata-heavy fields are marked as diagnostic entities.
 
 ## Buttons
 
-Button entities are created only when the native catalog advertises a backing bridge URL.
+Buttons are created only when the catalog advertises a backing URL.
 
-Exact button coverage today:
+Current buttons:
 
 - `Probe Now`
-  - created on root devices such as `nvr`, `ipc`, and `vto`
 - `Refresh Inventory`
-  - created only on NVR root devices
 - `Answer Call`
 - `Hang Up Call`
 - `Reset Bridge Session`
 - `Enable RTP Export`
 - `Disable RTP Export`
-  - created on VTO roots when those intercom URLs exist
 - `Unlock 1`, `Unlock 2`, and so on
-  - created on the VTO root for each advertised lock URL
 
-All button presses call the bridge over HTTP and then refresh the catalog.
+Button presses call the bridge and then request a catalog refresh.
 
 ## Numbers
 
-Number entities are currently VTO-only and are created only when the catalog advertises the corresponding URL plus capability flag.
+Numbers are created only when the catalog advertises a backing URL and capability flag.
 
-Current number controls:
+Current numbers:
 
-- output volume
-- input volume
+- VTO output volume
+- VTO input volume
 
-Behavior details:
-
-- range is `0` to `100`
-- mode is a Home Assistant slider
-- writing a value sends a JSON body with `slot` and `level`
+The value range is `0` to `100`. Writes send a JSON body with `slot` and `level`.
 
 ## Switches
 
-Switch entities are currently VTO-only and are created only when the catalog advertises the corresponding URL plus capability flag.
+Switches are created from two sources:
 
-Current switch controls:
+- VTO intercom controls such as mute and auto record
+- supported output features such as light, warning light, and siren
 
-- mute
-- auto record
+Feature switches send bridge payloads such as:
 
-NVR channel audio mute is not exposed here. Bridge output audio is decided at transcode time.
+```json
+{"output": "light", "action": "start"}
+```
 
-## Naming And Unique IDs
+and:
 
-The integration generates stable unique IDs from the bridge device ID plus a field or control key.
+```json
+{"output": "light", "action": "stop"}
+```
 
-Typical patterns:
+NVR channel audio mute is not exposed as a Home Assistant switch. Bridge output audio is decided during capture/transcode.
 
-- camera: `<device_id>_camera`
-- online binary sensor: `<device_id>_online`
-- state binary sensor: `<device_id>_<field>`
-- state sensor: `<device_id>_<field>`
-- button: `<device_id>_<action_key>`
-- number: `<device_id>_<control_key>`
-- switch: `<device_id>_<control_key>`
+## Entity Availability
 
-Home Assistant can still derive different final entity IDs after its own naming and de-duplication rules, so treat these as unique-ID patterns rather than guaranteed visible entity IDs.
+An entity is available when:
 
-## Recording UX Boundary
+- the last coordinator refresh succeeded
+- its backing catalog record still exists
 
-The integration no longer treats NVR manual recording control as the primary recording action for cameras.
+Some control entities also require the device to be online.
 
-Instead:
+The integration does not delete stale Home Assistant registry entries. If a bridge device is permanently removed, remove stale entities manually in Home Assistant.
 
-- bridge-owned capture metadata is surfaced on camera entities
-- bridge-backed start/stop recording services are attached to the camera entity
-- event-backed archive items such as SMD and IVS footage use the bridge playback and export APIs, not direct recorder file download
+## Unique ID Patterns
 
-This is important because device-side NVR circular recording configuration should not be treated as the UI path for ad-hoc clip capture.
+| Entity type | Unique ID pattern |
+| --- | --- |
+| Camera | `<device_id>_camera` |
+| Online binary sensor | `<device_id>_online` |
+| State binary sensor | `<device_id>_<field>` |
+| State sensor | `<device_id>_<field>` |
+| Button | `<device_id>_<action_key>` |
+| Number | `<device_id>_<control_key>` |
+| Switch | `<device_id>_<control_key>` |
 
-## Diagnostics
+Home Assistant may still choose a different visible `entity_id`.
 
-The integration also provides diagnostics export for config entries.
+## Related
 
-## Related Docs
-
-- [features.md](features.md)
-- [camera-recording.md](camera-recording.md)
+- [Camera recording and archive access](camera-recording.md)
+- [How it works](architecture.md)

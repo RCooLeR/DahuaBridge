@@ -1,24 +1,17 @@
-# Integration Documentation
+# Integration Docs
 
-This section documents the Home Assistant custom integration.
+Read these pages in order when you need to understand or operate the Home Assistant integration:
 
-Use these pages in order:
+1. [How it works](architecture.md)
+2. [Install](install.md)
+3. [Configuration](configuration.md)
+4. [Entities and controls](entities-and-controls.md)
+5. [Camera recording and archive access](camera-recording.md)
+6. [Feature summary](features.md)
 
-1. [Install](install.md)
-2. [Configuration](configuration.md)
-3. [Features](features.md)
-4. [Entities And Controls](entities-and-controls.md)
-5. [Camera Recording Behavior](camera-recording.md)
-
-## What This Section Covers
-
-- how the integration is installed
-- how it connects to the bridge
-- what entities it creates
-- what bridge-backed actions it exposes
-- how camera snapshots, archive playback, and recording actions behave
+The short version: Home Assistant configures one bridge URL, polls the bridge-native catalog, and creates entities from records in that catalog. All live stream, snapshot, recording, playback, and control actions go back through bridge URLs advertised by the catalog.
 
 ## Related Docs
 
-- root docs: [../../docs/README.md](../../docs/README.md)
-- bridge docs: [../../bridge/docs/README.md](../../bridge/docs/README.md)
+- [Project docs](../../docs/README.md)
+- [Bridge docs](../../bridge/docs/README.md)

@@ -1,23 +1,31 @@
 # DahuaBridge Home Assistant Integration
 
-This directory contains the Home Assistant custom integration.
+This directory contains the Home Assistant custom integration for DahuaBridge.
 
-It consumes the bridge-native catalog and creates Home Assistant devices and entities.
+The integration does not talk to Dahua devices directly. Home Assistant talks to the bridge, reads the bridge-native catalog, and creates devices, cameras, sensors, and controls from that catalog.
 
-## Start Here
+## Docs
 
-- [integration/docs/README.md](docs/README.md)
+- [How it works](docs/architecture.md)
+- [Install](docs/install.md)
+- [Configuration](docs/configuration.md)
+- [Entities and controls](docs/entities-and-controls.md)
+- [Camera recording and archive access](docs/camera-recording.md)
+- [Feature summary](docs/features.md)
 
-## Most Common Tasks
+## Code Map
 
-- install: [docs/install.md](docs/install.md)
-- configuration and options: [docs/configuration.md](docs/configuration.md)
-- features: [docs/features.md](docs/features.md)
-- entities and controls: [docs/entities-and-controls.md](docs/entities-and-controls.md)
-- camera recording behavior: [docs/camera-recording.md](docs/camera-recording.md)
-- archive playback and export: [docs/camera-recording.md](docs/camera-recording.md)
+- `custom_components/dahuabridge/__init__.py`: config entry setup/unload.
+- `custom_components/dahuabridge/coordinator.py`: catalog polling.
+- `custom_components/dahuabridge/api/`: bridge HTTP client and URL handling.
+- `custom_components/dahuabridge/catalog/`: catalog parsing, stream selection, entity field metadata, and control specs.
+- `custom_components/dahuabridge/localization.py`: English/Ukrainian labels and language resolution.
+- `custom_components/dahuabridge/camera.py`: Home Assistant camera entity.
+- `custom_components/dahuabridge/camera_support/`: camera attributes, bridge URL rewriting, placeholder image handling.
+- `custom_components/dahuabridge/proxy/`: timeframe playback proxy helpers.
+- `custom_components/dahuabridge/discovery.py`: shared dynamic entity discovery for platforms.
 
 ## Related Docs
 
-- root docs: [../docs/README.md](../docs/README.md)
-- bridge docs: [../bridge/docs/README.md](../bridge/docs/README.md)
+- [Project docs](../docs/README.md)
+- [Bridge docs](../bridge/docs/README.md)

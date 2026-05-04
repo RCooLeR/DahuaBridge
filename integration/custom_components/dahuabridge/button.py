@@ -1,14 +1,17 @@
 from __future__ import annotations
 
+from functools import partial
+from typing import Any
+
 from homeassistant.components.button import ButtonEntity
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant, callback
+from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .catalog import button_specs_for_record, catalog_records, device_id_for_record
+from .catalog import button_specs_for_record, device_id_for_record
 from .const import DOMAIN
+from .discovery import CatalogEntityCandidate, setup_catalog_entity_discovery
 from .entity import DahuaBridgeEntity
-from .registry_cleanup import prune_stale_entities
 
 
 async def async_setup_entry(
@@ -16,42 +19,36 @@ async def async_setup_entry(
 ) -> None:
     coordinator = hass.data[DOMAIN][entry.entry_id]
     seen: set[str] = set()
+    language = getattr(coordinator, "integration_language", "en")
 
-    @callback
-    def async_discover_entities() -> None:
-        new_entities: list[ButtonEntity] = []
-        desired_unique_ids: set[str] = set()
+    def collect_buttons(record: dict[str, Any]):
+        device_id = device_id_for_record(record)
+        if not device_id:
+            return []
 
-        for record in catalog_records(coordinator.data):
-            device_id = device_id_for_record(record)
-            if not device_id:
-                continue
-
-            for spec in button_specs_for_record(record):
-                entity_key = f"{device_id}:{spec.key}"
-                desired_unique_ids.add(f"{device_id}_{spec.key}")
-                if entity_key in seen:
-                    continue
-                seen.add(entity_key)
-                new_entities.append(
-                    DahuaBridgeActionButton(
-                        coordinator, device_id, spec.key, spec.name, spec.url, spec.icon
-                    )
-                )
-
-        if coordinator.can_prune_registry:
-            prune_stale_entities(
-                hass,
-                entry,
-                "button",
-                desired_unique_ids,
-                coordinator.stale_entity_miss_counts,
+        return [
+            CatalogEntityCandidate(
+                key=f"{device_id}:{spec.key}",
+                create_entity=partial(
+                    DahuaBridgeActionButton,
+                    coordinator,
+                    device_id,
+                    spec.key,
+                    spec.name,
+                    spec.url,
+                    spec.icon,
+                ),
             )
-        if new_entities:
-            async_add_entities(new_entities)
+            for spec in button_specs_for_record(record, language)
+        ]
 
-    async_discover_entities()
-    entry.async_on_unload(coordinator.async_add_listener(async_discover_entities))
+    setup_catalog_entity_discovery(
+        entry,
+        coordinator,
+        seen,
+        async_add_entities,
+        collect_buttons,
+    )
 
 
 class DahuaBridgeActionButton(DahuaBridgeEntity, ButtonEntity):

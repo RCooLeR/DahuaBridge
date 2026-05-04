@@ -1,16 +1,18 @@
 from __future__ import annotations
 
+from functools import partial
+from typing import Any
+
 from homeassistant.components.binary_sensor import BinarySensorEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import EntityCategory
-from homeassistant.core import HomeAssistant, callback
+from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .catalog import (
     available_for_record,
     binary_device_class_for_field,
     bool_field_names,
-    catalog_records,
     device_id_for_record,
     entity_category_for_field,
     field_requires_online,
@@ -18,8 +20,9 @@ from .catalog import (
     value_for_field,
 )
 from .const import DOMAIN
+from .discovery import CatalogEntityCandidate, setup_catalog_entity_discovery
 from .entity import DahuaBridgeEntity
-from .registry_cleanup import prune_stale_entities
+from .localization import localized_label
 
 
 async def async_setup_entry(
@@ -27,53 +30,50 @@ async def async_setup_entry(
 ) -> None:
     coordinator = hass.data[DOMAIN][entry.entry_id]
     seen: set[str] = set()
+    language = getattr(coordinator, "integration_language", "en")
 
-    @callback
-    def async_discover_entities() -> None:
-        new_entities: list[BinarySensorEntity] = []
-        desired_unique_ids: set[str] = set()
+    def collect_binary_sensors(record: dict[str, Any]):
+        device_id = device_id_for_record(record)
+        if not device_id:
+            return []
 
-        for record in catalog_records(coordinator.data):
-            device_id = device_id_for_record(record)
-            if not device_id:
-                continue
-
-            online_key = f"{device_id}:online"
-            desired_unique_ids.add(f"{device_id}_online")
-            if online_key not in seen:
-                seen.add(online_key)
-                new_entities.append(DahuaBridgeOnlineBinarySensor(coordinator, device_id))
-
-            for field in bool_field_names(record):
-                entity_key = f"{device_id}:{field}"
-                desired_unique_ids.add(f"{device_id}_{field}")
-                if entity_key in seen:
-                    continue
-                seen.add(entity_key)
-                new_entities.append(
-                    DahuaBridgeStateBinarySensor(coordinator, device_id, field)
-                )
-
-        if coordinator.can_prune_registry:
-            prune_stale_entities(
-                hass,
-                entry,
-                "binary_sensor",
-                desired_unique_ids,
-                coordinator.stale_entity_miss_counts,
+        candidates = [
+            CatalogEntityCandidate(
+                key=f"{device_id}:online",
+                create_entity=partial(
+                    DahuaBridgeOnlineBinarySensor, coordinator, device_id, language
+                ),
             )
-        if new_entities:
-            async_add_entities(new_entities)
+        ]
+        for field in bool_field_names(record):
+            candidates.append(
+                CatalogEntityCandidate(
+                    key=f"{device_id}:{field}",
+                    create_entity=partial(
+                        DahuaBridgeStateBinarySensor,
+                        coordinator,
+                        device_id,
+                        field,
+                        language,
+                    ),
+                )
+            )
+        return candidates
 
-    async_discover_entities()
-    entry.async_on_unload(coordinator.async_add_listener(async_discover_entities))
+    setup_catalog_entity_discovery(
+        entry,
+        coordinator,
+        seen,
+        async_add_entities,
+        collect_binary_sensors,
+    )
 
 
 class DahuaBridgeOnlineBinarySensor(DahuaBridgeEntity, BinarySensorEntity):
-    def __init__(self, coordinator, device_id: str) -> None:
+    def __init__(self, coordinator, device_id: str, language: str = "en") -> None:
         super().__init__(coordinator, device_id)
         self._attr_unique_id = f"{device_id}_online"
-        self._attr_name = "Online"
+        self._attr_name = localized_label("online", language)
         self._attr_device_class = binary_device_class_for_field("online")
         self._attr_entity_category = EntityCategory.DIAGNOSTIC
 
@@ -83,11 +83,13 @@ class DahuaBridgeOnlineBinarySensor(DahuaBridgeEntity, BinarySensorEntity):
 
 
 class DahuaBridgeStateBinarySensor(DahuaBridgeEntity, BinarySensorEntity):
-    def __init__(self, coordinator, device_id: str, field: str) -> None:
+    def __init__(
+        self, coordinator, device_id: str, field: str, language: str = "en"
+    ) -> None:
         super().__init__(coordinator, device_id)
         self._field = field
         self._attr_unique_id = f"{device_id}_{field}"
-        self._attr_name = name_for_field(field)
+        self._attr_name = name_for_field(field, language)
         self._attr_device_class = binary_device_class_for_field(field)
         self._attr_entity_category = entity_category_for_field(field)
 

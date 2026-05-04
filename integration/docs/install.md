@@ -1,32 +1,31 @@
-# 🚀 Install
+# Install
 
-This guide assumes the bridge is already running and healthy.
+This guide assumes DahuaBridge is already running. If not, start with the bridge guide:
 
-If it is not, start here first:
+- [Bridge getting started](../../bridge/docs/getting-started.md)
 
-- [../../bridge/docs/getting-started.md](../../bridge/docs/getting-started.md)
+## Copy The Integration
 
-## 📦 Install Files
-
-Copy:
+Copy this directory:
 
 ```text
 integration/custom_components/dahuabridge
 ```
 
-to:
+to your Home Assistant config directory:
 
 ```text
 <home-assistant-config>/custom_components/dahuabridge
 ```
 
-## 🧩 Add The Integration
+Restart Home Assistant after copying the files.
 
-1. restart Home Assistant
-2. open `Settings -> Devices & Services`
-3. click `Add Integration`
-4. search for `DahuaBridge`
-5. enter the bridge base URL
+## Add The Config Entry
+
+1. Open `Settings -> Devices & Services`.
+2. Select `Add Integration`.
+3. Search for `DahuaBridge`.
+4. Enter the bridge URL that Home Assistant can reach.
 
 Example:
 
@@ -34,33 +33,36 @@ Example:
 http://192.168.1.50:9205
 ```
 
-The setup flow also lets you set:
+For reverse proxy setups, use the full public bridge path:
 
-- poll interval
-- preferred video profile
-- preferred video source
+```text
+https://ha.example.com/dahuabridge
+```
 
-If you do not change them, the integration starts with its built-in defaults and you can adjust them later from the options flow.
+The setup flow validates the URL by calling:
 
-## 🔗 What The Integration Needs From The Bridge
+```text
+GET /api/v1/status
+```
 
-The key dependency is the native catalog endpoint:
+After setup, the integration starts polling:
 
-- `GET /api/v1/home-assistant/native/catalog`
+```text
+GET /api/v1/home-assistant/native/catalog
+```
 
-The bridge URL you enter must be reachable by Home Assistant itself.
-The setup flow also performs a connectivity check against `GET /api/v1/status` before the config entry is created.
+The setup flow also exposes the initial poll interval, video preferences, and integration language. These can be changed later from the integration options.
 
-## ✅ First Validation
+## Validate The Result
 
-After installation, verify:
+After setup:
 
-- the config entry loads without errors
-- devices appear in Home Assistant
-- camera entities appear for streamable devices
-- bridge-backed control entities appear where supported
+- the config entry should be loaded
+- bridge devices should appear as Home Assistant devices
+- streamable records should have camera entities
+- controls should appear only when the bridge catalog advertises backing URLs
 
-## 📚 Next Step
+## Next
 
-- [configuration.md](configuration.md)
-- [entities-and-controls.md](entities-and-controls.md)
+- [Configuration](configuration.md)
+- [How it works](architecture.md)

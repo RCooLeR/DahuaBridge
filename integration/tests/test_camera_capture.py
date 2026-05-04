@@ -12,8 +12,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from homeassistant.exceptions import HomeAssistantError
 
-from custom_components.dahuabridge.bridge_api import DahuaBridgeAPI
-from custom_components.dahuabridge.bridge_api import DahuaBridgeAPIError
+from custom_components.dahuabridge.api import DahuaBridgeAPI
+from custom_components.dahuabridge.api import DahuaBridgeAPIError
 from custom_components.dahuabridge.camera import DahuaBridgeCamera
 
 

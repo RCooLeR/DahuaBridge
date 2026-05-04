@@ -1,62 +1,40 @@
-# Camera Recording Behavior
+# Camera Recording And Archive Access
 
-This page explains the recording-related behavior of the Home Assistant camera entity in this integration.
+The integration exposes two different recording-related workflows:
 
-## Snapshot Behavior
+- live clip capture owned by the bridge
+- NVR archive playback/export owned by the bridge
 
-For still images, the camera entity now prefers the bridge snapshot endpoint generated from capture metadata.
+Neither workflow changes long-running NVR circular recording configuration.
 
-That means the integration can request a frame from the bridge stream path first instead of depending only on device snapshot CGI behavior.
+## Snapshot Flow
 
-If needed, the camera entity can still fall back to MJPEG frame extraction behavior.
+When Home Assistant requests a still image:
 
-## Bridge Recording Services
+1. The camera checks capture metadata for `snapshot_url`.
+2. If present, it requests that bridge URL.
+3. If the snapshot request fails or no snapshot URL exists, it falls back to extracting one JPEG frame from the preferred MJPEG URL.
+4. If neither path works, it returns the bundled DahuaBridge placeholder image.
 
-The camera platform registers bridge-backed entity services for DahuaBridge camera entities:
+## Live Clip Capture
+
+The camera platform registers two entity services:
 
 - `start_recording`
 - `stop_recording`
 
-These services map to the bridge clip capture APIs, not to device-side NVR manual recording mode changes.
+These services call URLs advertised in the camera record's `stream.capture` section.
 
-## Archive Playback And Export
+`start_recording` accepts:
 
-For NVR channel cameras, the integration also exposes bridge archive endpoints in entity attributes:
+| Field | Meaning |
+| --- | --- |
+| `profile` | Optional bridge stream profile. |
+| `duration_seconds` | Optional automatic stop duration. |
 
-- `bridge_archive_recordings_url_template`
-- `bridge_archive_export_url`
-- `bridge_playback_sessions_url`
-- `bridge_archive_coverage_url`
+`start_recording` sends JSON to `start_recording_url`. `stop_recording` posts to `stop_recording_url`. After either call, the integration requests a catalog refresh.
 
-These attributes are for archive workflows, not for live clip capture.
-
-They are the integration-supported path for:
-
-- regular 24/7 recorder playback
-- event-backed archive playback such as SMD and IVS
-- MP4 export through the bridge
-- archive seek driven by bridge coverage data
-
-The bridge owns the transcode and export behavior. If the source stream has audio, the bridge includes it. If the source stream has no audio, the bridge emits video-only output instead of mutating NVR audio settings.
-
-For non-event archive rows, export can still transcode directly from recorder DAV when `file_path` is known. For event-backed archive rows such as SMD and IVS, the bridge uses archive playback RTSP export rather than direct DAV download.
-
-## What These Services Do
-
-`start_recording`:
-
-- starts a bridge-owned MP4 clip capture for the camera stream
-- can accept:
-  - `profile`
-  - `duration_seconds`
-
-`stop_recording`:
-
-- stops the active bridge-owned clip for that camera stream
-
-In practice these services target the camera entity that the integration created from the bridge catalog. The integration sends the request to the bridge URL advertised in that camera's `capture` metadata.
-
-The camera entity also exposes bridge recording state in attributes such as:
+Camera attributes related to live capture:
 
 - `bridge_capture`
 - `bridge_recording_active`
@@ -64,34 +42,66 @@ The camera entity also exposes bridge recording state in attributes such as:
 - `bridge_stop_recording_url`
 - `bridge_recordings_url`
 
-## What They Do Not Do
+## Archive Playback And Export
 
-They do not:
+For NVR channel cameras, the integration exposes archive URLs as attributes:
 
-- toggle long-running NVR recorder configuration
-- replace the NVR's own circular recording policy
-- convert Home Assistant into the owner of the bridge clip file
-- require direct recorder-side file download for SMD or IVS playback/export
+- `bridge_archive_smd_ivs_url_template`
+- `bridge_archive_recording_chunks_url_template`
+- `bridge_archive_recordings_url_template`
+- `bridge_archive_export_url`
+- `bridge_playback_sessions_url`
+- `bridge_archive_coverage_url`
 
-## Important Home Assistant Boundary
+Use these for:
 
-Home Assistant's built-in `camera.record` flow records from the camera stream on the Home Assistant side.
+- normal recorder timeline search
+- SMD/IVS event search
+- playback session creation
+- MJPEG/HLS/WebRTC playback through the bridge
+- MP4 export through the bridge
+- coverage-aware archive seeking
 
-That is a different behavior from:
+For event-backed archive rows such as SMD and IVS, the bridge uses archive playback/export paths rather than direct recorder DAV download.
 
-- telling the bridge to record an MP4 into the bridge volume
+## Timeframe Proxy
 
-Because of that, the bridge-backed services documented here are the integration-supported path for bridge-owned recording.
+The integration registers:
 
-## Where To Find The Result
+```text
+/api/camera_proxy/{entity_id}/timeframe
+```
 
-Bridge-generated recording metadata and URLs come from the bridge catalog and from the bridge recording APIs.
+This endpoint accepts Dahua-style timeframe query parameters such as:
 
-After starting a recording, the bridge returns clip metadata with the clip ID, current status, and download URL. The integration refreshes its catalog view after the service call so the camera entity can expose the updated recording state.
+```text
+starttime=2026_05_03_16_11_05
+endtime=2026_05_03_16_41_05
+```
 
-For archive playback and export, Home Assistant should use the bridge archive endpoints advertised in camera attributes. Those endpoints map to bridge-side search, playback session creation, and MP4 export.
+Flow:
 
-For the bridge side, see:
+1. Resolve the Home Assistant camera entity.
+2. Resolve its DahuaBridge coordinator from camera attributes.
+3. Build a playback session request using `bridge_channel` and the requested time window.
+4. Select an MJPEG playback profile from the bridge response.
+5. Stream the bridge MJPEG response back to Home Assistant.
 
-- [../../bridge/docs/media-and-recording.md](../../bridge/docs/media-and-recording.md)
-- [../../bridge/docs/api-reference.md](../../bridge/docs/api-reference.md)
+Naive Dahua-style timestamps are sent to the bridge as NVR wall-clock time. ISO timestamps with a timezone are converted to UTC ISO strings for playback requests.
+
+## Boundaries
+
+The integration does not:
+
+- toggle NVR recording schedules
+- replace the NVR circular recording policy
+- make Home Assistant own bridge MP4 files
+- download recorder DAV files directly
+- mutate NVR audio settings for export
+
+The bridge owns capture, transcode, export, and playback behavior.
+
+## Bridge Docs
+
+- [Bridge media and recording](../../bridge/docs/media-and-recording.md)
+- [Bridge API reference](../../bridge/docs/api-reference.md)

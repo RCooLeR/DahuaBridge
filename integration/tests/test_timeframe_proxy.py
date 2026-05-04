@@ -10,10 +10,10 @@ from ha_stubs import install
 install()
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from custom_components.dahuabridge.timeframe_proxy import (  # noqa: E402
-    _bridge_playback_datetime,
-    _datetime_for_compare,
-    _parse_query_datetime,
+from custom_components.dahuabridge.proxy.timeframe_datetime import (  # noqa: E402
+    bridge_playback_datetime,
+    datetime_for_compare,
+    parse_query_datetime,
 )
 
 
@@ -27,7 +27,7 @@ class FakeHass:
 
 class TimeframeProxyTests(unittest.TestCase):
     def test_dahua_timeframe_query_is_forwarded_as_nvr_wall_clock(self) -> None:
-        parsed = _parse_query_datetime(
+        parsed = parse_query_datetime(
             FakeHass(),
             "2026_05_03_16_11_05",
             "starttime",
@@ -36,13 +36,13 @@ class TimeframeProxyTests(unittest.TestCase):
         self.assertIsNotNone(parsed)
         self.assertIsNone(parsed.tzinfo)
         self.assertEqual(
-            _bridge_playback_datetime(parsed),
+            bridge_playback_datetime(parsed),
             "2026-05-03 16:11:05",
         )
-        self.assertIsNotNone(_datetime_for_compare(FakeHass(), parsed).tzinfo)
+        self.assertIsNotNone(datetime_for_compare(FakeHass(), parsed).tzinfo)
 
     def test_iso_timeframe_query_keeps_absolute_time(self) -> None:
-        parsed = _parse_query_datetime(
+        parsed = parse_query_datetime(
             FakeHass(),
             "2026-05-03T16:11:05+03:00",
             "starttime",
@@ -50,7 +50,7 @@ class TimeframeProxyTests(unittest.TestCase):
 
         self.assertIsNotNone(parsed)
         self.assertEqual(
-            _bridge_playback_datetime(parsed),
+            bridge_playback_datetime(parsed),
             "2026-05-03T13:11:05+00:00",
         )
 

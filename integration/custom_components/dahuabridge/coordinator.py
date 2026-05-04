@@ -8,14 +8,17 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
-from .bridge_api import DahuaBridgeAPI, DahuaBridgeAPIError
+from .api import DahuaBridgeAPI, DahuaBridgeAPIError
 from .catalog import normalize_profile_name
 from .const import (
+    CONF_LANGUAGE,
     CONF_PREFERRED_VIDEO_PROFILE,
     CONF_PREFERRED_VIDEO_SOURCE,
+    DEFAULT_LANGUAGE,
     DEFAULT_PREFERRED_VIDEO_PROFILE,
     DEFAULT_PREFERRED_VIDEO_SOURCE,
 )
+from .localization import resolve_language
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -36,8 +39,7 @@ class DahuaBridgeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         )
         self.api = api
         self.config_entry = config_entry
-        self.stale_entity_miss_counts: dict[str, int] = {}
-        self.stale_device_miss_counts: dict[str, int] = {}
+        self._hass = hass
 
     @property
     def preferred_video_profile(self) -> str:
@@ -56,9 +58,12 @@ class DahuaBridgeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         ).strip() or DEFAULT_PREFERRED_VIDEO_SOURCE
 
     @property
-    def can_prune_registry(self) -> bool:
-        devices = (self.data or {}).get("devices", [])
-        return self.last_update_success and isinstance(devices, list) and len(devices) > 0
+    def integration_language(self) -> str:
+        hass_language = getattr(getattr(self._hass, "config", None), "language", None)
+        return resolve_language(
+            self.config_entry.options.get(CONF_LANGUAGE, DEFAULT_LANGUAGE),
+            hass_language,
+        )
 
     @property
     def include_stream_credentials(self) -> bool:
