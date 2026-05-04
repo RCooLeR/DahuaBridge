@@ -54,6 +54,18 @@ async def async_setup_entry(
         {},
         "async_stop_recording",
     )
+    platform.async_register_entity_service(
+        "set_native_playback_source",
+        {
+            vol.Required("stream_source"): cv.string,
+        },
+        "async_set_native_playback_source",
+    )
+    platform.async_register_entity_service(
+        "clear_native_playback_source",
+        {},
+        "async_clear_native_playback_source",
+    )
 
     def collect_camera_entities(record: dict[str, Any]):
         if not stream_for_record(record):
@@ -87,6 +99,7 @@ class DahuaBridgeCamera(DahuaBridgeEntity, Camera):
         self._attr_name = localized_label(
             "camera", getattr(coordinator, "integration_language", "en")
         )
+        self._native_playback_source: str | None = None
 
     @property
     def supported_features(self) -> CameraEntityFeature:
@@ -119,6 +132,8 @@ class DahuaBridgeCamera(DahuaBridgeEntity, Camera):
         source = self._stream_source()
         if not source:
             return None
+        if self._native_playback_source:
+            return source
         resolved = self.coordinator.api.bridge_resource_url(source)
         _LOGGER.debug(
             "Resolved stream source for %s to %s", self.entity_id or self._device_id, resolved
@@ -170,6 +185,8 @@ class DahuaBridgeCamera(DahuaBridgeEntity, Camera):
         return await self._placeholder_logo_bytes()
 
     def _stream_source(self) -> str | None:
+        if self._native_playback_source:
+            return self._native_playback_source
         return stream_source_for_record_with_preferences(
             self.record,
             self.coordinator.preferred_video_profile,
@@ -215,5 +232,24 @@ class DahuaBridgeCamera(DahuaBridgeEntity, Camera):
         await self.coordinator.api.async_post_action(stop_url)
         await self.coordinator.async_request_refresh()
 
+    async def async_set_native_playback_source(self, stream_source: str) -> None:
+        source = str(stream_source or "").strip()
+        if not source.lower().startswith("rtsp://"):
+            raise HomeAssistantError("Native playback source must be an RTSP URL")
+
+        self._native_playback_source = source
+        self._write_state_if_added()
+
+    async def async_clear_native_playback_source(self) -> None:
+        if not self._native_playback_source:
+            return
+        self._native_playback_source = None
+        self._write_state_if_added()
+
     async def _placeholder_logo_bytes(self) -> bytes | None:
         return await async_placeholder_logo_bytes(self.hass)
+
+    def _write_state_if_added(self) -> None:
+        write_state = getattr(self, "async_write_ha_state", None)
+        if callable(write_state):
+            write_state()

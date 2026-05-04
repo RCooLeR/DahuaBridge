@@ -211,7 +211,7 @@ describe("camera media helpers", () => {
     expect(resolveOverviewCameraViewportSource(camera, overviewProfileKey)).toBe("hls");
   });
 
-  it("keeps native as a detail preference but uses bridge media for overview tiles", () => {
+  it("uses the configured overview source before HLS, DASH, and snapshots", () => {
     const camera = buildCamera({
       cameraEntity: {
         entity_id: "camera.west20_nvr_channel_01_camera",
@@ -228,7 +228,7 @@ describe("camera media helpers", () => {
     });
 
     const overviewProfileKey = defaultOverviewStreamProfileKey(camera.stream);
-    expect(resolveOverviewCameraViewportSource(camera, overviewProfileKey)).toBe("hls");
+    expect(resolveOverviewCameraViewportSource(camera, overviewProfileKey)).toBe("native");
     expect(resolvePreferredCameraViewportSource(camera, overviewProfileKey)).toBe("native");
 
     const hlsPreferredCamera = buildCamera({
@@ -330,6 +330,35 @@ describe("camera media helpers", () => {
     });
 
     expect(defaultSelectedStreamProfileKey(camera.stream)).toBe("quality");
+  });
+
+  it("defaults the selected camera view to the configured profile when present", () => {
+    const camera = buildCamera({
+      stream: {
+        ...buildCamera().stream,
+        recommendedProfile: "quality",
+        preferredVideoProfile: "stable",
+      },
+    });
+
+    expect(defaultSelectedStreamProfileKey(camera.stream)).toBe("stable");
+  });
+
+  it("keeps direct native playback audio-visible in the selected camera model", () => {
+    const camera = buildCamera();
+
+    expect(
+      selectedCameraLiveStreamModel(camera, null, null, {
+        sourceDeviceId: camera.deviceId,
+        cameraEntityId: camera.cameraEntityId,
+        streamSource:
+          "rtsp://user:pass@192.0.2.10:554/cam/playback?channel=1&subtype=0&starttime=2026_05_01_10_15_30",
+        startTime: "2026-05-01T10:15:30.000Z",
+        endTime: "2026-05-01T10:45:30.000Z",
+        seekTime: "2026-05-01T10:15:30.000Z",
+        profileKey: "quality",
+      }).selectedSource,
+    ).toBe("native");
   });
 
   it("preserves an explicit source selection only while it stays valid", () => {

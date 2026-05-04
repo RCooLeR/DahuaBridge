@@ -27,7 +27,11 @@ def install() -> None:
     def optional(key):
         return key
 
+    def required(key):
+        return key
+
     voluptuous.Optional = optional
+    voluptuous.Required = required
     sys.modules["voluptuous"] = voluptuous
 
     homeassistant = types.ModuleType("homeassistant")

@@ -26,6 +26,7 @@ VIDEO_SOURCE_OPTIONS = {
     "auto": "Auto (Bridge Recommended)",
     "rtsp": "Direct RTSP",
     "hls": "Bridge HLS (H.264/AAC)",
+    "dash": "Bridge DASH (H.264/AAC)",
     "mjpeg": "Bridge MJPEG",
 }
 
@@ -108,6 +109,16 @@ def normalize_choice(raw: object, mapping: dict[str, str], default: str) -> str:
             return "quality"
         if lowered in {"substream", "sub"}:
             return "stable"
+    if mapping is VIDEO_SOURCE_OPTIONS:
+        if lowered in {
+            "native",
+            "direct",
+            "direct_rtsp",
+            "ha",
+            "homeassistant",
+            "home_assistant",
+        }:
+            return "rtsp"
 
     for key, label in mapping.items():
         if lowered == str(label).strip().lower():

@@ -180,6 +180,18 @@ class CameraCaptureTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(attrs["bridge_integration_language"], "en")
 
+    def test_camera_attributes_request_smd_ivs_credentials_for_direct_rtsp(self) -> None:
+        coordinator = FakeCoordinator(make_record())
+        coordinator.preferred_video_source = "rtsp"
+        camera = DahuaBridgeCamera(coordinator, "cam1")
+
+        attrs = camera.extra_state_attributes
+
+        self.assertEqual(
+            attrs["bridge_archive_smd_ivs_url_template"],
+            "http://bridge.local:8080/api/v1/nvr/west20_nvr/smd-ivs?channel=5&start={start}&end={end}&limit={limit}&event={event}&include_credentials=true",
+        )
+
     async def test_async_start_recording_calls_bridge_capture_service(self) -> None:
         camera = DahuaBridgeCamera(
             FakeCoordinator(
@@ -230,6 +242,32 @@ class CameraCaptureTests(unittest.IsolatedAsyncioTestCase):
 
         with self.assertRaises(HomeAssistantError):
             await camera.async_start_recording()
+
+    async def test_native_playback_source_overrides_camera_stream_source(self) -> None:
+        camera = DahuaBridgeCamera(FakeCoordinator(make_record()), "cam1")
+        playback_url = (
+            "rtsp://user:pass@192.0.2.10:554/cam/playback"
+            "?channel=5&subtype=1&starttime=2026_05_01_10_15_30"
+        )
+
+        await camera.async_set_native_playback_source(playback_url)
+
+        self.assertEqual(await camera.stream_source(), playback_url)
+
+        await camera.async_clear_native_playback_source()
+
+        self.assertEqual(
+            await camera.stream_source(),
+            "http://bridge.local:8080/api/v1/media/hls/cam1/stable/index.m3u8",
+        )
+
+    async def test_native_playback_source_rejects_non_rtsp_urls(self) -> None:
+        camera = DahuaBridgeCamera(FakeCoordinator(make_record()), "cam1")
+
+        with self.assertRaises(HomeAssistantError):
+            await camera.async_set_native_playback_source(
+                "http://bridge.local:8080/api/v1/media/hls/cam1/stable/index.m3u8"
+            )
 
 
 if __name__ == "__main__":

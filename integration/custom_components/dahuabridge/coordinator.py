@@ -67,7 +67,7 @@ class DahuaBridgeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     @property
     def include_stream_credentials(self) -> bool:
-        return self.preferred_video_source == "rtsp"
+        return self.preferred_video_source.lower() in {"rtsp", "native", "direct_rtsp"}
 
     async def _async_update_data(self) -> dict[str, Any]:
         try:

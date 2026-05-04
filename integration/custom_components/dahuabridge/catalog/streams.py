@@ -111,10 +111,12 @@ def unique_profile_names(*names: str) -> list[str]:
 
 def source_order_for_preference(preferred_source: str = "auto") -> tuple[str, ...]:
     preference = str(preferred_source).strip().lower() or "auto"
-    if preference == "rtsp":
-        return ("stream_url", "local_hls_url", "local_mjpeg_url")
+    if preference in {"rtsp", "native", "direct_rtsp"}:
+        return ("stream_url", "local_hls_url", "local_dash_url", "local_mjpeg_url")
     if preference == "hls":
-        return ("local_hls_url", "stream_url", "local_mjpeg_url")
+        return ("local_hls_url", "local_dash_url", "local_mjpeg_url", "stream_url")
+    if preference == "dash":
+        return ("local_dash_url", "local_hls_url", "local_mjpeg_url", "stream_url")
     if preference == "mjpeg":
-        return ("local_mjpeg_url", "local_hls_url", "stream_url")
-    return ("local_hls_url", "stream_url", "local_mjpeg_url")
+        return ("local_mjpeg_url", "local_hls_url", "local_dash_url", "stream_url")
+    return ("stream_url", "local_hls_url", "local_dash_url", "local_mjpeg_url")

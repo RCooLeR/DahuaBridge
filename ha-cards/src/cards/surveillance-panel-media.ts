@@ -2,6 +2,7 @@ import { html, LitElement, type PropertyValues, type TemplateResult } from "lit"
 
 import type { NvrPlaybackSessionModel } from "../domain/archive";
 import type {
+  CameraStreamProfileViewModel,
   CameraViewModel,
   VtoViewModel,
 } from "../domain/model";
@@ -66,7 +67,6 @@ const viewportAudioShadowRootRetries = new WeakMap<Element, { timer: number; att
 const viewportAudioState = new WeakMap<ParentNode, ViewportAudioPlaybackState>();
 const STREAM_HOST_SELECTOR = "ha-camera-stream, dahuabridge-remote-stream";
 const PLAYER_AUDIO_HOST_SELECTOR = [
-  "ha-camera-stream",
   "ha-hls-player",
   "ha-web-rtc-player",
   "ha-rtsp-player",
@@ -86,6 +86,7 @@ const SHADOW_ROOT_RETRY_ATTEMPTS = 80;
 const NATIVE_FALLBACK_STARTUP_TIMEOUT_MS = 35_000;
 const NATIVE_FALLBACK_SCAN_MS = 250;
 const DEFAULT_BRIDGE_FALLBACK_ORDER = ["hls", "dash", "mjpeg"] as const;
+const SUBSTREAM_BRIDGE_FALLBACK_ORDER = ["hls", "dash"] as const;
 const DEFAULT_LOCALIZER = createLocalizer("en");
 
 interface ViewportAudioPlaybackState {
@@ -114,8 +115,6 @@ export function renderLiveViewport(
     <ha-camera-stream
       .hass=${hass}
       .stateObj=${entity}
-      .muted=${muted}
-      ?muted=${muted}
       data-audio-muted=${muted ? "true" : "false"}
       data-audio-volume=${String(normalizedVolume)}
     ></ha-camera-stream>
@@ -153,10 +152,11 @@ export function renderNativePlaybackViewport(
   hass: HomeAssistant | undefined,
   entity: HassEntity | undefined,
   playbackUrl: string,
-  _label: string,
+  label: string,
   muted: boolean,
   volume = 1,
   t: Localizer = DEFAULT_LOCALIZER,
+  fallbackPlaybackUrl: string | null = null,
 ): TemplateResult {
   const normalizedUrl = playbackUrl.trim();
   if (!entity) {
@@ -166,11 +166,24 @@ export function renderNativePlaybackViewport(
     return html`<div class="viewport empty">${t("media.archiveStreamUnavailable")}</div>`;
   }
 
-  return renderLiveViewport(
+  const fallbackUrl = fallbackPlaybackUrl?.trim() ?? "";
+  const fallbackDescriptor: RemoteStreamDescriptor = {
+    cacheKey: `native-playback-fallback:${fallbackUrl}`,
+    alt: label,
+    fallbackText: t("media.archiveStreamUnavailable"),
+    fallbackImageUrl: null,
+    className: "playback-stream archive-timeframe-stream",
+    sources: fallbackUrl ? [{ kind: "mjpeg", url: fallbackUrl }] : [],
+  };
+
+  return renderNativeLiveViewportWithFallback(
     hass,
     overrideNativeLiveProfile(entity, normalizedUrl, null),
+    fallbackDescriptor,
     muted,
     volume,
+    true,
+    "auto",
     t,
   );
 }
@@ -274,6 +287,7 @@ export function renderSelectedCameraViewport(
     className?: string;
     t?: Localizer;
     manageAudioExternally?: boolean;
+    includeSubstreamFallback?: boolean;
   },
 ): TemplateResult {
   const t = options?.t ?? DEFAULT_LOCALIZER;
@@ -295,19 +309,21 @@ export function renderSelectedCameraViewport(
     camera.cameraEntity,
     camera.snapshotUrl,
   );
-  const descriptor = buildRemoteStreamDescriptor(
+  const fallbackOrder = options?.fallbackOrder ?? DEFAULT_BRIDGE_FALLBACK_ORDER;
+  const descriptorSources = buildLiveRemoteStreamSources(
+    camera,
+    resolvedProfile,
+    resolvedSource,
+    fallbackOrder,
+    options?.includeSubstreamFallback ?? true,
+  );
+  const descriptor = buildRemoteStreamDescriptorFromSources(
     `${camera.deviceId}:${resolvedProfile?.key ?? "none"}:${resolvedSource ?? "auto"}`,
     camera.label,
     fallbackPreviewUrl,
     options?.className,
     t("media.streamUnavailable"),
-    {
-      dash: resolvedProfile?.localDashUrl ?? null,
-      hls: resolvedProfile?.localHlsUrl ?? null,
-      mjpeg: resolvedProfile?.localMjpegUrl ?? null,
-    },
-    resolvedSource,
-    options?.fallbackOrder ?? DEFAULT_BRIDGE_FALLBACK_ORDER,
+    descriptorSources,
   );
 
   if (resolvedSource === "native" && camera.cameraEntity) {
@@ -761,17 +777,134 @@ function buildRemoteStreamDescriptor(
   }
 
   const orderedKinds = uniqueSourceOrder(preferredSource, fallbackOrder);
+  return buildRemoteStreamDescriptorFromSources(
+    cacheKey,
+    alt,
+    fallbackImageUrl,
+    className,
+    fallbackText,
+    orderedKinds.flatMap((kind) => {
+      const url = availableSources.get(kind);
+      return url ? [{ kind, url }] : [];
+    }),
+  );
+}
+
+function buildRemoteStreamDescriptorFromSources(
+  cacheKey: string,
+  alt: string,
+  fallbackImageUrl: string | null,
+  className: string | undefined,
+  fallbackText: string,
+  sources: RemoteStreamDescriptor["sources"],
+): RemoteStreamDescriptor {
   return {
     cacheKey,
     alt,
     fallbackText,
     fallbackImageUrl,
     className,
-    sources: orderedKinds.flatMap((kind) => {
-      const url = availableSources.get(kind);
-      return url ? [{ kind, url }] : [];
-    }),
+    sources,
   };
+}
+
+function buildLiveRemoteStreamSources(
+  camera: CameraViewModel,
+  selectedProfile: CameraStreamProfileViewModel | null,
+  preferredSource: CameraViewportSource | null,
+  fallbackOrder: readonly CameraViewportSource[],
+  includeSubstreamFallback: boolean,
+): RemoteStreamDescriptor["sources"] {
+  const sources: RemoteStreamDescriptor["sources"] = [];
+  appendProfileRemoteSources(
+    sources,
+    selectedProfile,
+    uniqueSourceOrder(preferredSource, fallbackOrder),
+  );
+
+  if (includeSubstreamFallback) {
+    for (const profile of substreamFallbackProfiles(camera, selectedProfile?.key ?? null)) {
+      appendProfileRemoteSources(sources, profile, SUBSTREAM_BRIDGE_FALLBACK_ORDER);
+    }
+  }
+
+  return dedupeRemoteSources(sources);
+}
+
+function appendProfileRemoteSources(
+  sources: RemoteStreamDescriptor["sources"],
+  profile: CameraStreamProfileViewModel | null,
+  order: readonly CameraViewportSource[],
+): void {
+  if (!profile) {
+    return;
+  }
+  for (const kind of order) {
+    switch (kind) {
+      case "hls":
+        appendRemoteSource(sources, "hls", profile.localHlsUrl);
+        break;
+      case "dash":
+        appendRemoteSource(sources, "dash", profile.localDashUrl);
+        break;
+      case "mjpeg":
+        appendRemoteSource(sources, "mjpeg", profile.localMjpegUrl);
+        break;
+      case "native":
+        break;
+    }
+  }
+}
+
+function appendRemoteSource(
+  sources: RemoteStreamDescriptor["sources"],
+  kind: CameraViewportSource,
+  rawUrl: string | null | undefined,
+): void {
+  const url = rawUrl?.trim() ?? "";
+  if (url) {
+    sources.push({ kind, url });
+  }
+}
+
+function dedupeRemoteSources(
+  sources: RemoteStreamDescriptor["sources"],
+): RemoteStreamDescriptor["sources"] {
+  const seen = new Set<string>();
+  return sources.filter((source) => {
+    const key = `${source.kind}:${source.url}`;
+    if (seen.has(key)) {
+      return false;
+    }
+    seen.add(key);
+    return true;
+  });
+}
+
+function substreamFallbackProfiles(
+  camera: CameraViewModel,
+  selectedProfileKey: string | null,
+): CameraStreamProfileViewModel[] {
+  return camera.stream.profiles.filter(
+    (profile) =>
+      profile.key !== selectedProfileKey &&
+      isSubstreamProfile(profile) &&
+      (Boolean(profile.localHlsUrl) || Boolean(profile.localDashUrl)),
+  );
+}
+
+function isSubstreamProfile(profile: CameraStreamProfileViewModel): boolean {
+  if (typeof profile.subtype === "number" && profile.subtype > 0) {
+    return true;
+  }
+  const haystack = `${profile.key} ${profile.name}`.trim().toLowerCase();
+  return (
+    haystack.includes("stable") ||
+    haystack.includes("substream") ||
+    haystack.includes("sub stream") ||
+    haystack.includes("preview") ||
+    haystack.includes("low")
+  );
 }
 
 function overrideNativeLiveProfile(

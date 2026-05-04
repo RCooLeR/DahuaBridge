@@ -20,6 +20,11 @@ export function resolveSelectedCameraStreamProfile(
 export function defaultSelectedStreamProfileKey(
   stream: CameraStreamViewModel,
 ): string | null {
+  const preferredProfileKey = preferredProfileKeyForStream(stream);
+  if (preferredProfileKey) {
+    return preferredProfileKey;
+  }
+
   const mainProfileKey = mainProfileKeyForStream(stream);
   if (mainProfileKey) {
     return mainProfileKey;
@@ -135,7 +140,7 @@ export function resolveOverviewCameraViewportSource(
   camera: CameraViewModel,
   selectedProfileKey: string | null,
 ): CameraViewportSource | null {
-  return resolveBridgeFirstStreamViewportSource(
+  return resolveConfiguredOverviewStreamViewportSource(
     camera.stream,
     null,
     selectedProfileKey,
@@ -194,6 +199,32 @@ export function resolveBridgeFirstStreamViewportSource(
   return selectSourceByPriority(
     availableSources,
     ["hls", "dash", "mjpeg", "native"],
+  );
+}
+
+export function resolveConfiguredOverviewStreamViewportSource(
+  stream: CameraStreamViewModel,
+  selectedSource: CameraViewportSource | null,
+  selectedProfileKey: string | null,
+  nativeAvailable = false,
+): CameraViewportSource | null {
+  const availableSources = availableStreamViewportSources(
+    stream,
+    selectedProfileKey,
+    nativeAvailable,
+  );
+  if (selectedSource && availableSources.includes(selectedSource)) {
+    return selectedSource;
+  }
+
+  const preferredSource = normalizeViewportSource(stream.preferredVideoSource);
+  if (preferredSource && availableSources.includes(preferredSource)) {
+    return preferredSource;
+  }
+
+  return selectSourceByPriority(
+    availableSources,
+    ["hls", "dash", "native"],
   );
 }
 
@@ -469,11 +500,6 @@ function mainProfileKeyForStream(
     ) ?? null;
   if (qualityProfile) {
     return qualityProfile.key;
-  }
-
-  const preferredProfileKey = preferredProfileKeyForStream(stream);
-  if (preferredProfileKey) {
-    return preferredProfileKey;
   }
 
   const recommendedProfileKey = recommendedProfileKeyForStream(stream);

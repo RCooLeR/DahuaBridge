@@ -21,3 +21,20 @@ stop_recording:
     entity:
       integration: dahuabridge
       domain: camera
+
+set_native_playback_source:
+  target:
+    entity:
+      integration: dahuabridge
+      domain: camera
+  fields:
+    stream_source:
+      selector:
+        text:
+      required: true
+
+clear_native_playback_source:
+  target:
+    entity:
+      integration: dahuabridge
+      domain: camera

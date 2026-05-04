@@ -8,6 +8,7 @@ import {
   renderSelectedCameraViewport,
   renderSelectedVtoViewport,
   resolveBridgeFirstStreamViewportSource,
+  resolveOverviewCameraViewportSource,
   syncViewportAudioState,
 } from "./surveillance-panel-media";
 import { renderIconButton } from "./surveillance-panel-primitives";
@@ -441,12 +442,7 @@ export class DahuaBridgeSurveillanceTileCard
 
   private renderCameraTile(camera: CameraViewModel, t: Localizer): TemplateResult {
     const selectedProfileKey = defaultOverviewStreamProfileKey(camera.stream);
-    const selectedSource = resolveBridgeFirstStreamViewportSource(
-      camera.stream,
-      null,
-      selectedProfileKey,
-      Boolean(camera.cameraEntity),
-    );
+    const selectedSource = resolveOverviewCameraViewportSource(camera, selectedProfileKey);
     const lightAvailable = supportsAuxTarget(camera, "light");
     const warningLightAvailable = supportsAuxTarget(camera, "warning_light");
     const sirenAvailable = supportsAuxTarget(camera, "siren");
@@ -471,7 +467,8 @@ export class DahuaBridgeSurveillanceTileCard
                 {
                   controls: false,
                   preload: "none",
-                  fallbackOrder: ["hls", "dash", "mjpeg"],
+                  fallbackOrder: ["hls", "dash"],
+                  includeSubstreamFallback: false,
                   manageAudioExternally: true,
                   t,
                 },

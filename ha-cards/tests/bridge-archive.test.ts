@@ -238,6 +238,11 @@ describe("bridge archive", () => {
             asset_playback_url: "http://bridge.local:9205/api/v1/media/recordings/clip_ready/play",
             asset_download_url: "http://bridge.local:9205/api/v1/media/recordings/clip_ready/download",
             asset_self_url: "http://bridge.local:9205/api/v1/media/recordings/clip_ready",
+            asset_stop_url: "http://bridge.local:9205/api/v1/media/recordings/clip_ready/stop",
+            rtsp_main_url:
+              "rtsp://user:pass@192.0.2.10:554/cam/playback?channel=1&subtype=0&starttime=2026_05_01_10_00_00",
+            rtsp_sub_url:
+              "rtsp://user:pass@192.0.2.10:554/cam/playback?channel=1&subtype=1&starttime=2026_05_01_10_00_00",
           },
         ],
       }),
@@ -269,6 +274,12 @@ describe("bridge archive", () => {
       assetClipId: "clip_ready",
       assetPlaybackUrl: "https://ha.example.com/api/v1/media/recordings/clip_ready/play",
       assetDownloadUrl: "https://ha.example.com/api/v1/media/recordings/clip_ready/download",
+      assetSelfUrl: "https://ha.example.com/api/v1/media/recordings/clip_ready",
+      assetStopUrl: "https://ha.example.com/api/v1/media/recordings/clip_ready/stop",
+      rtspMainUrl:
+        "rtsp://user:pass@192.0.2.10:554/cam/playback?channel=1&subtype=0&starttime=2026_05_01_10_00_00",
+      rtspSubUrl:
+        "rtsp://user:pass@192.0.2.10:554/cam/playback?channel=1&subtype=1&starttime=2026_05_01_10_00_00",
     });
   });
 

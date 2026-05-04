@@ -4,7 +4,9 @@ import {resolveSelectedCameraStreamProfile} from "./surveillance-panel-media";
 
 export interface SelectedNativePlaybackState {
     sourceDeviceId: string;
+    cameraEntityId: string | null;
     streamSource: string;
+    fallbackStreamSource?: string | null;
     startTime: string;
     endTime: string;
     seekTime: string;
@@ -28,10 +30,13 @@ export function createSelectedNativePlaybackState(
     endTime: Date | string,
     seekTime: Date | string,
     profileKey: string | null,
+    fallbackStreamSource: string | null = null,
 ): SelectedNativePlaybackState {
     return {
         sourceDeviceId: camera.deviceId,
+        cameraEntityId: camera.cameraEntity?.entity_id?.trim() || camera.cameraEntityId?.trim() || null,
         streamSource,
+        fallbackStreamSource,
         startTime: toIsoString(startTime),
         endTime: toIsoString(endTime),
         seekTime: toIsoString(seekTime),

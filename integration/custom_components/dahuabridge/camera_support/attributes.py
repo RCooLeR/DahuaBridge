@@ -67,7 +67,14 @@ def camera_extra_state_attributes(
     if isinstance(channel, int):
         attrs["bridge_channel"] = channel
         if parent_id:
-            attrs.update(_nvr_archive_attrs(api, parent_id, channel))
+            attrs.update(
+                _nvr_archive_attrs(
+                    api,
+                    parent_id,
+                    channel,
+                    _include_direct_archive_credentials(preferred_video_source),
+                )
+            )
 
     attrs["stream_available"] = stream_available_for_record(record)
     attrs["preferred_video_profile"] = preferred_video_profile
@@ -125,15 +132,21 @@ def _copy_stream_url_attr(
         attrs[attr_key] = api.bridge_resource_url(value)
 
 
-def _nvr_archive_attrs(api: Any, parent_id: str, channel: int) -> dict[str, str]:
+def _nvr_archive_attrs(
+    api: Any,
+    parent_id: str,
+    channel: int,
+    include_credentials: bool,
+) -> dict[str, str]:
     encoded_parent_id = quote(parent_id, safe="")
     chunks_template = (
         api.absolute_url(f"/api/v1/nvr/{encoded_parent_id}/recording-chunks")
         + f"?channel={channel}&start={{start}}&end={{end}}&limit={{limit}}"
     )
+    smd_ivs_credentials = "&include_credentials=true" if include_credentials else ""
     smd_ivs_template = (
         api.absolute_url(f"/api/v1/nvr/{encoded_parent_id}/smd-ivs")
-        + f"?channel={channel}&start={{start}}&end={{end}}&limit={{limit}}&event={{event}}"
+        + f"?channel={channel}&start={{start}}&end={{end}}&limit={{limit}}&event={{event}}{smd_ivs_credentials}"
     )
     return {
         "bridge_archive_smd_ivs_url_template": smd_ivs_template,
@@ -149,4 +162,16 @@ def _nvr_archive_attrs(api: Any, parent_id: str, channel: int) -> dict[str, str]
             api.absolute_url(f"/api/v1/nvr/{encoded_parent_id}/recordings/coverage")
             + f"?channel={channel}"
         ),
+    }
+
+
+def _include_direct_archive_credentials(preferred_video_source: str) -> bool:
+    return str(preferred_video_source or "").strip().lower() in {
+        "rtsp",
+        "native",
+        "direct",
+        "direct_rtsp",
+        "ha",
+        "homeassistant",
+        "home_assistant",
     }

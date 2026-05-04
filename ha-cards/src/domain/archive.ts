@@ -77,7 +77,11 @@ export interface NvrArchiveRecordingModel {
   assetClipId?: string | null;
   assetPlaybackUrl?: string | null;
   assetDownloadUrl?: string | null;
+  assetSelfUrl?: string | null;
+  assetStopUrl?: string | null;
   assetError?: string | null;
+  rtspMainUrl?: string | null;
+  rtspSubUrl?: string | null;
   filePath: string | null;
   type: string | null;
   videoStream: string | null;

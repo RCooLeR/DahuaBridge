@@ -25,7 +25,7 @@ export function selectedCameraLiveStreamModel(
         selectedProfileKey: resolvedProfileKey,
         selectedSource:
             nativePlayback !== null
-                ? "mjpeg"
+                ? "native"
                 : resolveSelectedCameraViewportSource(
                     camera,
                     selectedSource,
@@ -33,7 +33,7 @@ export function selectedCameraLiveStreamModel(
                 ),
         availableSources:
             nativePlayback !== null
-                ? (["mjpeg"] satisfies CameraViewportSource[])
+                ? (["native"] satisfies CameraViewportSource[])
                 : availableCameraViewportSources(camera, resolvedProfileKey),
     };
 }
