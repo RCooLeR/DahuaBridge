@@ -89,7 +89,7 @@ const SHADOW_ROOT_RETRY_ATTEMPTS = 400;
 const NATIVE_FALLBACK_STARTUP_TIMEOUT_MS = 90_000;
 const NATIVE_FALLBACK_SCAN_MS = 1000;
 const DEFAULT_BRIDGE_FALLBACK_ORDER = ["hls", "dash", "mjpeg"] as const;
-const SUBSTREAM_BRIDGE_FALLBACK_ORDER = ["hls", "dash", "mjpeg"] as const;
+const SUBSTREAM_BRIDGE_FALLBACK_ORDER = ["hls", "dash"] as const;
 const DEFAULT_LOCALIZER = createLocalizer("en");
 
 interface ViewportAudioPlaybackState {
@@ -232,7 +232,6 @@ export function renderPlaybackViewport(
   volume = 1,
   nativeStreamSource: string | null = null,
   t: Localizer = DEFAULT_LOCALIZER,
-  fallbacksEnabled = true,
 ): TemplateResult {
   const resolvedProfile = resolvePlaybackProfile(session, selectedProfileKey);
   const normalizedNativeSource = nativeStreamSource?.trim() ?? "";
@@ -247,9 +246,7 @@ export function renderPlaybackViewport(
       );
   const descriptorPreferredSource = resolvedSource === "native" ? null : resolvedSource;
   const descriptorFallbackOrder =
-    !fallbacksEnabled
-      ? []
-      : selectedSource && selectedSource !== "native"
+    selectedSource && selectedSource !== "native"
       ? [selectedSource]
       : DEFAULT_BRIDGE_FALLBACK_ORDER;
   const descriptor = buildRemoteStreamDescriptor(
@@ -301,7 +298,6 @@ export function renderSelectedCameraViewport(
     t?: Localizer;
     manageAudioExternally?: boolean;
     includeSubstreamFallback?: boolean;
-    fallbacksEnabled?: boolean;
   },
 ): TemplateResult {
   const t = options?.t ?? DEFAULT_LOCALIZER;
@@ -309,8 +305,6 @@ export function renderSelectedCameraViewport(
   const preload = options?.preload ?? "auto";
   const renderMuted = options?.manageAudioExternally ? true : muted;
   const renderVolume = options?.manageAudioExternally ? 1 : volume;
-  const fallbacksEnabled =
-    options?.fallbacksEnabled ?? camera.stream.fallbacksEnabled;
   const resolvedProfile = resolveSelectedStreamProfile(
     camera.stream,
     selectedProfileKey,
@@ -320,21 +314,18 @@ export function renderSelectedCameraViewport(
     selectedSource,
     resolvedProfile?.key ?? null,
     Boolean(camera.cameraEntity),
-    fallbacksEnabled,
   );
   const fallbackPreviewUrl = cameraImageSrc(
     camera.cameraEntity,
     camera.snapshotUrl,
   );
-  const fallbackOrder = fallbacksEnabled
-    ? options?.fallbackOrder ?? DEFAULT_BRIDGE_FALLBACK_ORDER
-    : [];
+  const fallbackOrder = options?.fallbackOrder ?? DEFAULT_BRIDGE_FALLBACK_ORDER;
   const descriptorSources = buildLiveRemoteStreamSources(
     camera,
     resolvedProfile,
     resolvedSource,
     fallbackOrder,
-    fallbacksEnabled && (options?.includeSubstreamFallback ?? true),
+    options?.includeSubstreamFallback ?? true,
   );
   const descriptor = buildRemoteStreamDescriptorFromSources(
     `${camera.deviceId}:${resolvedProfile?.key ?? "none"}:${resolvedSource ?? "auto"}`,
@@ -396,7 +387,6 @@ export function renderSelectedVtoViewport(
   selectedProfileKey: string | null,
   selectedSource: CameraViewportSource | null,
   t: Localizer = DEFAULT_LOCALIZER,
-  fallbacksEnabled = vto.stream.fallbacksEnabled,
 ): TemplateResult {
   const fallbackPreviewUrl = cameraImageSrc(vto.cameraEntity, vto.snapshotUrl);
 
@@ -423,9 +413,7 @@ export function renderSelectedVtoViewport(
     selectedSource,
     resolvedProfile?.key ?? null,
     Boolean(vto.cameraEntity),
-    fallbacksEnabled,
   );
-  const fallbackOrder = fallbacksEnabled ? DEFAULT_BRIDGE_FALLBACK_ORDER : [];
   const descriptor = buildRemoteStreamDescriptor(
     `${vto.deviceId}:${resolvedProfile?.key ?? "none"}:${resolvedSource ?? "auto"}`,
     vto.label,
@@ -438,7 +426,7 @@ export function renderSelectedVtoViewport(
       mjpeg: resolvedProfile?.localMjpegUrl ?? null,
     },
     resolvedSource,
-    fallbackOrder,
+    DEFAULT_BRIDGE_FALLBACK_ORDER,
   );
 
   if (resolvedSource === "native" && vto.cameraEntity) {

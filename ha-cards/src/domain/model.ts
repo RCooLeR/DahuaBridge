@@ -182,7 +182,6 @@ export interface CameraStreamViewModel {
   recommendedHaIntegration: string | null;
   preferredVideoProfile: string | null;
   preferredVideoSource: string | null;
-  fallbacksEnabled: boolean;
   resolution: string;
   codec: string;
   frameRate: string;
@@ -696,7 +695,6 @@ function buildCameraStreamViewModel(
     recommendedHaIntegration: camera.media.recommendedHaIntegration,
     preferredVideoProfile: camera.media.preferredVideoProfile,
     preferredVideoSource: camera.media.preferredVideoSource,
-    fallbacksEnabled: camera.media.videoFallbacksEnabled,
     resolution: camera.media.resolution,
     codec: camera.media.codec,
     frameRate: camera.media.frameRate,

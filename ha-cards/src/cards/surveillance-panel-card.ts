@@ -835,7 +835,6 @@ export class DahuaBridgeSurveillancePanelCard
                                                 this._selectedCameraVolume,
                                                 selectedPlayback.nativeStreamSource,
                                                 t,
-                                                camera.stream.fallbacksEnabled,
                                         )
                                         : selectedBridgeRecordingPlayback?.recording.playbackUrl
                                                 ? renderClipPlaybackViewport(
@@ -1077,7 +1076,6 @@ export class DahuaBridgeSurveillancePanelCard
                 this._selectedVtoStreamSource,
                 this._selectedVtoStreamProfile,
                 Boolean(vto.cameraEntity),
-                vto.stream.fallbacksEnabled,
             );
 
             return html`
@@ -1123,7 +1121,6 @@ export class DahuaBridgeSurveillancePanelCard
                                                                                         this._selectedVtoStreamSource,
                                                                                         key,
                                                                                         Boolean(vto.cameraEntity),
-                                                                                        vto.stream.fallbacksEnabled,
                                                                                 );
                                                                                 this.requestUpdate(
                                                                                         "_selectedVtoStreamProfile",
@@ -1172,7 +1169,6 @@ export class DahuaBridgeSurveillancePanelCard
                                         this._selectedVtoStreamProfile,
                                         effectiveVtoStreamSource,
                                         t,
-                                        vto.stream.fallbacksEnabled,
                                 )}
                                 <div class="viewport-controls">
                                     ${this.hasVtoSnapshot(vto)
@@ -1392,7 +1388,6 @@ export class DahuaBridgeSurveillancePanelCard
                     this._selectedVtoStreamProfile,
                     this._selectedVtoStreamSource,
                     t,
-                    vto.stream.fallbacksEnabled,
                 ),
             canOpenSnapshot: (camera) => this.hasSnapshot(camera),
             canOpenVtoSnapshot: (vto) => this.hasVtoSnapshot(vto),
@@ -1809,9 +1804,7 @@ export class DahuaBridgeSurveillancePanelCard
                 this._selectedCameraAudioMuted,
                 this._selectedCameraVolume,
                 t,
-                camera.stream.fallbacksEnabled
-                    ? playback.fallbackStreamSource ?? null
-                    : null,
+                playback.fallbackStreamSource ?? null,
             );
         }
         return renderTimeframePlaybackViewport(
@@ -3859,7 +3852,6 @@ export class DahuaBridgeSurveillancePanelCard
                 selectedSource,
                 profileKey,
                 Boolean(vto.cameraEntity),
-                vto.stream.fallbacksEnabled,
             ) !== null
         );
     }
@@ -3955,7 +3947,6 @@ export class DahuaBridgeSurveillancePanelCard
                 null,
                 this._selectedVtoStreamProfile,
                 Boolean(vto.cameraEntity),
-                vto.stream.fallbacksEnabled,
             );
         }
     }

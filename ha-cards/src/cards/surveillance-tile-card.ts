@@ -594,7 +594,6 @@ export class DahuaBridgeSurveillanceTileCard
       null,
       selectedProfileKey,
       Boolean(vto.cameraEntity),
-      vto.stream.fallbacksEnabled,
     );
     const title = this._config?.title ?? vto.label;
     const showCallActions = vto.callState === "ringing" || vto.callState === "active";
@@ -611,7 +610,6 @@ export class DahuaBridgeSurveillanceTileCard
                 selectedProfileKey,
                 selectedSource,
                 t,
-                vto.stream.fallbacksEnabled,
               )}
               <div class="tile-topbar">
                 <div class="tile-title-banner">
@@ -825,7 +823,6 @@ export class DahuaBridgeSurveillanceTileCard
         null,
         defaultOverviewStreamProfileKey(vto.stream),
         Boolean(vto.cameraEntity),
-        vto.stream.fallbacksEnabled,
       ) !== null
     );
   }

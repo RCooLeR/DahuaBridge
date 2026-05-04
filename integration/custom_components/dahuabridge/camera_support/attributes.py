@@ -24,7 +24,6 @@ def camera_extra_state_attributes(
     record: dict[str, Any] | None,
     preferred_video_profile: str,
     preferred_video_source: str,
-    video_fallbacks_enabled: bool,
     integration_language: str,
 ) -> dict[str, Any]:
     stream = stream_for_record(record)
@@ -53,7 +52,6 @@ def camera_extra_state_attributes(
         record,
         preferred_video_profile,
         preferred_video_source,
-        video_fallbacks_enabled,
     )
     if source:
         attrs["stream_source"] = api.bridge_resource_url(source)
@@ -81,7 +79,6 @@ def camera_extra_state_attributes(
     attrs["stream_available"] = stream_available_for_record(record)
     attrs["preferred_video_profile"] = preferred_video_profile
     attrs["preferred_video_source"] = preferred_video_source
-    attrs["video_fallbacks_enabled"] = video_fallbacks_enabled
 
     _copy_stream_url_attr(api, stream, attrs, "local_preview_url", "preview_url")
     _copy_stream_url_attr(

@@ -126,7 +126,6 @@ class DahuaBridgeCamera(DahuaBridgeEntity, Camera):
             self.record,
             self.coordinator.preferred_video_profile,
             self.coordinator.preferred_video_source,
-            self.coordinator.video_fallbacks_enabled,
             self.coordinator.integration_language,
         )
 
@@ -191,7 +190,6 @@ class DahuaBridgeCamera(DahuaBridgeEntity, Camera):
             self.record,
             self.coordinator.preferred_video_profile,
             self.coordinator.preferred_video_source,
-            self.coordinator.video_fallbacks_enabled,
         )
 
     def _mjpeg_url(self) -> str | None:

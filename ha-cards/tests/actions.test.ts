@@ -48,7 +48,6 @@ function buildCamera(overrides: Partial<CameraViewModel> = {}): CameraViewModel 
       recommendedHaIntegration: null,
       preferredVideoProfile: null,
       preferredVideoSource: null,
-      fallbacksEnabled: true,
       resolution: "",
       codec: "",
       frameRate: "",

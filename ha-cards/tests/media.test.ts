@@ -50,7 +50,6 @@ function buildCamera(overrides: Partial<CameraViewModel> = {}): CameraViewModel 
       recommendedHaIntegration: "bridge_media",
       preferredVideoProfile: "quality",
       preferredVideoSource: null,
-      fallbacksEnabled: true,
       resolution: "",
       codec: "",
       frameRate: "",
@@ -298,19 +297,6 @@ describe("camera media helpers", () => {
     };
 
     expect(resolveStreamViewportSource(stream, null, "quality", true)).toBe("native");
-  });
-
-  it("does not fall back to bridge media when stream fallbacks are disabled", () => {
-    const camera = buildCamera({
-      stream: {
-        ...buildCamera().stream,
-        preferredVideoSource: "rtsp",
-        fallbacksEnabled: false,
-      },
-    });
-
-    expect(resolveSelectedCameraViewportSource(camera, null, "quality")).toBeNull();
-    expect(resolveOverviewCameraViewportSource(camera, "quality")).toBeNull();
   });
 
   it("prefers bridge media for VTO auto-selection but preserves explicit native", () => {
