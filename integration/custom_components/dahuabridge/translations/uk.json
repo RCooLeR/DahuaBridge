@@ -9,6 +9,7 @@
           "scan_interval": "Інтервал опитування в секундах",
           "preferred_video_profile": "Бажаний відеопрофіль",
           "preferred_video_source": "Бажане джерело відео",
+          "enable_video_fallbacks": "Увімкнути резервні відеопотоки",
           "language": "Мова інтеграції"
         }
       }
@@ -26,6 +27,7 @@
           "scan_interval": "Інтервал опитування в секундах",
           "preferred_video_profile": "Бажаний відеопрофіль",
           "preferred_video_source": "Бажане джерело відео",
+          "enable_video_fallbacks": "Увімкнути резервні відеопотоки",
           "language": "Мова інтеграції"
         }
       }

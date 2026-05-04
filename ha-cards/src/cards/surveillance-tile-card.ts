@@ -7,7 +7,7 @@ import {
   defaultOverviewStreamProfileKey,
   renderSelectedCameraViewport,
   renderSelectedVtoViewport,
-  resolveBridgeFirstStreamViewportSource,
+  resolveConfiguredOverviewStreamViewportSource,
   resolveOverviewCameraViewportSource,
   syncViewportAudioState,
 } from "./surveillance-panel-media";
@@ -314,7 +314,7 @@ export class DahuaBridgeSurveillanceTileCard
       window.clearTimeout(this._remoteStreamSyncTimer);
     }
 
-    const syncDelays = [0, 50, 150, 400, 1000, 2500, 5000];
+    const syncDelays = [0, 50, 150, 400, 1000, 2500, 5000, 10000, 20000, 45000, 90000];
 
     const runSyncAt = (index: number): void => {
       syncRemoteStreamStyles(this.renderRoot);
@@ -338,7 +338,7 @@ export class DahuaBridgeSurveillanceTileCard
       window.clearTimeout(this._viewportAudioSyncTimer);
     }
 
-    const syncDelays = [0, 50, 150, 400, 1000, 2500, 5000];
+    const syncDelays = [0, 50, 150, 400, 1000, 2500, 5000, 10000, 20000, 45000, 90000];
 
     const runSyncAt = (index: number): void => {
       this.syncCameraViewportAudioState(this._cameraAudioMuted);
@@ -589,11 +589,12 @@ export class DahuaBridgeSurveillanceTileCard
 
   private renderVtoTile(vto: VtoViewModel, t: Localizer): TemplateResult {
     const selectedProfileKey = defaultOverviewStreamProfileKey(vto.stream);
-    const selectedSource = resolveBridgeFirstStreamViewportSource(
+    const selectedSource = resolveConfiguredOverviewStreamViewportSource(
       vto.stream,
       null,
       selectedProfileKey,
       Boolean(vto.cameraEntity),
+      vto.stream.fallbacksEnabled,
     );
     const title = this._config?.title ?? vto.label;
     const showCallActions = vto.callState === "ringing" || vto.callState === "active";
@@ -610,6 +611,7 @@ export class DahuaBridgeSurveillanceTileCard
                 selectedProfileKey,
                 selectedSource,
                 t,
+                vto.stream.fallbacksEnabled,
               )}
               <div class="tile-topbar">
                 <div class="tile-title-banner">
@@ -801,11 +803,6 @@ export class DahuaBridgeSurveillanceTileCard
       this._errorMessage = this.t()("error.intercomOfferUnavailable");
       return;
     }
-    if (!this._vtoStreamPlaying) {
-      const previousPlaying = this._vtoStreamPlaying;
-      this._vtoStreamPlaying = true;
-      this.requestUpdate("_vtoStreamPlaying", previousPlaying);
-    }
     this.logMedia("card tile vto microphone enable", {
       device_id: vto.deviceId,
       offer_url: redactUrlForLog(offerUrl),
@@ -819,15 +816,17 @@ export class DahuaBridgeSurveillanceTileCard
   }
 
   private hasPlayableVtoStream(vto: VtoViewModel): boolean {
+    if (!vto.streamAvailable) {
+      return false;
+    }
     return (
-      vto.streamAvailable &&
-      (Boolean(vto.cameraEntity) ||
-        vto.stream.profiles.some(
-          (profile) =>
-            Boolean(profile.localDashUrl) ||
-            Boolean(profile.localHlsUrl) ||
-            Boolean(profile.localMjpegUrl),
-        ))
+      resolveConfiguredOverviewStreamViewportSource(
+        vto.stream,
+        null,
+        defaultOverviewStreamProfileKey(vto.stream),
+        Boolean(vto.cameraEntity),
+        vto.stream.fallbacksEnabled,
+      ) !== null
     );
   }
 

@@ -126,6 +126,7 @@ class DahuaBridgeCamera(DahuaBridgeEntity, Camera):
             self.record,
             self.coordinator.preferred_video_profile,
             self.coordinator.preferred_video_source,
+            self.coordinator.video_fallbacks_enabled,
             self.coordinator.integration_language,
         )
 
@@ -146,9 +147,7 @@ class DahuaBridgeCamera(DahuaBridgeEntity, Camera):
     ) -> bytes | None:
         snapshot_url = self._snapshot_url()
         if snapshot_url:
-            resolved = self.coordinator.api.bridge_resource_url(
-                with_requested_width(snapshot_url, width)
-            )
+            resolved = self.coordinator.api.bridge_resource_url(snapshot_url)
             _LOGGER.debug(
                 "Fetching camera snapshot for %s from %s",
                 self.entity_id or self._device_id,
@@ -192,6 +191,7 @@ class DahuaBridgeCamera(DahuaBridgeEntity, Camera):
             self.record,
             self.coordinator.preferred_video_profile,
             self.coordinator.preferred_video_source,
+            self.coordinator.video_fallbacks_enabled,
         )
 
     def _mjpeg_url(self) -> str | None:

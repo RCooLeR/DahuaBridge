@@ -193,6 +193,7 @@ export interface BridgeMediaModel {
   recommendedHaIntegration: string | null;
   preferredVideoProfile: string | null;
   preferredVideoSource: string | null;
+  videoFallbacksEnabled: boolean;
   resolution: string;
   codec: string;
   frameRate: string;
@@ -850,6 +851,10 @@ function buildCameraDeviceBase(
         ) ?? null,
       preferredVideoProfile: stringValue(cameraEntity?.attributes.preferred_video_profile),
       preferredVideoSource: stringValue(cameraEntity?.attributes.preferred_video_source),
+      videoFallbacksEnabled: booleanAttributeWithDefault(
+        cameraEntity?.attributes.video_fallbacks_enabled,
+        true,
+      ),
       resolution:
         sensorStateForDevice(hass, registrySnapshot, descriptor.deviceId, "main_resolution") ?? "-",
       codec: sensorStateForDevice(hass, registrySnapshot, descriptor.deviceId, "main_codec") ?? "-",
@@ -2187,6 +2192,13 @@ function booleanOrNull(value: unknown): boolean | null {
 }
 
 function booleanAttribute(value: unknown): boolean {
+  return value === true || value === "true" || value === "on";
+}
+
+function booleanAttributeWithDefault(value: unknown, fallback: boolean): boolean {
+  if (value === undefined || value === null || value === "") {
+    return fallback;
+  }
   return value === true || value === "true" || value === "on";
 }
 

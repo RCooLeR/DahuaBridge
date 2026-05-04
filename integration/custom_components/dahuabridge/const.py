@@ -8,11 +8,13 @@ CONF_BRIDGE_URL = "bridge_url"
 CONF_SCAN_INTERVAL = "scan_interval"
 CONF_PREFERRED_VIDEO_PROFILE = "preferred_video_profile"
 CONF_PREFERRED_VIDEO_SOURCE = "preferred_video_source"
+CONF_ENABLE_VIDEO_FALLBACKS = "enable_video_fallbacks"
 CONF_LANGUAGE = "language"
 
 DEFAULT_SCAN_INTERVAL = 15
 DEFAULT_PREFERRED_VIDEO_PROFILE = "quality"
 DEFAULT_PREFERRED_VIDEO_SOURCE = "rtsp"
+DEFAULT_ENABLE_VIDEO_FALLBACKS = True
 DEFAULT_LANGUAGE = "auto"
 
 CATALOG_PATH = "/api/v1/home-assistant/native/catalog"

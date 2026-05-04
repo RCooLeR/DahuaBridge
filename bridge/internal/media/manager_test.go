@@ -241,6 +241,18 @@ func TestResolvedScaleWidth(t *testing.T) {
 	}
 }
 
+func TestRequestedScaleWidthDoesNotUseConfiguredDefault(t *testing.T) {
+	if got := requestedScaleWidth(0, 960); got != 0 {
+		t.Fatalf("expected missing request width to keep original size, got %d", got)
+	}
+	if got := requestedScaleWidth(640, 960); got != 640 {
+		t.Fatalf("expected explicit request width to be honored, got %d", got)
+	}
+	if got := requestedScaleWidth(640, 0); got != 0 {
+		t.Fatalf("expected disabled scaling config to reject request width, got %d", got)
+	}
+}
+
 func TestWaitUntilReadyReturnsWorkerError(t *testing.T) {
 	manager := New(config.MediaConfig{
 		Enabled:        true,

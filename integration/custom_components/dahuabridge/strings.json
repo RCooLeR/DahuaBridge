@@ -9,6 +9,7 @@
           "scan_interval": "Poll interval in seconds",
           "preferred_video_profile": "Preferred video profile",
           "preferred_video_source": "Preferred video source",
+          "enable_video_fallbacks": "Enable video stream fallbacks",
           "language": "Integration language"
         }
       }
@@ -26,6 +27,7 @@
           "scan_interval": "Poll interval in seconds",
           "preferred_video_profile": "Preferred video profile",
           "preferred_video_source": "Preferred video source",
+          "enable_video_fallbacks": "Enable video stream fallbacks",
           "language": "Integration language"
         }
       }

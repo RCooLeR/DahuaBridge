@@ -16,6 +16,7 @@ import {
   resolveSelectedCameraStreamProfile,
   resolveSelectedCameraViewportSource,
   resolvePlaybackViewportSource,
+  resolveStreamViewportSource,
   type CameraViewportSource,
 } from "../src/cards/surveillance-panel-media";
 import { selectedCameraLiveStreamModel } from "../src/cards/surveillance-panel-live-stream-model";
@@ -49,6 +50,7 @@ function buildCamera(overrides: Partial<CameraViewModel> = {}): CameraViewModel 
       recommendedHaIntegration: "bridge_media",
       preferredVideoProfile: "quality",
       preferredVideoSource: null,
+      fallbacksEnabled: true,
       resolution: "",
       codec: "",
       frameRate: "",
@@ -286,6 +288,29 @@ describe("camera media helpers", () => {
     expect(selectedCameraLiveStreamModel(camera, null, null, null).selectedSource).toBe("native");
     expect(selectedCameraLiveStreamModel(camera, null, "hls", null).selectedSource).toBe("hls");
     expect(selectedCameraLiveStreamModel(camera, null, "native", null).selectedSource).toBe("native");
+  });
+
+  it("uses configured native RTSP for VTO-style stream source selection", () => {
+    const stream = {
+      ...buildCamera().stream,
+      recommendedHaIntegration: "native",
+      preferredVideoSource: "rtsp",
+    };
+
+    expect(resolveStreamViewportSource(stream, null, "quality", true)).toBe("native");
+  });
+
+  it("does not fall back to bridge media when stream fallbacks are disabled", () => {
+    const camera = buildCamera({
+      stream: {
+        ...buildCamera().stream,
+        preferredVideoSource: "rtsp",
+        fallbacksEnabled: false,
+      },
+    });
+
+    expect(resolveSelectedCameraViewportSource(camera, null, "quality")).toBeNull();
+    expect(resolveOverviewCameraViewportSource(camera, "quality")).toBeNull();
   });
 
   it("prefers bridge media for VTO auto-selection but preserves explicit native", () => {

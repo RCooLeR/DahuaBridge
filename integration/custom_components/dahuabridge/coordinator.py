@@ -11,9 +11,11 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 from .api import DahuaBridgeAPI, DahuaBridgeAPIError
 from .catalog import normalize_profile_name
 from .const import (
+    CONF_ENABLE_VIDEO_FALLBACKS,
     CONF_LANGUAGE,
     CONF_PREFERRED_VIDEO_PROFILE,
     CONF_PREFERRED_VIDEO_SOURCE,
+    DEFAULT_ENABLE_VIDEO_FALLBACKS,
     DEFAULT_LANGUAGE,
     DEFAULT_PREFERRED_VIDEO_PROFILE,
     DEFAULT_PREFERRED_VIDEO_SOURCE,
@@ -56,6 +58,14 @@ class DahuaBridgeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 CONF_PREFERRED_VIDEO_SOURCE, DEFAULT_PREFERRED_VIDEO_SOURCE
             )
         ).strip() or DEFAULT_PREFERRED_VIDEO_SOURCE
+
+    @property
+    def video_fallbacks_enabled(self) -> bool:
+        return bool(
+            self.config_entry.options.get(
+                CONF_ENABLE_VIDEO_FALLBACKS, DEFAULT_ENABLE_VIDEO_FALLBACKS
+            )
+        )
 
     @property
     def integration_language(self) -> str:

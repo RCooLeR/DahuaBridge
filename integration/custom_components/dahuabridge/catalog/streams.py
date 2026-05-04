@@ -14,6 +14,7 @@ def stream_source_for_record_with_preferences(
     record: dict[str, Any] | None,
     preferred_profile: str = "auto",
     preferred_source: str = "auto",
+    fallbacks_enabled: bool = True,
 ) -> str | None:
     stream = stream_for_record(record)
     profiles = stream.get("profiles", {})
@@ -21,7 +22,7 @@ def stream_source_for_record_with_preferences(
         return None
 
     order = profile_order_for_record(record, preferred_profile)
-    source_order = source_order_for_preference(preferred_source)
+    source_order = source_order_for_preference(preferred_source, fallbacks_enabled)
     seen: set[str] = set()
     for name in order:
         if not name or name in seen:
@@ -109,8 +110,21 @@ def unique_profile_names(*names: str) -> list[str]:
     return result
 
 
-def source_order_for_preference(preferred_source: str = "auto") -> tuple[str, ...]:
+def source_order_for_preference(
+    preferred_source: str = "auto",
+    fallbacks_enabled: bool = True,
+) -> tuple[str, ...]:
     preference = str(preferred_source).strip().lower() or "auto"
+    if not fallbacks_enabled:
+        if preference in {"rtsp", "native", "direct_rtsp", "auto"}:
+            return ("stream_url",)
+        if preference == "hls":
+            return ("local_hls_url",)
+        if preference == "dash":
+            return ("local_dash_url",)
+        if preference == "mjpeg":
+            return ("local_mjpeg_url",)
+        return ("stream_url",)
     if preference in {"rtsp", "native", "direct_rtsp"}:
         return ("stream_url", "local_hls_url", "local_dash_url", "local_mjpeg_url")
     if preference == "hls":

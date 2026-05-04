@@ -18,10 +18,12 @@ from .config_options import (
 )
 from .const import (
     CONF_BRIDGE_URL,
+    CONF_ENABLE_VIDEO_FALLBACKS,
     CONF_LANGUAGE,
     CONF_PREFERRED_VIDEO_PROFILE,
     CONF_PREFERRED_VIDEO_SOURCE,
     CONF_SCAN_INTERVAL,
+    DEFAULT_ENABLE_VIDEO_FALLBACKS,
     DEFAULT_LANGUAGE,
     DEFAULT_PREFERRED_VIDEO_PROFILE,
     DEFAULT_PREFERRED_VIDEO_SOURCE,
@@ -82,6 +84,12 @@ class DahuaBridgeConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     language = normalize_language_choice(
                         user_input.get(CONF_LANGUAGE, DEFAULT_LANGUAGE)
                     )
+                    enable_video_fallbacks = bool(
+                        user_input.get(
+                            CONF_ENABLE_VIDEO_FALLBACKS,
+                            DEFAULT_ENABLE_VIDEO_FALLBACKS,
+                        )
+                    )
                     await self.async_set_unique_id(bridge_url)
                     self._abort_if_unique_id_configured()
 
@@ -104,6 +112,7 @@ class DahuaBridgeConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                             ),
                             CONF_PREFERRED_VIDEO_PROFILE: preferred_profile,
                             CONF_PREFERRED_VIDEO_SOURCE: preferred_source,
+                            CONF_ENABLE_VIDEO_FALLBACKS: enable_video_fallbacks,
                             CONF_LANGUAGE: language,
                         },
                     )
@@ -135,6 +144,11 @@ class DahuaBridgeOptionsFlow(config_entries.OptionsFlow):
             language = normalize_language_choice(
                 user_input.get(CONF_LANGUAGE, DEFAULT_LANGUAGE)
             )
+            enable_video_fallbacks = bool(
+                user_input.get(
+                    CONF_ENABLE_VIDEO_FALLBACKS, DEFAULT_ENABLE_VIDEO_FALLBACKS
+                )
+            )
             return self.async_create_entry(
                 title="",
                 data={
@@ -143,6 +157,7 @@ class DahuaBridgeOptionsFlow(config_entries.OptionsFlow):
                     ),
                     CONF_PREFERRED_VIDEO_PROFILE: preferred_profile,
                     CONF_PREFERRED_VIDEO_SOURCE: preferred_source,
+                    CONF_ENABLE_VIDEO_FALLBACKS: enable_video_fallbacks,
                     CONF_LANGUAGE: language,
                 },
             )

@@ -133,6 +133,7 @@ export function resolveSelectedCameraViewportSource(
     selectedSource,
     selectedProfileKey,
     Boolean(camera.cameraEntity),
+    camera.stream.fallbacksEnabled,
   );
 }
 
@@ -145,6 +146,7 @@ export function resolveOverviewCameraViewportSource(
     null,
     selectedProfileKey,
     Boolean(camera.cameraEntity),
+    camera.stream.fallbacksEnabled,
   );
 }
 
@@ -156,6 +158,7 @@ export function resolvePreferredCameraViewportSource(
     camera.stream,
     selectedProfileKey,
     Boolean(camera.cameraEntity),
+    camera.stream.fallbacksEnabled,
   );
 }
 
@@ -163,12 +166,14 @@ export function resolvePreferredStreamViewportSource(
   stream: CameraStreamViewModel,
   selectedProfileKey: string | null,
   nativeAvailable = false,
+  fallbacksEnabled = true,
 ): CameraViewportSource | null {
   return resolveStreamViewportSource(
     stream,
     null,
     selectedProfileKey,
     nativeAvailable,
+    fallbacksEnabled,
   );
 }
 
@@ -207,6 +212,7 @@ export function resolveConfiguredOverviewStreamViewportSource(
   selectedSource: CameraViewportSource | null,
   selectedProfileKey: string | null,
   nativeAvailable = false,
+  fallbacksEnabled = true,
 ): CameraViewportSource | null {
   const availableSources = availableStreamViewportSources(
     stream,
@@ -220,6 +226,9 @@ export function resolveConfiguredOverviewStreamViewportSource(
   const preferredSource = normalizeViewportSource(stream.preferredVideoSource);
   if (preferredSource && availableSources.includes(preferredSource)) {
     return preferredSource;
+  }
+  if (preferredSource && !fallbacksEnabled) {
+    return null;
   }
 
   return selectSourceByPriority(
@@ -233,6 +242,7 @@ export function resolveStreamViewportSource(
   selectedSource: CameraViewportSource | null,
   selectedProfileKey: string | null,
   nativeAvailable = false,
+  fallbacksEnabled = true,
 ): CameraViewportSource | null {
   const availableSources = availableStreamViewportSources(
     stream,
@@ -247,12 +257,21 @@ export function resolveStreamViewportSource(
   if (preferredSource && availableSources.includes(preferredSource)) {
     return preferredSource;
   }
+  if (preferredSource && !fallbacksEnabled) {
+    return null;
+  }
 
   if (
     prefersNativeIntegration(stream.recommendedHaIntegration) &&
     availableSources.includes("native")
   ) {
     return "native";
+  }
+  if (
+    prefersNativeIntegration(stream.recommendedHaIntegration) &&
+    !fallbacksEnabled
+  ) {
+    return null;
   }
 
   return selectSourceByPriority(

@@ -120,7 +120,7 @@ func (m *Manager) CaptureFrame(ctx context.Context, streamID string, profileName
 		return nil, "", err
 	}
 
-	w, err := m.getOrCreateMJPEGWorker(entry, resolvedProfileName, profile, scaleWidth)
+	w, err := m.getOrCreateFrameCaptureWorker(entry, resolvedProfileName, profile, scaleWidth)
 	if err != nil {
 		return nil, "", err
 	}

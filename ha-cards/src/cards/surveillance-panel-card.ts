@@ -38,7 +38,6 @@ import {
     renderPlaybackViewport,
     renderSelectedCameraViewport,
     renderSelectedVtoViewport,
-    resolveBridgeFirstStreamViewportSource,
     resolveOverviewCameraViewportSource,
     resolveSelectedCameraStreamProfile,
     resolveStreamViewportSource,
@@ -836,6 +835,7 @@ export class DahuaBridgeSurveillancePanelCard
                                                 this._selectedCameraVolume,
                                                 selectedPlayback.nativeStreamSource,
                                                 t,
+                                                camera.stream.fallbacksEnabled,
                                         )
                                         : selectedBridgeRecordingPlayback?.recording.playbackUrl
                                                 ? renderClipPlaybackViewport(
@@ -1072,11 +1072,12 @@ export class DahuaBridgeSurveillancePanelCard
                 this._selectedVtoStreamProfile,
                 Boolean(vto.cameraEntity),
             );
-            const effectiveVtoStreamSource = resolveBridgeFirstStreamViewportSource(
+            const effectiveVtoStreamSource = resolveStreamViewportSource(
                 vto.stream,
                 this._selectedVtoStreamSource,
                 this._selectedVtoStreamProfile,
                 Boolean(vto.cameraEntity),
+                vto.stream.fallbacksEnabled,
             );
 
             return html`
@@ -1117,11 +1118,12 @@ export class DahuaBridgeSurveillancePanelCard
                                                                             (key) => {
                                                                                 const previousProfile = this._selectedVtoStreamProfile;
                                                                                 this._selectedVtoStreamProfile = key;
-                                                                                this._selectedVtoStreamSource = resolveBridgeFirstStreamViewportSource(
+                                                                                this._selectedVtoStreamSource = resolveStreamViewportSource(
                                                                                         vto.stream,
                                                                                         this._selectedVtoStreamSource,
                                                                                         key,
                                                                                         Boolean(vto.cameraEntity),
+                                                                                        vto.stream.fallbacksEnabled,
                                                                                 );
                                                                                 this.requestUpdate(
                                                                                         "_selectedVtoStreamProfile",
@@ -1170,6 +1172,7 @@ export class DahuaBridgeSurveillancePanelCard
                                         this._selectedVtoStreamProfile,
                                         effectiveVtoStreamSource,
                                         t,
+                                        vto.stream.fallbacksEnabled,
                                 )}
                                 <div class="viewport-controls">
                                     ${this.hasVtoSnapshot(vto)
@@ -1382,7 +1385,15 @@ export class DahuaBridgeSurveillancePanelCard
             cameraImageSrc: (cameraEntity, snapshotUrl) =>
                 cameraImageSrc(cameraEntity, snapshotUrl),
             renderVtoViewport: (vto, playing) =>
-                renderSelectedVtoViewport(this.hass, vto, playing, this._selectedVtoStreamProfile, this._selectedVtoStreamSource, t),
+                renderSelectedVtoViewport(
+                    this.hass,
+                    vto,
+                    playing,
+                    this._selectedVtoStreamProfile,
+                    this._selectedVtoStreamSource,
+                    t,
+                    vto.stream.fallbacksEnabled,
+                ),
             canOpenSnapshot: (camera) => this.hasSnapshot(camera),
             canOpenVtoSnapshot: (vto) => this.hasVtoSnapshot(vto),
             isBridgeRecordingActive: (camera) => this.isBridgeRecordingActive(camera),
@@ -1798,7 +1809,9 @@ export class DahuaBridgeSurveillancePanelCard
                 this._selectedCameraAudioMuted,
                 this._selectedCameraVolume,
                 t,
-                playback.fallbackStreamSource ?? null,
+                camera.stream.fallbacksEnabled
+                    ? playback.fallbackStreamSource ?? null
+                    : null,
             );
         }
         return renderTimeframePlaybackViewport(
@@ -1858,7 +1871,7 @@ export class DahuaBridgeSurveillancePanelCard
         if (this._remoteStreamSyncTimer !== null) {
             window.clearTimeout(this._remoteStreamSyncTimer);
         }
-        const syncDelays = [0, 50, 150, 400, 1000, 2500, 5000];
+        const syncDelays = [0, 50, 150, 400, 1000, 2500, 5000, 10000, 20000, 45000, 90000];
         const runSyncAt = (index: number): void => {
             syncRemoteStreamStyles(this.renderRoot);
             if (index >= syncDelays.length - 1) {
@@ -1877,7 +1890,7 @@ export class DahuaBridgeSurveillancePanelCard
         if (this._viewportAudioSyncTimer !== null) {
             window.clearTimeout(this._viewportAudioSyncTimer);
         }
-        const syncDelays = [0, 50, 150, 400, 1000, 2500, 5000];
+        const syncDelays = [0, 50, 150, 400, 1000, 2500, 5000, 10000, 20000, 45000, 90000];
         const runSyncAt = (index: number): void => {
             this.syncSelectedCameraViewportAudioState(
                     this._selectedCameraAudioMuted,
@@ -3831,15 +3844,23 @@ export class DahuaBridgeSurveillancePanelCard
     }
 
     private hasPlayableVtoStream(vto: VtoViewModel): boolean {
+        if (!vto.streamAvailable) {
+            return false;
+        }
+        const isSelectedVto =
+            this._selection.kind === "vto" && this._selection.deviceId === vto.deviceId;
+        const profileKey = isSelectedVto
+            ? this._selectedVtoStreamProfile
+            : defaultSelectedStreamProfileKey(vto.stream);
+        const selectedSource = isSelectedVto ? this._selectedVtoStreamSource : null;
         return (
-            vto.streamAvailable &&
-            (Boolean(vto.cameraEntity) ||
-                vto.stream.profiles.some(
-                    (profile) =>
-                        Boolean(profile.localDashUrl) ||
-                        Boolean(profile.localHlsUrl) ||
-                        Boolean(profile.localMjpegUrl),
-                ))
+            resolveStreamViewportSource(
+                vto.stream,
+                selectedSource,
+                profileKey,
+                Boolean(vto.cameraEntity),
+                vto.stream.fallbacksEnabled,
+            ) !== null
         );
     }
 
@@ -3929,11 +3950,12 @@ export class DahuaBridgeSurveillancePanelCard
             this._selectedVtoStreamProfile = defaultSelectedStreamProfileKey(vto.stream);
         }
         if (this._selectedVtoStreamSource === null) {
-            this._selectedVtoStreamSource = resolveBridgeFirstStreamViewportSource(
+            this._selectedVtoStreamSource = resolveStreamViewportSource(
                 vto.stream,
                 null,
                 this._selectedVtoStreamProfile,
                 Boolean(vto.cameraEntity),
+                vto.stream.fallbacksEnabled,
             );
         }
     }

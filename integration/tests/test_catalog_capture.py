@@ -57,6 +57,8 @@ class CaptureCatalogTests(unittest.TestCase):
             source_order_for_preference("dash"),
             ("local_dash_url", "local_hls_url", "local_mjpeg_url", "stream_url"),
         )
+        self.assertEqual(source_order_for_preference("rtsp", False), ("stream_url",))
+        self.assertEqual(source_order_for_preference("hls", False), ("local_hls_url",))
 
     def test_stream_source_uses_dash_between_hls_and_mjpeg(self) -> None:
         record = {
@@ -75,6 +77,9 @@ class CaptureCatalogTests(unittest.TestCase):
         self.assertEqual(
             stream_source_for_record_with_preferences(record, "quality", "hls"),
             "/api/v1/media/dash/cam1/quality/manifest.mpd",
+        )
+        self.assertIsNone(
+            stream_source_for_record_with_preferences(record, "quality", "hls", False)
         )
 
 

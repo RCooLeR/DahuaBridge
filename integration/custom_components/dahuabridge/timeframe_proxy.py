@@ -175,9 +175,6 @@ class DahuaBridgeTimeframeProxyView(HomeAssistantView):
             return json_error(502, "Bridge playback session did not expose stream_id")
 
         query = {"profile": str(playback_context["profile_name"])}
-        width = positive_int(request.query.get("width"))
-        if width is not None:
-            query["width"] = str(width)
         snapshot_path = (
             f"/api/v1/media/snapshot/{quote(stream_id, safe='')}?{urlencode(query)}"
         )

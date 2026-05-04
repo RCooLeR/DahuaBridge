@@ -16,6 +16,15 @@ import (
 
 func (m *Manager) getOrCreateMJPEGWorker(entry streams.Entry, profileName string, profile streams.Profile, scaleWidth int) (*worker, error) {
 	effectiveScaleWidth := resolvedScaleWidth(scaleWidth, m.cfg.ScaleWidth)
+	return m.getOrCreateMJPEGWorkerWithEffectiveScale(entry, profileName, profile, effectiveScaleWidth)
+}
+
+func (m *Manager) getOrCreateFrameCaptureWorker(entry streams.Entry, profileName string, profile streams.Profile, scaleWidth int) (*worker, error) {
+	effectiveScaleWidth := requestedScaleWidth(scaleWidth, m.cfg.ScaleWidth)
+	return m.getOrCreateMJPEGWorkerWithEffectiveScale(entry, profileName, profile, effectiveScaleWidth)
+}
+
+func (m *Manager) getOrCreateMJPEGWorkerWithEffectiveScale(entry streams.Entry, profileName string, profile streams.Profile, effectiveScaleWidth int) (*worker, error) {
 	key := fmt.Sprintf("%s:%s:w%d", entry.ID, profileName, effectiveScaleWidth)
 
 	m.mu.Lock()

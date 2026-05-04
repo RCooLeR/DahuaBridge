@@ -5,10 +5,12 @@ from typing import Any
 import voluptuous as vol
 
 from .const import (
+    CONF_ENABLE_VIDEO_FALLBACKS,
     CONF_LANGUAGE,
     CONF_PREFERRED_VIDEO_PROFILE,
     CONF_PREFERRED_VIDEO_SOURCE,
     CONF_SCAN_INTERVAL,
+    DEFAULT_ENABLE_VIDEO_FALLBACKS,
     DEFAULT_LANGUAGE,
     DEFAULT_PREFERRED_VIDEO_PROFILE,
     DEFAULT_PREFERRED_VIDEO_SOURCE,
@@ -46,6 +48,10 @@ def build_user_schema(bridge_url_key: str) -> vol.Schema:
                 CONF_PREFERRED_VIDEO_SOURCE,
                 default=DEFAULT_PREFERRED_VIDEO_SOURCE,
             ): vol.In(VIDEO_SOURCE_OPTIONS),
+            vol.Optional(
+                CONF_ENABLE_VIDEO_FALLBACKS,
+                default=DEFAULT_ENABLE_VIDEO_FALLBACKS,
+            ): bool,
             vol.Optional(CONF_LANGUAGE, default=DEFAULT_LANGUAGE): vol.In(
                 LANGUAGE_OPTIONS
             ),
@@ -80,6 +86,14 @@ def build_options_schema(config_entry: Any) -> vol.Schema:
             config_entry.data.get(CONF_LANGUAGE, DEFAULT_LANGUAGE),
         )
     )
+    current_fallbacks_enabled = bool(
+        config_entry.options.get(
+            CONF_ENABLE_VIDEO_FALLBACKS,
+            config_entry.data.get(
+                CONF_ENABLE_VIDEO_FALLBACKS, DEFAULT_ENABLE_VIDEO_FALLBACKS
+            ),
+        )
+    )
     return vol.Schema(
         {
             vol.Optional(
@@ -91,6 +105,9 @@ def build_options_schema(config_entry: Any) -> vol.Schema:
             vol.Optional(
                 CONF_PREFERRED_VIDEO_SOURCE, default=current_source
             ): vol.In(VIDEO_SOURCE_OPTIONS),
+            vol.Optional(
+                CONF_ENABLE_VIDEO_FALLBACKS, default=current_fallbacks_enabled
+            ): bool,
             vol.Optional(CONF_LANGUAGE, default=current_language): vol.In(
                 LANGUAGE_OPTIONS
             ),

@@ -84,6 +84,7 @@ class FakeCoordinator:
         self.data = {"devices": [record]}
         self.preferred_video_profile = "stable"
         self.preferred_video_source = "hls"
+        self.video_fallbacks_enabled = True
         self.integration_language = "en"
         self.refresh_count = 0
         self.last_update_success = True
@@ -134,7 +135,7 @@ class CameraCaptureTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(image, b"snapshot")
         self.assertEqual(
             camera.coordinator.api.bytes_requests,
-            ["http://bridge.local:8080/api/v1/media/snapshot/cam1?width=640"],
+            ["http://bridge.local:8080/api/v1/media/snapshot/cam1"],
         )
         self.assertEqual(camera.coordinator.api.mjpeg_requests, [])
 
@@ -148,6 +149,10 @@ class CameraCaptureTests(unittest.IsolatedAsyncioTestCase):
         image = await camera.async_camera_image(width=320)
 
         self.assertEqual(image, b"mjpeg")
+        self.assertEqual(
+            coordinator.api.bytes_requests,
+            ["http://bridge.local:8080/api/v1/media/snapshot/cam1"],
+        )
         self.assertEqual(
             coordinator.api.mjpeg_requests,
             ["http://bridge.local:8080/api/v1/media/mjpeg/cam1?profile=stable&width=320"],
@@ -179,6 +184,7 @@ class CameraCaptureTests(unittest.IsolatedAsyncioTestCase):
             "http://bridge.local:8080/api/v1/nvr/west20_nvr/recording-chunks?channel=5&start={start}&end={end}&limit={limit}",
         )
         self.assertEqual(attrs["bridge_integration_language"], "en")
+        self.assertTrue(attrs["video_fallbacks_enabled"])
 
     def test_camera_attributes_request_smd_ivs_credentials_for_direct_rtsp(self) -> None:
         coordinator = FakeCoordinator(make_record())
@@ -190,6 +196,20 @@ class CameraCaptureTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             attrs["bridge_archive_smd_ivs_url_template"],
             "http://bridge.local:8080/api/v1/nvr/west20_nvr/smd-ivs?channel=5&start={start}&end={end}&limit={limit}&event={event}&include_credentials=true",
+        )
+
+    def test_camera_attributes_disable_source_fallbacks(self) -> None:
+        coordinator = FakeCoordinator(make_record())
+        coordinator.preferred_video_source = "hls"
+        coordinator.video_fallbacks_enabled = False
+        camera = DahuaBridgeCamera(coordinator, "cam1")
+
+        attrs = camera.extra_state_attributes
+
+        self.assertFalse(attrs["video_fallbacks_enabled"])
+        self.assertEqual(
+            attrs["stream_source"],
+            "http://bridge.local:8080/api/v1/media/hls/cam1/stable/index.m3u8",
         )
 
     async def test_async_start_recording_calls_bridge_capture_service(self) -> None:

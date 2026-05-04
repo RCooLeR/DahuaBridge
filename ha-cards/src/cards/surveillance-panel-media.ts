@@ -1,4 +1,5 @@
 import { html, LitElement, type PropertyValues, type TemplateResult } from "lit";
+import { keyed } from "lit/directives/keyed.js";
 
 import type { NvrPlaybackSessionModel } from "../domain/archive";
 import type {
@@ -18,6 +19,7 @@ import {
   preservePlaybackViewportSourceSelection,
   resolveInitialPlaybackViewportSource,
   resolveBridgeFirstStreamViewportSource,
+  resolveConfiguredOverviewStreamViewportSource,
   resolveOverviewCameraViewportSource,
   resolvePlaybackProfile,
   resolvePlaybackViewportSource,
@@ -49,6 +51,7 @@ export {
   preservePlaybackViewportSourceSelection,
   resolveInitialPlaybackViewportSource,
   resolveBridgeFirstStreamViewportSource,
+  resolveConfiguredOverviewStreamViewportSource,
   resolveOverviewCameraViewportSource,
   resolvePlaybackViewportSource,
   resolvePreferredCameraViewportSource,
@@ -81,12 +84,12 @@ const MEDIA_SHADOW_HOST_SELECTOR = [
   "hui-image",
   "dahuabridge-remote-stream",
 ].join(", ");
-const SHADOW_ROOT_RETRY_MS = 250;
-const SHADOW_ROOT_RETRY_ATTEMPTS = 80;
-const NATIVE_FALLBACK_STARTUP_TIMEOUT_MS = 35_000;
-const NATIVE_FALLBACK_SCAN_MS = 250;
+const SHADOW_ROOT_RETRY_MS = 1000;
+const SHADOW_ROOT_RETRY_ATTEMPTS = 400;
+const NATIVE_FALLBACK_STARTUP_TIMEOUT_MS = 90_000;
+const NATIVE_FALLBACK_SCAN_MS = 1000;
 const DEFAULT_BRIDGE_FALLBACK_ORDER = ["hls", "dash", "mjpeg"] as const;
-const SUBSTREAM_BRIDGE_FALLBACK_ORDER = ["hls", "dash"] as const;
+const SUBSTREAM_BRIDGE_FALLBACK_ORDER = ["hls", "dash", "mjpeg"] as const;
 const DEFAULT_LOCALIZER = createLocalizer("en");
 
 interface ViewportAudioPlaybackState {
@@ -111,14 +114,18 @@ export function renderLiveViewport(
   }
 
   const normalizedVolume = clampStreamVolume(volume);
-  return html`
-    <ha-camera-stream
-      .hass=${hass}
-      .stateObj=${entity}
-      data-audio-muted=${muted ? "true" : "false"}
-      data-audio-volume=${String(normalizedVolume)}
-    ></ha-camera-stream>
-  `;
+  return html`${keyed(
+    nativeCameraStreamKey(entity),
+    html`
+      <ha-camera-stream
+        .hass=${hass}
+        .stateObj=${entity}
+        data-audio-muted=${muted ? "true" : "false"}
+        data-audio-volume=${String(normalizedVolume)}
+        style="display:block;width:100%;height:100%;min-width:0;min-height:0;max-width:100%;max-height:100%;aspect-ratio:16 / 9;overflow:hidden;object-fit:fill;"
+      ></ha-camera-stream>
+    `,
+  )}`;
 }
 
 function renderNativeLiveViewportWithFallback(
@@ -135,17 +142,20 @@ function renderNativeLiveViewportWithFallback(
     return renderLiveViewport(hass, entity, muted, volume, t);
   }
 
-  return html`
-    <dahuabridge-native-fallback-stream
-      .hass=${hass}
-      .entity=${entity}
-      .fallbackDescriptor=${fallbackDescriptor}
-      .muted=${muted}
-      .volume=${clampStreamVolume(volume)}
-      .controls=${controls}
-      .preload=${preload}
-    ></dahuabridge-native-fallback-stream>
-  `;
+  return html`${keyed(
+    `${nativeCameraStreamKey(entity)}:${fallbackDescriptor.cacheKey}`,
+    html`
+      <dahuabridge-native-fallback-stream
+        .hass=${hass}
+        .entity=${entity}
+        .fallbackDescriptor=${fallbackDescriptor}
+        .muted=${muted}
+        .volume=${clampStreamVolume(volume)}
+        .controls=${controls}
+        .preload=${preload}
+      ></dahuabridge-native-fallback-stream>
+    `,
+  )}`;
 }
 
 export function renderNativePlaybackViewport(
@@ -222,6 +232,7 @@ export function renderPlaybackViewport(
   volume = 1,
   nativeStreamSource: string | null = null,
   t: Localizer = DEFAULT_LOCALIZER,
+  fallbacksEnabled = true,
 ): TemplateResult {
   const resolvedProfile = resolvePlaybackProfile(session, selectedProfileKey);
   const normalizedNativeSource = nativeStreamSource?.trim() ?? "";
@@ -236,7 +247,9 @@ export function renderPlaybackViewport(
       );
   const descriptorPreferredSource = resolvedSource === "native" ? null : resolvedSource;
   const descriptorFallbackOrder =
-    selectedSource && selectedSource !== "native"
+    !fallbacksEnabled
+      ? []
+      : selectedSource && selectedSource !== "native"
       ? [selectedSource]
       : DEFAULT_BRIDGE_FALLBACK_ORDER;
   const descriptor = buildRemoteStreamDescriptor(
@@ -288,6 +301,7 @@ export function renderSelectedCameraViewport(
     t?: Localizer;
     manageAudioExternally?: boolean;
     includeSubstreamFallback?: boolean;
+    fallbacksEnabled?: boolean;
   },
 ): TemplateResult {
   const t = options?.t ?? DEFAULT_LOCALIZER;
@@ -295,6 +309,8 @@ export function renderSelectedCameraViewport(
   const preload = options?.preload ?? "auto";
   const renderMuted = options?.manageAudioExternally ? true : muted;
   const renderVolume = options?.manageAudioExternally ? 1 : volume;
+  const fallbacksEnabled =
+    options?.fallbacksEnabled ?? camera.stream.fallbacksEnabled;
   const resolvedProfile = resolveSelectedStreamProfile(
     camera.stream,
     selectedProfileKey,
@@ -304,18 +320,21 @@ export function renderSelectedCameraViewport(
     selectedSource,
     resolvedProfile?.key ?? null,
     Boolean(camera.cameraEntity),
+    fallbacksEnabled,
   );
   const fallbackPreviewUrl = cameraImageSrc(
     camera.cameraEntity,
     camera.snapshotUrl,
   );
-  const fallbackOrder = options?.fallbackOrder ?? DEFAULT_BRIDGE_FALLBACK_ORDER;
+  const fallbackOrder = fallbacksEnabled
+    ? options?.fallbackOrder ?? DEFAULT_BRIDGE_FALLBACK_ORDER
+    : [];
   const descriptorSources = buildLiveRemoteStreamSources(
     camera,
     resolvedProfile,
     resolvedSource,
     fallbackOrder,
-    options?.includeSubstreamFallback ?? true,
+    fallbacksEnabled && (options?.includeSubstreamFallback ?? true),
   );
   const descriptor = buildRemoteStreamDescriptorFromSources(
     `${camera.deviceId}:${resolvedProfile?.key ?? "none"}:${resolvedSource ?? "auto"}`,
@@ -377,32 +396,9 @@ export function renderSelectedVtoViewport(
   selectedProfileKey: string | null,
   selectedSource: CameraViewportSource | null,
   t: Localizer = DEFAULT_LOCALIZER,
+  fallbacksEnabled = vto.stream.fallbacksEnabled,
 ): TemplateResult {
   const fallbackPreviewUrl = cameraImageSrc(vto.cameraEntity, vto.snapshotUrl);
-  const resolvedProfile = resolveSelectedStreamProfile(
-    vto.stream,
-    selectedProfileKey,
-  );
-  const resolvedSource = resolveBridgeFirstStreamViewportSource(
-    vto.stream,
-    selectedSource,
-    resolvedProfile?.key ?? null,
-    Boolean(vto.cameraEntity),
-  );
-  const descriptor = buildRemoteStreamDescriptor(
-    `${vto.deviceId}:${resolvedProfile?.key ?? "none"}:${resolvedSource ?? "auto"}`,
-    vto.label,
-    fallbackPreviewUrl || null,
-    "vto-live-stream",
-    t("media.streamUnavailable"),
-    {
-      dash: resolvedProfile?.localDashUrl ?? null,
-      hls: resolvedProfile?.localHlsUrl ?? null,
-      mjpeg: resolvedProfile?.localMjpegUrl ?? null,
-    },
-    resolvedSource,
-    DEFAULT_BRIDGE_FALLBACK_ORDER,
-  );
 
   if (!playing) {
     return renderRemoteStream(
@@ -418,10 +414,42 @@ export function renderSelectedVtoViewport(
     );
   }
 
+  const resolvedProfile = resolveSelectedStreamProfile(
+    vto.stream,
+    selectedProfileKey,
+  );
+  const resolvedSource = resolveStreamViewportSource(
+    vto.stream,
+    selectedSource,
+    resolvedProfile?.key ?? null,
+    Boolean(vto.cameraEntity),
+    fallbacksEnabled,
+  );
+  const fallbackOrder = fallbacksEnabled ? DEFAULT_BRIDGE_FALLBACK_ORDER : [];
+  const descriptor = buildRemoteStreamDescriptor(
+    `${vto.deviceId}:${resolvedProfile?.key ?? "none"}:${resolvedSource ?? "auto"}`,
+    vto.label,
+    fallbackPreviewUrl || null,
+    "vto-live-stream",
+    t("media.streamUnavailable"),
+    {
+      dash: resolvedProfile?.localDashUrl ?? null,
+      hls: resolvedProfile?.localHlsUrl ?? null,
+      mjpeg: resolvedProfile?.localMjpegUrl ?? null,
+    },
+    resolvedSource,
+    fallbackOrder,
+  );
+
   if (resolvedSource === "native" && vto.cameraEntity) {
+    const nativeEntity = overrideNativeLiveProfile(
+      vto.cameraEntity,
+      resolvedProfile?.streamUrl ?? null,
+      resolvedProfile?.subtype ?? null,
+    );
     return renderNativeLiveViewportWithFallback(
       hass,
-      vto.cameraEntity,
+      nativeEntity,
       descriptor,
       true,
       1,
@@ -582,6 +610,8 @@ class DahuaBridgeNativeFallbackStreamElement extends LitElement {
       if (!this.isConnected || this._nativeFailed) {
         return;
       }
+      syncRemoteStreamStyles(this.renderRoot);
+      syncViewportAudioState(this.renderRoot, this.muted, this.volume);
       const foundReadyVideo = this.attachNativeVideoListeners();
       if (foundReadyVideo) {
         this.clearStartupTimer();
@@ -940,6 +970,18 @@ function overrideNativeLiveProfile(
     ...entity,
     attributes: nextAttributes,
   };
+}
+
+function nativeCameraStreamKey(entity: HassEntity): string {
+  const streamSource = stringAttribute(entity, "stream_source") ?? "";
+  const picture = stringAttribute(entity, "entity_picture") ?? stringAttribute(entity, "picture") ?? "";
+  const snapshot = stringAttribute(entity, "snapshot_url") ?? "";
+  return [
+    entity.entity_id,
+    streamSource,
+    picture,
+    snapshot,
+  ].join(":");
 }
 
 function stringAttribute(entity: HassEntity, key: string): string | null {

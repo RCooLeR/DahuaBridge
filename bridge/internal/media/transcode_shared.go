@@ -86,6 +86,13 @@ func resolvedScaleWidth(requested int, configured int) int {
 	return configured
 }
 
+func requestedScaleWidth(requested int, configured int) int {
+	if configured <= 0 || requested <= 0 {
+		return 0
+	}
+	return requested
+}
+
 func buildFFmpegStartAttempts(cfg config.MediaConfig) []ffmpegStartAttempt {
 	attempts := make([]ffmpegStartAttempt, 0, 3)
 	if hardwareAccelEnabled(cfg.HWAccelArgs) {

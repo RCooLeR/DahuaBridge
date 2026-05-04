@@ -2606,7 +2606,7 @@ func buildTestNVRChannelSnapshotURL(deviceID string, channel int) string {
 }
 
 func buildTestMediaSnapshotURL(streamID string, profile string) string {
-	return "/api/v1/media/snapshot/" + url.PathEscape(streamID) + "?profile=" + url.QueryEscape(profile) + "&width=960"
+	return "/api/v1/media/snapshot/" + url.PathEscape(streamID) + "?profile=" + url.QueryEscape(profile)
 }
 
 func buildTestMediaMJPEGURL(streamID string, profile string) string {

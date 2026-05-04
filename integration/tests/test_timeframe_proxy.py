@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import sys
 import unittest
 from pathlib import Path
@@ -21,7 +22,9 @@ from custom_components.dahuabridge.proxy.timeframe_playback import (  # noqa: E4
     select_mjpeg_urls,
 )
 from custom_components.dahuabridge.api import DahuaBridgeAPI  # noqa: E402
+from custom_components.dahuabridge import timeframe_proxy as timeframe_proxy_module  # noqa: E402
 from custom_components.dahuabridge.timeframe_proxy import (  # noqa: E402
+    DahuaBridgeTimeframeProxyView,
     _camera_proxy_request_authenticated,
 )
 
@@ -36,6 +39,9 @@ class FakeHass:
 
 class FakeAPI:
     base_url = "https://ha.example.com/dahua-bridge"
+
+    def __init__(self) -> None:
+        self.bytes_requests: list[str] = []
 
     def bridge_resource_url(self, target: str) -> str:
         if target.startswith("https://ha.example.com/dahua-bridge/"):
@@ -53,9 +59,14 @@ class FakeAPI:
     def absolute_url(self, target: str) -> str:
         return self.bridge_resource_url(target)
 
+    async def async_get_bytes(self, target: str) -> bytes:
+        self.bytes_requests.append(target)
+        return b"snapshot"
+
 
 class FakeCoordinator:
-    api = FakeAPI()
+    def __init__(self) -> None:
+        self.api = FakeAPI()
 
 
 class FakeRequest(dict):
@@ -64,6 +75,15 @@ class FakeRequest(dict):
         self.query = query or {}
         if authenticated:
             self["ha_authenticated"] = True
+
+
+class FakeWebResponse:
+    def __init__(
+        self, body: bytes, status: int = 200, headers: dict[str, str] | None = None
+    ) -> None:
+        self.body = body
+        self.status = status
+        self.headers = headers or {}
 
 
 class TimeframeProxyTests(unittest.TestCase):
@@ -156,6 +176,34 @@ class TimeframeProxyTests(unittest.TestCase):
                 "/api/v1/media/mjpeg/session?profile=quality",
                 "/api/v1/media/mjpeg/session?profile=stable",
             ],
+        )
+
+    def test_timeframe_snapshot_does_not_forward_requested_width(self) -> None:
+        coordinator = FakeCoordinator()
+        view = DahuaBridgeTimeframeProxyView()
+
+        original_response = timeframe_proxy_module.web.Response
+        timeframe_proxy_module.web.Response = FakeWebResponse
+        try:
+            response = asyncio.run(
+                view._snapshot(
+                    FakeRequest({"width": "320"}),
+                    {
+                        "coordinator": coordinator,
+                        "entity_id": "camera.front_gate",
+                        "profile_name": "quality",
+                        "session_payload": {"stream_id": "nvrpb_front_gate"},
+                    },
+                )
+            )
+        finally:
+            timeframe_proxy_module.web.Response = original_response
+
+        self.assertEqual(response.status, 200)
+        self.assertEqual(response.body, b"snapshot")
+        self.assertEqual(
+            coordinator.api.bytes_requests,
+            ["/api/v1/media/snapshot/nvrpb_front_gate?profile=quality"],
         )
 
 
