@@ -53,6 +53,9 @@ export async function createPlaybackSession(
       end_time: request.endTime,
       ...(request.seekTime ? { seek_time: request.seekTime } : {}),
       ...(request.filePath ? { file_path: request.filePath } : {}),
+      ...(request.source ? { source: request.source } : {}),
+      ...(request.type ? { type: request.type } : {}),
+      ...(request.videoStream ? { video_stream: request.videoStream } : {}),
     }),
     signal,
   });
@@ -61,34 +64,10 @@ export async function createPlaybackSession(
     throw new Error(`Bridge playback request failed with status ${response.status}`);
   }
 
-  const payload = playbackSessionSchema.parse(await response.json());
-  return {
-    id: payload.id,
-    streamId: payload.stream_id,
-    deviceId: payload.device_id,
-    sourceStreamId: payload.source_stream_id ?? null,
-    name: payload.name,
-    channel: payload.channel,
-    startTime: payload.start_time,
-    endTime: payload.end_time,
-    seekTime: payload.seek_time,
-    recommendedProfile: payload.recommended_profile,
-    snapshotUrl: rewriteBridgeUrl(payload.snapshot_url ?? null, browserBridgeUrl),
-    createdAt: payload.created_at ?? "",
-    expiresAt: payload.expires_at ?? "",
-    profiles: Object.fromEntries(
-      Object.entries(payload.profiles).map(([key, profile]) => [
-        key,
-        {
-          name: profile.name,
-          dashUrl: rewriteBridgeUrl(profile.dash_url ?? null, browserBridgeUrl),
-          hlsUrl: rewriteBridgeUrl(profile.hls_url ?? null, browserBridgeUrl),
-          mjpegUrl: rewriteBridgeUrl(profile.mjpeg_url ?? null, browserBridgeUrl),
-          webrtcOfferUrl: rewriteBridgeUrl(profile.webrtc_offer_url ?? null, browserBridgeUrl),
-        },
-      ]),
-    ),
-  };
+  return mapPlaybackSession(
+    playbackSessionSchema.parse(await response.json()),
+    browserBridgeUrl,
+  );
 }
 
 export async function seekPlaybackSession(
@@ -114,7 +93,47 @@ export async function seekPlaybackSession(
     throw new Error(`Bridge playback seek request failed with status ${response.status}`);
   }
 
-  const payload = playbackSessionSchema.parse(await response.json());
+  return mapPlaybackSession(
+    playbackSessionSchema.parse(await response.json()),
+    browserBridgeUrl,
+  );
+}
+
+export function createPlaybackSessionFromRecording(
+  recording: NvrArchiveRecordingModel,
+): NvrPlaybackSessionRequestModel {
+  return createPlaybackSessionRequest(
+    recording.channel,
+    recording.startTime,
+    recording.endTime,
+    recording.startTime,
+    recording.filePath,
+    recording.source,
+    recording.type,
+    recording.videoStream,
+  );
+}
+
+export function createPlaybackSeekRequestFromRecording(
+  seekTime: string,
+): NvrPlaybackSeekRequestModel {
+  return createPlaybackSeekRequest(seekTime);
+}
+
+export function resolvePlaybackLaunchUrl(session: NvrPlaybackSessionModel): string | null {
+  const preferredProfile =
+    session.profiles[session.recommendedProfile] ?? Object.values(session.profiles)[0] ?? null;
+  if (!preferredProfile) {
+    return null;
+  }
+
+  return preferredProfile.hlsUrl ?? preferredProfile.dashUrl ?? preferredProfile.mjpegUrl ?? null;
+}
+
+function mapPlaybackSession(
+  payload: z.infer<typeof playbackSessionSchema>,
+  browserBridgeUrl?: string | null,
+): NvrPlaybackSessionModel {
   return {
     id: payload.id,
     streamId: payload.stream_id,
@@ -151,32 +170,4 @@ function resolvePlaybackSeekUrl(seekUrl: string, sessionID: string): string {
     .replace(/\{sessionId\}/g, encodedSessionID)
     .replace(/%7Bsession_id%7D/gi, encodedSessionID)
     .replace(/%7BsessionId%7D/g, encodedSessionID);
-}
-
-export function createPlaybackSessionFromRecording(
-  recording: NvrArchiveRecordingModel,
-): NvrPlaybackSessionRequestModel {
-  return createPlaybackSessionRequest(
-    recording.channel,
-    recording.startTime,
-    recording.endTime,
-    recording.startTime,
-    recording.filePath,
-  );
-}
-
-export function createPlaybackSeekRequestFromRecording(
-  seekTime: string,
-): NvrPlaybackSeekRequestModel {
-  return createPlaybackSeekRequest(seekTime);
-}
-
-export function resolvePlaybackLaunchUrl(session: NvrPlaybackSessionModel): string | null {
-  const preferredProfile =
-    session.profiles[session.recommendedProfile] ?? Object.values(session.profiles)[0] ?? null;
-  if (!preferredProfile) {
-    return null;
-  }
-
-  return preferredProfile.dashUrl ?? preferredProfile.hlsUrl ?? preferredProfile.mjpegUrl ?? null;
 }

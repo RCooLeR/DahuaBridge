@@ -32,6 +32,7 @@ describe("bridge playback", () => {
         profiles: {
           quality: {
             name: "quality",
+            dash_url: "/api/v1/media/dash/nvrpb_test/quality/manifest.mpd",
             hls_url: "/api/v1/media/hls/nvrpb_test/quality/index.m3u8",
             mjpeg_url: "/api/v1/media/mjpeg/nvrpb_test?profile=quality",
             webrtc_offer_url: "/api/v1/media/webrtc/nvrpb_test/quality/offer",
@@ -63,13 +64,13 @@ describe("bridge playback", () => {
 
   it("creates a session request from an archive recording at the recording start time", () => {
     const request = createPlaybackSessionFromRecording({
-      source: null,
+      source: "nvr_event",
       channel: 4,
       startTime: "2026-04-28T03:00:00Z",
       endTime: "2026-04-28T03:10:00Z",
       downloadUrl: null,
       exportUrl: null,
-      filePath: null,
+      filePath: "/mnt/dahua/recording.dav",
       type: "Recording",
       videoStream: "main",
       disk: null,
@@ -85,6 +86,10 @@ describe("bridge playback", () => {
       startTime: "2026-04-28T03:00:00Z",
       endTime: "2026-04-28T03:10:00Z",
       seekTime: "2026-04-28T03:00:00Z",
+      filePath: "/mnt/dahua/recording.dav",
+      source: "nvr_event",
+      type: "Recording",
+      videoStream: "main",
     });
   });
 
