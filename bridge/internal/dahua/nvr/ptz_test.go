@@ -214,14 +214,8 @@ func TestAudioCapabilitiesHideReadOnlyNVRMuteControl(t *testing.T) {
 	driver.rpc = nil
 
 	capabilities, notes := driver.audioCapabilities(context.Background(), 5)
-	if capabilities.Mute {
-		t.Fatalf("expected mute control to stay hidden, got %+v", capabilities)
-	}
-	if !capabilities.Supported || !capabilities.StreamEnabled || capabilities.Muted {
-		t.Fatalf("expected stream audio state to remain visible, got %+v", capabilities)
-	}
-	if authority := driver.audioControlAuthority(context.Background(), 5); authority != "bridge_transcode" {
-		t.Fatalf("expected bridge_transcode authority, got %q", authority)
+	if !capabilities.Supported {
+		t.Fatalf("expected stream audio metadata to remain visible, got %+v", capabilities)
 	}
 	if !strings.Contains(strings.Join(notes, ","), "channel_audio_transcode_managed_by_bridge") {
 		t.Fatalf("expected bridge-transcode note, got %+v", notes)
@@ -266,11 +260,8 @@ func TestAudioCapabilitiesHideNVRMuteWhenEncodeWriteDenied(t *testing.T) {
 	driver.rpc = nil
 
 	capabilities, notes := driver.audioCapabilities(context.Background(), 5)
-	if capabilities.Mute || !capabilities.Supported || !capabilities.StreamEnabled || capabilities.Muted {
+	if !capabilities.Supported {
 		t.Fatalf("expected denied encode write to keep bridge-managed audio metadata only, got %+v", capabilities)
-	}
-	if authority := driver.audioControlAuthority(context.Background(), 5); authority != "bridge_transcode" {
-		t.Fatalf("expected bridge_transcode authority, got %q", authority)
 	}
 	if !strings.Contains(strings.Join(notes, ","), "channel_audio_transcode_managed_by_bridge") {
 		t.Fatalf("expected bridge-transcode note, got %+v", notes)
@@ -696,149 +687,6 @@ func TestDriverRecordingFallsBackToTablePrefixedQueries(t *testing.T) {
 	}
 }
 
-func TestDriverSetAudioMuteUsesEncodeAudioEnable(t *testing.T) {
-	var requests []url.Values
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		requests = append(requests, r.URL.Query())
-		switch r.URL.Query().Get("action") {
-		case "getConfig":
-			switch r.URL.Query().Get("name") {
-			case "Encode":
-				_, _ = w.Write([]byte("table.Encode[4].MainFormat[0].Video.resolution=2560x1440\ntable.Encode[4].MainFormat[0].Audio.Compression=AAC\ntable.Encode[4].MainFormat[0].AudioEnable=true\ntable.Encode[4].ExtraFormat[0].AudioEnable=true\n"))
-			case "RecordMode":
-				_, _ = w.Write([]byte("table.RecordMode[4].Mode=0\ntable.RecordMode[4].ModeExtra1=2\ntable.RecordMode[4].ModeExtra2=2\n"))
-			default:
-				http.Error(w, "unexpected config", http.StatusBadRequest)
-			}
-		case "setConfig":
-			_, _ = w.Write([]byte("OK"))
-		default:
-			http.Error(w, "unexpected action", http.StatusBadRequest)
-		}
-	}))
-	defer server.Close()
-
-	cfg := config.DeviceConfig{
-		ID:                "west20_nvr",
-		BaseURL:           server.URL,
-		Username:          "assistant",
-		Password:          "secret",
-		ChannelAllowlist:  []int{5},
-		AllowConfigWrites: true,
-		RequestTimeout:    5 * time.Second,
-	}
-	metricsRegistry := metrics.New(buildinfo.Info())
-	driver := New(cfg, config.ImouConfig{}, nil, nil, zerolog.Nop(), metricsRegistry, cgi.New(cfg, metricsRegistry))
-	driver.cachedInventory = &inventorySnapshot{
-		Channels: []channelInventory{
-			{
-				Index:        4,
-				AudioCodec:   "AAC",
-				AudioEnabled: true,
-				AudioKnown:   true,
-			},
-		},
-	}
-	driver.inventoryExpires = time.Now().Add(time.Minute)
-	driver.rpc = nil
-
-	capabilities, notes := driver.audioCapabilities(context.Background(), 5)
-	if capabilities.Mute || !capabilities.Supported || !capabilities.StreamEnabled || capabilities.Muted {
-		t.Fatalf("unexpected audio capabilities %+v", capabilities)
-	}
-	if len(notes) == 0 {
-		t.Fatalf("expected audio notes, got %+v", notes)
-	}
-
-	if err := driver.SetAudioMute(context.Background(), dahua.NVRAudioRequest{
-		Channel: 5,
-		Muted:   true,
-	}); !errors.Is(err, dahua.ErrUnsupportedOperation) {
-		t.Fatalf("expected unsupported operation, got %v", err)
-	}
-	for _, request := range requests {
-		if request.Get("action") == "setConfig" {
-			t.Fatalf("did not expect setConfig audio writes %+v", request)
-		}
-	}
-}
-
-func TestDriverSetAudioMuteDoesNotWriteDirectIPCWhenConfigured(t *testing.T) {
-	var nvrRequests []url.Values
-	var directRequests []url.Values
-
-	directServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		directRequests = append(directRequests, r.URL.Query())
-		switch r.URL.Query().Get("action") {
-		case "getConfig":
-			_, _ = w.Write([]byte("table.Encode[0].MainFormat[0].Video.resolution=2560x1440\ntable.Encode[0].MainFormat[0].Audio.Compression=AAC\ntable.Encode[0].MainFormat[0].AudioEnable=true\ntable.Encode[0].ExtraFormat[0].AudioEnable=true\n"))
-		case "setConfig":
-			_, _ = w.Write([]byte("OK"))
-		default:
-			http.Error(w, "unexpected direct action", http.StatusBadRequest)
-		}
-	}))
-	defer directServer.Close()
-
-	directHost := strings.TrimPrefix(directServer.URL, "http://")
-	nvrServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		nvrRequests = append(nvrRequests, r.URL.Query())
-		switch r.URL.Query().Get("name") {
-		case "ChannelTitle":
-			_, _ = w.Write([]byte("table.ChannelTitle[4].Name=Boiler Room\n"))
-		case "Encode":
-			_, _ = w.Write([]byte("table.Encode[4].MainFormat[0].Video.resolution=2560x1440\ntable.Encode[4].MainFormat[0].Audio.Compression=AAC\ntable.Encode[4].MainFormat[0].AudioEnable=true\n"))
-		case "RemoteDevice":
-			_, _ = w.Write([]byte(
-				"table.RemoteDevice.uuid:System_CONFIG_NETCAMERA_INFO_4.Address=" + directHost + "\n" +
-					"table.RemoteDevice.uuid:System_CONFIG_NETCAMERA_INFO_4.DeviceType=DH-T4A-PV\n" +
-					"table.RemoteDevice.uuid:System_CONFIG_NETCAMERA_INFO_4.HttpPort=80\n",
-			))
-		default:
-			http.Error(w, "unexpected nvr config query", http.StatusBadRequest)
-		}
-	}))
-	defer nvrServer.Close()
-
-	cfg := config.DeviceConfig{
-		ID:               "west20_nvr",
-		BaseURL:          nvrServer.URL,
-		Username:         "assistant",
-		Password:         "secret",
-		ChannelAllowlist: []int{5},
-		RequestTimeout:   5 * time.Second,
-		DirectIPCCredentials: []config.ChannelDirectIPCCredential{
-			{
-				NVRChannel:        5,
-				DirectIPCIP:       directHost,
-				DirectIPCUser:     "admin",
-				DirectIPCPassword: "secret",
-			},
-		},
-	}
-	metricsRegistry := metrics.New(buildinfo.Info())
-	driver := New(cfg, config.ImouConfig{}, nil, nil, zerolog.Nop(), metricsRegistry, cgi.New(cfg, metricsRegistry))
-	driver.rpc = nil
-
-	if err := driver.SetAudioMute(context.Background(), dahua.NVRAudioRequest{
-		Channel: 5,
-		Muted:   true,
-	}); !errors.Is(err, dahua.ErrUnsupportedOperation) {
-		t.Fatalf("expected unsupported operation, got %v", err)
-	}
-
-	for _, request := range nvrRequests {
-		if request.Get("action") == "setConfig" {
-			t.Fatalf("did not expect nvr setConfig request %+v", request)
-		}
-	}
-	for _, request := range directRequests {
-		if request.Get("action") == "setConfig" {
-			t.Fatalf("did not expect direct ipc setConfig request %+v", request)
-		}
-	}
-}
-
 func TestSetDirectIPCLightingModeSetsDirectLightingScheme(t *testing.T) {
 	var directRequests []url.Values
 	directServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1085,8 +933,6 @@ func TestChannelControlCapabilitiesIncludesRemoteSpeakPlayback(t *testing.T) {
 				_, _ = w.Write([]byte(`{"id":10,"params":{"Caps":[{"AudioPlayPath":[{"Path":"/usr/data/audiofiles/siren/","SupportUpload":false}],"SupportAudioPlay":true,"SupportQuickReply":false,"SupportSiren":true,"SupportedAudioFormat":[{"Format":"aac"},{"Format":"wav"}]}]},"result":true,"session":"sess2"}`))
 			case "RemoteFileManager.listCache":
 				_, _ = w.Write([]byte(`{"id":10,"params":{"FileInfo":[{"Path":"/usr/data/audiofiles/siren/alarm.wav","Size":110012}]},"result":true,"session":"sess2"}`))
-			case "RemoteFileManager.GetVolume":
-				_, _ = w.Write([]byte(`{"id":10,"result":false,"session":"sess2","error":{"code":285278249,"message":"Authority:check failure."}}`))
 			default:
 				http.Error(w, "unexpected rpc method", http.StatusBadRequest)
 			}
@@ -1116,9 +962,6 @@ func TestChannelControlCapabilitiesIncludesRemoteSpeakPlayback(t *testing.T) {
 	}
 	if !capabilities.Audio.Playback.Supported || !capabilities.Audio.Playback.Siren {
 		t.Fatalf("expected playback siren support, got %+v", capabilities.Audio.Playback)
-	}
-	if !capabilities.Audio.VolumePermissionDenied {
-		t.Fatalf("expected volume permission denied, got %+v", capabilities.Audio)
 	}
 	if capabilities.Audio.Playback.FileCount != 1 || len(capabilities.Audio.Playback.Files) != 1 || capabilities.Audio.Playback.Files[0].Name != "alarm.wav" {
 		t.Fatalf("unexpected playback files %+v", capabilities.Audio.Playback.Files)

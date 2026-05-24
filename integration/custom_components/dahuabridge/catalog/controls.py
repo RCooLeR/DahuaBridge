@@ -14,7 +14,7 @@ from .accessors import (
 )
 from .fields import name_for_field
 from ..localization import localized_label
-from .models import ButtonSpec, NumberSpec, SwitchSpec
+from .models import ButtonSpec, SwitchSpec
 
 
 def button_specs_for_record(
@@ -122,50 +122,6 @@ def button_specs_for_record(
     return specs
 
 
-def number_specs_for_record(
-    record: dict[str, Any], language: str = "en"
-) -> list[NumberSpec]:
-    intercom = intercom_for_record(record)
-    if not intercom:
-        return []
-
-    specs: list[NumberSpec] = []
-
-    output_url = str(intercom.get("output_volume_url", "")).strip()
-    if output_url and bool(intercom.get("supports_vto_output_volume_control")):
-        specs.append(
-            NumberSpec(
-                key="output_volume",
-                name=localized_label("output_volume", language),
-                url=output_url,
-                icon="mdi:volume-high",
-                value_key="output_volume_level",
-                slot=0,
-                min_value=0,
-                max_value=100,
-                step=1,
-            )
-        )
-
-    input_url = str(intercom.get("input_volume_url", "")).strip()
-    if input_url and bool(intercom.get("supports_vto_input_volume_control")):
-        specs.append(
-            NumberSpec(
-                key="input_volume",
-                name=localized_label("input_volume", language),
-                url=input_url,
-                icon="mdi:microphone",
-                value_key="input_volume_level",
-                slot=0,
-                min_value=0,
-                max_value=100,
-                step=1,
-            )
-        )
-
-    return specs
-
-
 def switch_specs_for_record(
     record: dict[str, Any], language: str = "en"
 ) -> list[SwitchSpec]:
@@ -173,19 +129,6 @@ def switch_specs_for_record(
 
     intercom = intercom_for_record(record)
     if intercom:
-        mute_url = str(intercom.get("mute_url", "")).strip()
-        if mute_url and bool(intercom.get("supports_vto_mute_control")):
-            specs.append(
-                SwitchSpec(
-                    key="muted",
-                    name=localized_label("muted", language),
-                    url=mute_url,
-                    icon="mdi:volume-mute",
-                    value_key="muted",
-                    payload_key="muted",
-                )
-            )
-
         recording_url = str(intercom.get("recording_url", "")).strip()
         if recording_url and bool(intercom.get("supports_vto_recording_control")):
             specs.append(

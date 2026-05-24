@@ -445,38 +445,6 @@ func (c *controller) registerNVRRoutes(router chi.Router) {
 			"duration_ms": request.Duration.Milliseconds(),
 		})
 	})
-	router.With(rateLimitMiddleware(c.adminLimiter)).Post("/api/v1/nvr/{deviceID}/channels/{channel}/audio/mute", func(w http.ResponseWriter, r *http.Request) {
-		if c.actions == nil {
-			writeServiceUnavailableError(w, "action layer is not configured")
-			return
-		}
-		channel, err := strconv.Atoi(chi.URLParam(r, "channel"))
-		if err != nil || channel <= 0 {
-			writeErrorPayload(w, http.StatusBadRequest, "invalid_request", "invalid channel")
-			return
-		}
-		muted, err := parseVTOMuteRequest(r)
-		if err != nil {
-			writeInvalidRequestError(w, err)
-			return
-		}
-		controlCtx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
-		defer cancel()
-		if err := c.actions.ControlNVRAudio(controlCtx, chi.URLParam(r, "deviceID"), dahua.NVRAudioRequest{
-			Channel: channel,
-			Muted:   muted,
-		}); err != nil {
-			writeClassifiedActionError(w, err, http.StatusBadGateway)
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string]any{
-			"status":               "ok",
-			"device_id":            chi.URLParam(r, "deviceID"),
-			"channel":              channel,
-			"muted":                muted,
-			"stream_audio_enabled": !muted,
-		})
-	})
 	router.With(rateLimitMiddleware(c.adminLimiter)).Post("/api/v1/nvr/{deviceID}/channels/{channel}/recording", func(w http.ResponseWriter, r *http.Request) {
 		if c.actions == nil {
 			writeServiceUnavailableError(w, "action layer is not configured")

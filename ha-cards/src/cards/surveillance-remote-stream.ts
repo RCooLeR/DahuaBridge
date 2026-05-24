@@ -11,6 +11,7 @@ import {
 } from "../utils/logging";
 import { clampStreamVolume } from "./surveillance-panel-player-audio-model";
 
+const BRIDGE_FALLBACK_IMAGE_URL = new URL("../assets/bridge-logo-small.png", import.meta.url).href;
 const STARTUP_TIMEOUT_MS = 35_000;
 const STARTUP_GRACE_TIMEOUT_MS = 15_000;
 const EXHAUSTED_SOURCE_RETRY_MS = 60_000;
@@ -88,6 +89,8 @@ class DahuaBridgeRemoteStreamElement extends LitElement {
     controls: { type: Boolean },
     preload: { type: String },
     _activeSourceIndex: { state: true },
+    _fallbackImageFailed: { state: true },
+    _fallbackLogoFailed: { state: true },
     _sourceRevision: { state: true },
   } as const;
 
@@ -141,6 +144,8 @@ class DahuaBridgeRemoteStreamElement extends LitElement {
   preload: "none" | "metadata" | "auto" = "auto";
 
   private _activeSourceIndex = 0;
+  private _fallbackImageFailed = false;
+  private _fallbackLogoFailed = false;
   private _sourceRevision = 0;
   private readonly _videoRef = createRef<HTMLVideoElement>();
   private _attachedVideo: HTMLVideoElement | null = null;
@@ -166,19 +171,27 @@ class DahuaBridgeRemoteStreamElement extends LitElement {
       | RemoteStreamDescriptor
       | null
       | undefined;
-    if (
+    const descriptorKeyChanged =
       changedProperties.has("descriptor") &&
-      (previousDescriptor?.cacheKey ?? "") !== (this.descriptor?.cacheKey ?? "")
-    ) {
+      (previousDescriptor?.cacheKey ?? "") !== (this.descriptor?.cacheKey ?? "");
+    if (descriptorKeyChanged) {
       this.clearRemoteStreamLogState(previousDescriptor?.cacheKey ?? "");
       this.clearSourceRetryTimer();
       this.clearRetryTimer();
       this._activeSourceIndex = 0;
+      this._fallbackImageFailed = false;
+      this._fallbackLogoFailed = false;
       this._sourceRevision = 0;
       this._hlsMediaRecoveryAttempts = 0;
       this._hlsNetworkRecoveryAttempts = 0;
       this._sourceFailureCounts.clear();
       this.cleanupPlayback();
+    }
+    const previousFallbackUrl = previousDescriptor?.fallbackImageUrl?.trim() ?? "";
+    const nextFallbackUrl = this.descriptor?.fallbackImageUrl?.trim() ?? "";
+    if (changedProperties.has("descriptor") && previousFallbackUrl !== nextFallbackUrl) {
+      this._fallbackImageFailed = false;
+      this._fallbackLogoFailed = false;
     }
   }
 
@@ -270,12 +283,23 @@ class DahuaBridgeRemoteStreamElement extends LitElement {
 
   private renderFallback(): TemplateResult {
     const fallbackImageUrl = this.descriptor?.fallbackImageUrl?.trim() ?? "";
-    if (fallbackImageUrl) {
+    if (fallbackImageUrl && !this._fallbackImageFailed) {
       return html`
         <img
           class=${this.streamClassName("preview-fallback")}
           src=${fallbackImageUrl}
           alt=${this.descriptor?.alt ?? "Remote stream"}
+          @error=${this.handleFallbackImageError}
+        />
+      `;
+    }
+    if (fallbackImageUrl && !this._fallbackLogoFailed) {
+      return html`
+        <img
+          class=${this.streamClassName("preview-fallback")}
+          src=${BRIDGE_FALLBACK_IMAGE_URL}
+          alt=${this.descriptor?.alt ?? "Remote stream"}
+          @error=${this.handleFallbackImageError}
         />
       `;
     }
@@ -697,6 +721,18 @@ class DahuaBridgeRemoteStreamElement extends LitElement {
 
   private handleImageError = (): void => {
     this.advanceToNextSource("mjpeg image error", { retryable: true });
+  };
+
+  private handleFallbackImageError = (): void => {
+    if (!this._fallbackImageFailed) {
+      this._fallbackImageFailed = true;
+      this.requestUpdate("_fallbackImageFailed", false);
+      return;
+    }
+    if (!this._fallbackLogoFailed) {
+      this._fallbackLogoFailed = true;
+      this.requestUpdate("_fallbackLogoFailed", false);
+    }
   };
 
   private prepareVideo(video: HTMLVideoElement): void {

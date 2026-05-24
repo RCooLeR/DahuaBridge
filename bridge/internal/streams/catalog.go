@@ -10,6 +10,7 @@ import (
 
 	"RCooLeR/DahuaBridge/internal/config"
 	"RCooLeR/DahuaBridge/internal/dahua"
+	"RCooLeR/DahuaBridge/internal/ptr"
 )
 
 type CatalogInput struct {
@@ -96,17 +97,12 @@ type AuxControlSummary struct {
 }
 
 type AudioControlSummary struct {
-	Supported              bool     `json:"supported"`
-	Mute                   bool     `json:"mute"`
-	Volume                 bool     `json:"volume"`
-	VolumePermissionDenied bool     `json:"volume_permission_denied,omitempty"`
-	Muted                  bool     `json:"muted,omitempty"`
-	StreamAudioEnabled     bool     `json:"stream_audio_enabled,omitempty"`
-	PlaybackSupported      bool     `json:"playback_supported"`
-	PlaybackSiren          bool     `json:"playback_siren"`
-	PlaybackQuickReply     bool     `json:"playback_quick_reply"`
-	PlaybackFormats        []string `json:"playback_formats,omitempty"`
-	PlaybackFileCount      int      `json:"playback_file_count,omitempty"`
+	Supported          bool     `json:"supported"`
+	PlaybackSupported  bool     `json:"playback_supported"`
+	PlaybackSiren      bool     `json:"playback_siren"`
+	PlaybackQuickReply bool     `json:"playback_quick_reply"`
+	PlaybackFormats    []string `json:"playback_formats,omitempty"`
+	PlaybackFileCount  int      `json:"playback_file_count,omitempty"`
 }
 
 type RecordingControlSummary struct {
@@ -156,9 +152,6 @@ type IntercomSummary struct {
 	LockURLs                            []string `json:"lock_urls,omitempty"`
 	ExternalUplinkEnableURL             string   `json:"external_uplink_enable_url,omitempty"`
 	ExternalUplinkDisableURL            string   `json:"external_uplink_disable_url,omitempty"`
-	OutputVolumeURL                     string   `json:"output_volume_url,omitempty"`
-	InputVolumeURL                      string   `json:"input_volume_url,omitempty"`
-	MuteURL                             string   `json:"mute_url,omitempty"`
 	RecordingURL                        string   `json:"recording_url,omitempty"`
 	BridgeSessionActive                 bool     `json:"bridge_session_active"`
 	BridgeSessionCount                  int      `json:"bridge_session_count,omitempty"`
@@ -177,20 +170,11 @@ type IntercomSummary struct {
 	SupportsExternalAudioExport         bool     `json:"supports_external_audio_export"`
 	ConfiguredExternalUplinkTargetCount int      `json:"configured_external_uplink_target_count,omitempty"`
 	SupportsVTOCallAnswer               bool     `json:"supports_vto_call_answer"`
-	SupportsVTOOutputVolumeControl      bool     `json:"supports_vto_output_volume_control"`
-	SupportsVTOInputVolumeControl       bool     `json:"supports_vto_input_volume_control"`
-	SupportsVTOMuteControl              bool     `json:"supports_vto_mute_control"`
 	SupportsVTORecordingControl         bool     `json:"supports_vto_recording_control"`
 	SupportsVTOTalkback                 bool     `json:"supports_vto_talkback"`
 	SupportsFullCallAcceptance          bool     `json:"supports_full_call_acceptance"`
-	OutputVolumeLevel                   int      `json:"output_volume_level,omitempty"`
-	OutputVolumeLevels                  []int    `json:"output_volume_levels,omitempty"`
-	InputVolumeLevel                    int      `json:"input_volume_level,omitempty"`
-	InputVolumeLevels                   []int    `json:"input_volume_levels,omitempty"`
-	Muted                               bool     `json:"muted,omitempty"`
 	AutoRecordEnabled                   bool     `json:"auto_record_enabled,omitempty"`
 	AutoRecordTimeSeconds               int      `json:"auto_record_time_seconds,omitempty"`
-	StreamAudioEnabled                  bool     `json:"stream_audio_enabled,omitempty"`
 	ValidationNotes                     []string `json:"validation_notes,omitempty"`
 }
 
@@ -259,6 +243,7 @@ func BuildCatalog(input CatalogInput) []Entry {
 				mainResolution := valueOrState(child.Attributes["main_resolution"], result.States[child.ID], "main_resolution")
 				subCodec := valueOrState(child.Attributes["sub_codec"], result.States[child.ID], "sub_codec")
 				subResolution := valueOrState(child.Attributes["sub_resolution"], result.States[child.ID], "sub_resolution")
+				audioCodec := valueOrState(child.Attributes["audio_codec"], result.States[child.ID], "audio_codec")
 				recommended := recommendProfile(mainCodec, mainResolution, subCodec, subResolution)
 				entry := Entry{
 					ID:                 child.ID,
@@ -273,9 +258,10 @@ func BuildCatalog(input CatalogInput) []Entry {
 					MainResolution:     mainResolution,
 					SubCodec:           subCodec,
 					SubResolution:      subResolution,
+					AudioCodec:         audioCodec,
 					Controls:           buildNVRChannelControlSummary(input.Config.HomeAssistant.PublicBaseURL, result.Root.ID, channel, result.States[child.ID]),
 					RecommendedProfile: recommended,
-					Profiles:           buildProfiles(deviceCfg, channel, input.IncludeCredentials, recommended, input.Config.HomeAssistant.PublicBaseURL, child.ID, input.Config.Media, mainCodec, mainResolution, subCodec, subResolution, valueOrState(child.Attributes["audio_codec"], result.States[child.ID], "audio_codec")),
+					Profiles:           buildProfiles(deviceCfg, channel, input.IncludeCredentials, recommended, input.Config.HomeAssistant.PublicBaseURL, child.ID, input.Config.Media, mainCodec, mainResolution, subCodec, subResolution, audioCodec),
 				}
 				entry.Features = buildNVRChannelFeatures(
 					input.Config.HomeAssistant.PublicBaseURL,
@@ -810,9 +796,6 @@ func buildVTOIntercomSummary(publicBaseURL string, deviceID string, state dahua.
 		LockURLs:                            lockURLs,
 		ExternalUplinkEnableURL:             buildVTOIntercomUplinkURL(publicBaseURL, deviceID, "enable"),
 		ExternalUplinkDisableURL:            buildVTOIntercomUplinkURL(publicBaseURL, deviceID, "disable"),
-		OutputVolumeURL:                     buildVTOAudioOutputVolumeURL(publicBaseURL, deviceID),
-		InputVolumeURL:                      buildVTOAudioInputVolumeURL(publicBaseURL, deviceID),
-		MuteURL:                             buildVTOMuteURL(publicBaseURL, deviceID),
 		RecordingURL:                        buildVTORecordingURL(publicBaseURL, deviceID),
 		BridgeSessionActive:                 runtimeStatus.Active,
 		BridgeSessionCount:                  runtimeStatus.SessionCount,
@@ -823,9 +806,6 @@ func buildVTOIntercomSummary(publicBaseURL string, deviceID string, state dahua.
 		BridgeForwardedPackets:              runtimeStatus.UplinkForwardedPackets,
 		BridgeForwardErrors:                 runtimeStatus.UplinkForwardErrors,
 		SupportsVTOCallAnswer:               true,
-		SupportsVTOOutputVolumeControl:      anyBool(state.Info, "control_audio_output_volume_supported"),
-		SupportsVTOInputVolumeControl:       anyBool(state.Info, "control_audio_input_volume_supported"),
-		SupportsVTOMuteControl:              anyBool(state.Info, "control_audio_mute_supported"),
 		SupportsVTORecordingControl:         anyBool(state.Info, "control_recording_supported"),
 		SupportsHangup:                      true,
 		SupportsBridgeSessionReset:          true,
@@ -837,14 +817,8 @@ func buildVTOIntercomSummary(publicBaseURL string, deviceID string, state dahua.
 		ConfiguredExternalUplinkTargetCount: uplinkTargetCount,
 		SupportsVTOTalkback:                 anyBool(state.Info, "control_direct_talkback_supported"),
 		SupportsFullCallAcceptance:          anyBool(state.Info, "control_full_call_acceptance_supported"),
-		OutputVolumeLevel:                   anyInt(state.Info, "control_audio_output_volume"),
-		OutputVolumeLevels:                  anyIntSlice(state.Info, "control_audio_output_volume_levels"),
-		InputVolumeLevel:                    anyInt(state.Info, "control_audio_input_volume"),
-		InputVolumeLevels:                   anyIntSlice(state.Info, "control_audio_input_volume_levels"),
-		Muted:                               anyBool(state.Info, "control_audio_muted"),
 		AutoRecordEnabled:                   anyBool(state.Info, "control_recording_auto_enabled"),
 		AutoRecordTimeSeconds:               anyInt(state.Info, "control_recording_auto_time_seconds"),
-		StreamAudioEnabled:                  anyBool(state.Info, "control_stream_audio_enabled"),
 		ValidationNotes:                     anyStringSlice(state.Info, "validation_notes"),
 	}
 }
@@ -988,23 +962,6 @@ func buildVTOFeatures(intercom *IntercomSummary) []FeatureSummary {
 			Targets:   targets,
 		})
 	}
-	if intercom.SupportsVTOOutputVolumeControl && strings.TrimSpace(intercom.OutputVolumeURL) != "" {
-		features = append(features, buildVTONumberFeature("output_volume", "Output Volume", intercom.OutputVolumeURL, intercom.OutputVolumeLevel, intercom.OutputVolumeLevels))
-	}
-	if intercom.SupportsVTOInputVolumeControl && strings.TrimSpace(intercom.InputVolumeURL) != "" {
-		features = append(features, buildVTONumberFeature("input_volume", "Input Volume", intercom.InputVolumeURL, intercom.InputVolumeLevel, intercom.InputVolumeLevels))
-	}
-	if intercom.SupportsVTOMuteControl && strings.TrimSpace(intercom.MuteURL) != "" {
-		features = append(features, FeatureSummary{
-			Key:       "mute",
-			Label:     "Mute",
-			Group:     "audio",
-			Kind:      "toggle",
-			URL:       intercom.MuteURL,
-			Supported: true,
-			Active:    boolPtr(intercom.Muted),
-		})
-	}
 	if intercom.SupportsVTORecordingControl && strings.TrimSpace(intercom.RecordingURL) != "" {
 		features = append(features, FeatureSummary{
 			Key:       "auto_record",
@@ -1013,7 +970,7 @@ func buildVTOFeatures(intercom *IntercomSummary) []FeatureSummary {
 			Kind:      "toggle",
 			URL:       intercom.RecordingURL,
 			Supported: true,
-			Active:    boolPtr(intercom.AutoRecordEnabled),
+			Active:    ptr.Bool(intercom.AutoRecordEnabled),
 		})
 	}
 	if intercom.SupportsBridgeSessionReset && strings.TrimSpace(intercom.BridgeSessionResetURL) != "" {
@@ -1113,34 +1070,18 @@ func auxFeatureActiveState(state dahua.DeviceState, key string) *bool {
 	if until != "" {
 		if parsed, err := time.Parse(time.RFC3339Nano, until); err == nil {
 			active := parsed.After(time.Now().UTC())
-			return boolPtr(active)
+			return ptr.Bool(active)
 		}
 	}
 
 	if _, ok := state.Info["control_aux_active_"+rawKey]; !ok {
 		return nil
 	}
-	return boolPtr(anyBool(state.Info, "control_aux_active_"+rawKey))
+	return ptr.Bool(anyBool(state.Info, "control_aux_active_"+rawKey))
 }
 
 func auxFeatureCurrentText(state dahua.DeviceState, key string) string {
 	return anyString(state.Info, "control_aux_current_text_"+strings.TrimSpace(key))
-}
-
-func buildVTONumberFeature(key string, label string, url string, level int, allowed []int) FeatureSummary {
-	return FeatureSummary{
-		Key:           key,
-		Label:         label,
-		Group:         "audio",
-		Kind:          "level",
-		URL:           url,
-		Supported:     true,
-		AllowedValues: append([]int(nil), allowed...),
-		MinValue:      intPtr(0),
-		MaxValue:      intPtr(100),
-		StepValue:     intPtr(1),
-		CurrentValue:  intPtr(level),
-	}
 }
 
 func buildNVRChannelControlSummary(publicBaseURL string, deviceID string, channel int, state dahua.DeviceState) *ChannelControlSummary {
@@ -1186,17 +1127,12 @@ func buildNVRChannelControlSummary(publicBaseURL string, deviceID string, channe
 	}
 	if audioKnown {
 		summary.Audio = &AudioControlSummary{
-			Supported:              anyBool(state.Info, "control_audio_supported"),
-			Mute:                   anyBool(state.Info, "control_audio_mute_supported"),
-			Volume:                 anyBool(state.Info, "control_audio_volume_supported"),
-			VolumePermissionDenied: anyBool(state.Info, "control_audio_volume_permission_denied"),
-			Muted:                  anyBool(state.Info, "control_audio_muted"),
-			StreamAudioEnabled:     anyBool(state.Info, "control_audio_stream_enabled"),
-			PlaybackSupported:      anyBool(state.Info, "control_audio_playback_supported"),
-			PlaybackSiren:          anyBool(state.Info, "control_audio_playback_siren"),
-			PlaybackQuickReply:     anyBool(state.Info, "control_audio_playback_quick_reply"),
-			PlaybackFormats:        anyStringSlice(state.Info, "control_audio_playback_formats"),
-			PlaybackFileCount:      anyInt(state.Info, "control_audio_playback_file_count"),
+			Supported:          anyBool(state.Info, "control_audio_supported"),
+			PlaybackSupported:  anyBool(state.Info, "control_audio_playback_supported"),
+			PlaybackSiren:      anyBool(state.Info, "control_audio_playback_siren"),
+			PlaybackQuickReply: anyBool(state.Info, "control_audio_playback_quick_reply"),
+			PlaybackFormats:    anyStringSlice(state.Info, "control_audio_playback_formats"),
+			PlaybackFileCount:  anyInt(state.Info, "control_audio_playback_file_count"),
 		}
 	}
 	if recordingSupported {
@@ -1231,14 +1167,6 @@ func conditionalString(enabled bool, value string) string {
 		return value
 	}
 	return ""
-}
-
-func intPtr(value int) *int {
-	return &value
-}
-
-func boolPtr(value bool) *bool {
-	return &value
 }
 
 func buildLocalWebRTCURL(publicBaseURL string, streamID string, profile string) string {
@@ -1334,33 +1262,6 @@ func buildVTOAnswerURL(publicBaseURL string, deviceID string) string {
 func buildVTOHangupURL(publicBaseURL string, deviceID string) string {
 	publicBaseURL = strings.TrimRight(strings.TrimSpace(publicBaseURL), "/")
 	path := "/api/v1/vto/" + url.PathEscape(deviceID) + "/call/hangup"
-	if publicBaseURL == "" {
-		return path
-	}
-	return publicBaseURL + path
-}
-
-func buildVTOAudioOutputVolumeURL(publicBaseURL string, deviceID string) string {
-	publicBaseURL = strings.TrimRight(strings.TrimSpace(publicBaseURL), "/")
-	path := "/api/v1/vto/" + url.PathEscape(deviceID) + "/audio/output-volume"
-	if publicBaseURL == "" {
-		return path
-	}
-	return publicBaseURL + path
-}
-
-func buildVTOAudioInputVolumeURL(publicBaseURL string, deviceID string) string {
-	publicBaseURL = strings.TrimRight(strings.TrimSpace(publicBaseURL), "/")
-	path := "/api/v1/vto/" + url.PathEscape(deviceID) + "/audio/input-volume"
-	if publicBaseURL == "" {
-		return path
-	}
-	return publicBaseURL + path
-}
-
-func buildVTOMuteURL(publicBaseURL string, deviceID string) string {
-	publicBaseURL = strings.TrimRight(strings.TrimSpace(publicBaseURL), "/")
-	path := "/api/v1/vto/" + url.PathEscape(deviceID) + "/audio/mute"
 	if publicBaseURL == "" {
 		return path
 	}

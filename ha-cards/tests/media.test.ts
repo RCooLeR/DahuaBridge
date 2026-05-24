@@ -17,6 +17,7 @@ import {
   resolveSelectedCameraViewportSource,
   resolvePlaybackViewportSource,
   resolveStreamViewportSource,
+  vtoPreviewImageSrc,
   type CameraViewportSource,
 } from "../src/cards/surveillance-panel-media";
 import { selectedCameraLiveStreamModel } from "../src/cards/surveillance-panel-live-stream-model";
@@ -405,6 +406,24 @@ describe("camera media helpers", () => {
         null,
       ),
     ).toBe("http://bridge.local:9205/api/v1/nvr/west20_nvr/channels/1/snapshot");
+  });
+
+  it("uses the direct VTO snapshot for previews before the media capture endpoint", () => {
+    expect(
+      vtoPreviewImageSrc({
+        cameraEntity: {
+          entity_id: "camera.front_vto_camera",
+          state: "streaming",
+          attributes: {
+            snapshot_url: "https://ha.example.com/bridge/api/v1/vto/front_vto/snapshot",
+          },
+          last_changed: "",
+          last_updated: "",
+        },
+        snapshotUrl: "https://ha.example.com/bridge/api/v1/vto/front_vto/snapshot",
+        captureSnapshotUrl: "https://ha.example.com/bridge/api/v1/media/snapshot/front_vto",
+      }),
+    ).toBe("https://ha.example.com/bridge/api/v1/vto/front_vto/snapshot");
   });
 
   it("orders playback session sources as HLS, DASH, then MJPEG", () => {

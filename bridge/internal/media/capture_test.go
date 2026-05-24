@@ -7,6 +7,7 @@ import (
 
 	"RCooLeR/DahuaBridge/internal/config"
 	"RCooLeR/DahuaBridge/internal/streams"
+	"github.com/rs/zerolog"
 )
 
 func TestClipSourceWindowUsesPlaybackRangeAndDuration(t *testing.T) {
@@ -66,6 +67,47 @@ func TestBuildClipFFmpegArgsDisablesStdinForFiniteClips(t *testing.T) {
 	}
 	if strings.Contains(joined, "scale=") || strings.Contains(joined, "vpp_qsv=") {
 		t.Fatalf("expected clip args to ignore live max-width scaling, got %q", joined)
+	}
+}
+
+func TestShouldIncludeSourceAudioTrustsKnownAudioCodec(t *testing.T) {
+	manager := New(config.MediaConfig{FFmpegPath: "missing-ffmpeg"}, testResolver{}, zerolog.Nop(), nil)
+
+	if !manager.shouldIncludeSourceAudio(streams.Profile{
+		StreamURL:   "rtsp://example.local/live",
+		AudioCodec:  "AAC",
+		VideoCodec:  "H.264",
+		SourceWidth: 1920,
+	}, zerolog.Nop()) {
+		t.Fatal("expected known audio codec metadata to keep MP4 audio enabled")
+	}
+}
+
+func TestBuildPrefixedClipFFmpegArgsKeepsSourceAudio(t *testing.T) {
+	args := buildClipFFmpegArgs(
+		config.MediaConfig{InputPreset: "stable"},
+		streams.Profile{
+			StreamURL:           "recording.dav",
+			InputPrefixURL:      "iframe.dav",
+			InputPrefixDuration: int64(500 * time.Millisecond),
+			InputSeekOffset:     int64(2 * time.Second),
+			AudioCodec:          "AAC",
+		},
+		10*time.Second,
+		"clip.mp4",
+		true,
+		true,
+	)
+
+	joined := strings.Join(args, " ")
+	if !strings.Contains(joined, "-map [a]") || !strings.Contains(joined, "-c:a aac") {
+		t.Fatalf("expected prefixed clip args to include AAC audio mapping, got %q", joined)
+	}
+	if !strings.Contains(joined, "atrim=start=2") {
+		t.Fatalf("expected prefixed clip audio to honor source seek offset, got %q", joined)
+	}
+	if strings.Contains(joined, " -an ") {
+		t.Fatalf("did not expect prefixed clip args to disable audio, got %q", joined)
 	}
 }
 

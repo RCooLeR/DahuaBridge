@@ -843,6 +843,9 @@ func TestBuildWebRTCArgs(t *testing.T) {
 	if !strings.Contains(joined, "-c:v libx264") {
 		t.Fatalf("expected h264 transcode args, got %q", joined)
 	}
+	if !strings.Contains(joined, "-level:v 3.1") {
+		t.Fatalf("expected WebRTC H.264 encoder level to match SDP, got %q", joined)
+	}
 	if !strings.Contains(joined, "-vf fps=5,scale=960:540") {
 		t.Fatalf("expected software filter chain, got %q", joined)
 	}
@@ -851,6 +854,25 @@ func TestBuildWebRTCArgs(t *testing.T) {
 	}
 	if strings.Contains(joined, "-an") {
 		t.Fatalf("did not expect audio to be disabled in webrtc args, got %q", joined)
+	}
+}
+
+func TestWebRTCH264CodecCapabilityTracksOutputLevel(t *testing.T) {
+	cfg := config.MediaConfig{
+		FrameRate:  30,
+		ScaleWidth: 0,
+	}
+	profile := streams.Profile{
+		SourceWidth:  1920,
+		SourceHeight: 1080,
+	}
+
+	capability := webrtcH264CodecCapability(profile, cfg)
+	if !strings.Contains(capability.SDPFmtpLine, "profile-level-id=42e028") {
+		t.Fatalf("expected 1080p30 SDP to advertise H.264 level 4.0, got %q", capability.SDPFmtpLine)
+	}
+	if level := webrtcH264EncoderLevel(profile, cfg); level != "4.0" {
+		t.Fatalf("expected encoder level 4.0, got %q", level)
 	}
 }
 
@@ -944,6 +966,9 @@ func TestBuildWebRTCArgsWithQSVEncoder(t *testing.T) {
 	joined := strings.Join(args, " ")
 	if !strings.Contains(joined, "-c:v h264_qsv") {
 		t.Fatalf("expected qsv encoder args, got %q", joined)
+	}
+	if !strings.Contains(joined, "-level:v 3.1") {
+		t.Fatalf("expected WebRTC QSV H.264 encoder level to match SDP, got %q", joined)
 	}
 	if !strings.Contains(joined, "-hwaccel_output_format qsv") {
 		t.Fatalf("expected explicit qsv hwaccel output format, got %q", joined)

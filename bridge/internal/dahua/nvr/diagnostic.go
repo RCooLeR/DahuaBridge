@@ -65,15 +65,6 @@ func (d *Driver) DiagnosticAction(ctx context.Context, request dahua.NVRDiagnost
 		result.Description = "Bridge-selected wiper strategy."
 		result.Endpoint = "/api/v1/nvr/" + url.PathEscape(d.ID()) + "/channels/" + strconv.Itoa(request.Channel) + "/aux"
 		err = d.Aux(ctx, dahua.NVRAuxRequest{Channel: request.Channel, Output: "wiper", Action: diagnosticAuxAction(action), Duration: duration})
-	case "bridge_audio":
-		enabled, enableErr := diagnosticAudioEnabled(action)
-		if enableErr != nil {
-			err = enableErr
-			break
-		}
-		result.Description = "Bridge-selected stream-audio mute strategy."
-		result.Endpoint = "/api/v1/nvr/" + url.PathEscape(d.ID()) + "/channels/" + strconv.Itoa(request.Channel) + "/audio/mute"
-		err = d.SetAudioMute(ctx, dahua.NVRAudioRequest{Channel: request.Channel, Muted: !enabled})
 	case "nvr_ptz_aux":
 		result.Description = "Raw NVR PTZ CGI Aux command."
 		result.Endpoint = diagnosticPTZEndpoint(request.Channel, "Aux")
@@ -137,24 +128,6 @@ func (d *Driver) DiagnosticAction(ctx context.Context, request dahua.NVRDiagnost
 		result.Description = "Direct IPC raw PTZ CGI Wiper command using camera channel 0."
 		result.Endpoint = diagnosticDirectIPCPTZEndpoint(0, "Wiper")
 		err = d.runDirectIPCAuxDiagnostic(ctx, request.Channel, 0, action, "Wiper", duration)
-	case "nvr_audio_config":
-		enabled, enableErr := diagnosticAudioEnabled(action)
-		if enableErr != nil {
-			err = enableErr
-			break
-		}
-		result.Description = "NVR Encode AudioEnable config paths for all discovered streams."
-		result.Endpoint = "/cgi-bin/configManager.cgi?action=setConfig&Encode...AudioEnable"
-		err = d.setChannelMainAudioEnabled(ctx, request.Channel, enabled)
-	case "direct_ipc_audio":
-		enabled, enableErr := diagnosticAudioEnabled(action)
-		if enableErr != nil {
-			err = enableErr
-			break
-		}
-		result.Description = "Direct IPC Encode AudioEnable config paths for all discovered streams."
-		result.Endpoint = "/cgi-bin/configManager.cgi?action=setConfig&Encode...AudioEnable"
-		err = d.setDirectIPCAudioEnabled(ctx, request.Channel, enabled)
 	case "record_mode":
 		mode, modeErr := diagnosticRecordMode(action)
 		if modeErr != nil {
@@ -219,17 +192,6 @@ func diagnosticLightingAction(action string) (dahua.NVRAuxAction, error) {
 		return dahua.NVRAuxActionStop, nil
 	default:
 		return "", fmt.Errorf("%w: lighting diagnostics support start/on and stop/off actions", dahua.ErrUnsupportedOperation)
-	}
-}
-
-func diagnosticAudioEnabled(action string) (bool, error) {
-	switch strings.ToLower(strings.TrimSpace(action)) {
-	case "start", "on", "unmute", "enable", "enabled":
-		return true, nil
-	case "stop", "off", "mute", "disable", "disabled":
-		return false, nil
-	default:
-		return false, fmt.Errorf("%w: audio diagnostics support on/unmute and off/mute actions", dahua.ErrUnsupportedOperation)
 	}
 }
 
@@ -348,9 +310,9 @@ func diagnosticDirectIPCPTZEndpoint(cameraChannel int, code string) string {
 
 func diagnosticNotes(method string) []string {
 	switch method {
-	case "direct_ipc_lighting", "direct_ipc_audio", "direct_ipc_ptz_aux", "direct_ipc_ptz_aux_ch0", "direct_ipc_ptz_light", "direct_ipc_ptz_light_ch0", "direct_ipc_ptz_wiper", "direct_ipc_ptz_wiper_ch0":
+	case "direct_ipc_lighting", "direct_ipc_ptz_aux", "direct_ipc_ptz_aux_ch0", "direct_ipc_ptz_light", "direct_ipc_ptz_light_ch0", "direct_ipc_ptz_wiper", "direct_ipc_ptz_wiper_ch0":
 		return []string{"Requires direct_ipc credentials for the selected NVR channel."}
-	case "nvr_lighting_config", "nvr_video_input_light_param", "nvr_audio_config", "record_mode":
+	case "nvr_lighting_config", "nvr_video_input_light_param", "record_mode":
 		return []string{"Requires allow_config_writes for the NVR device."}
 	default:
 		return nil

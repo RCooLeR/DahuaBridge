@@ -48,9 +48,6 @@ func (job *clipJob) run(parent *Manager, profile streams.Profile, duration time.
 func (job *clipJob) runFFmpegAttempt(parent *Manager, profile streams.Profile, duration time.Duration, started chan<- error, notifyStarted bool) error {
 	disableStdin := duration > 0
 	includeAudio := parent.shouldIncludeSourceAudio(profile, job.logger)
-	if strings.TrimSpace(profile.InputPrefixURL) != "" {
-		includeAudio = false
-	}
 	job.mu.Lock()
 	job.includeAudio = includeAudio
 	job.profile = profile
@@ -389,7 +386,7 @@ func (job *clipJob) status() WorkerStatus {
 
 func buildClipFFmpegArgs(cfg config.MediaConfig, profile streams.Profile, duration time.Duration, outputPath string, includeAudio bool, disableStdin bool) []string {
 	if strings.TrimSpace(profile.InputPrefixURL) != "" {
-		return buildPrefixedClipFFmpegArgs(cfg, profile, duration, outputPath, disableStdin)
+		return buildPrefixedClipFFmpegArgs(cfg, profile, duration, outputPath, includeAudio, disableStdin)
 	}
 
 	args := []string{
@@ -430,7 +427,7 @@ func buildClipFFmpegArgs(cfg config.MediaConfig, profile streams.Profile, durati
 	return args
 }
 
-func buildPrefixedClipFFmpegArgs(cfg config.MediaConfig, profile streams.Profile, duration time.Duration, outputPath string, disableStdin bool) []string {
+func buildPrefixedClipFFmpegArgs(cfg config.MediaConfig, profile streams.Profile, duration time.Duration, outputPath string, includeAudio bool, disableStdin bool) []string {
 	args := []string{
 		"-hide_banner",
 		"-loglevel", ffmpegLogLevel(cfg),
@@ -455,11 +452,18 @@ func buildPrefixedClipFFmpegArgs(cfg config.MediaConfig, profile streams.Profile
 	if seekOffset := time.Duration(profile.InputSeekOffset) + prefixDuration; seekOffset > 0 {
 		fullSourceStartFilter = "trim=start=" + formatFFmpegSeconds(seekOffset) + ",setpts=PTS-STARTPTS"
 	}
-	args = append(args,
-		"-filter_complex",
-		"[0:v:0]setpts=PTS-STARTPTS[v0];[1:v:0]"+fullSourceStartFilter+"[v1];[v0][v1]concat=n=2:v=1:a=0[v]",
-		"-map", "[v]",
-	)
+	filterComplex := "[0:v:0]setpts=PTS-STARTPTS[v0];[1:v:0]" + fullSourceStartFilter + "[v1];[v0][v1]concat=n=2:v=1:a=0[v]"
+	if includeAudio {
+		audioStartFilter := "asetpts=PTS-STARTPTS"
+		if seekOffset := time.Duration(profile.InputSeekOffset); seekOffset > 0 {
+			audioStartFilter = "atrim=start=" + formatFFmpegSeconds(seekOffset) + ",asetpts=PTS-STARTPTS"
+		}
+		filterComplex += ";[1:a:0]" + audioStartFilter + "[a]"
+	}
+	args = append(args, "-filter_complex", filterComplex, "-map", "[v]")
+	if includeAudio {
+		args = append(args, "-map", "[a]")
+	}
 	if duration > 0 {
 		args = append(args, "-t", formatFFmpegSeconds(duration))
 	}
@@ -471,10 +475,19 @@ func buildPrefixedClipFFmpegArgs(cfg config.MediaConfig, profile streams.Profile
 		"-profile:v", "high",
 		"-tag:v", "avc1",
 		"-movflags", "+faststart",
-		"-an",
 		"-y",
-		outputPath,
 	)
+	if includeAudio {
+		args = append(args,
+			"-c:a", "aac",
+			"-b:a", "128k",
+			"-ac", "2",
+			"-ar", "48000",
+		)
+	} else {
+		args = append(args, "-an")
+	}
+	args = append(args, outputPath)
 	return args
 }
 

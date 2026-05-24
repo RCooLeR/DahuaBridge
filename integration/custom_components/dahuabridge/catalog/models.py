@@ -13,19 +13,6 @@ class ButtonSpec:
 
 
 @dataclass(frozen=True)
-class NumberSpec:
-    key: str
-    name: str
-    url: str
-    icon: str
-    value_key: str
-    slot: int
-    min_value: float
-    max_value: float
-    step: float
-
-
-@dataclass(frozen=True)
 class SwitchSpec:
     key: str
     name: str

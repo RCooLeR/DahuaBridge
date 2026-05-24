@@ -79,6 +79,7 @@ coverage timeline.
 ## Manual MP4 Clips
 
 The MP4 tab lists bridge MP4 clips created with the card recording button.
+Clips include source audio when the bridge source stream advertises audio.
 
 Visible MP4 workflows:
 
@@ -100,6 +101,8 @@ Depending on the capabilities exposed by the integration, the cards can show:
 
 Controls without a real entity or bridge action URL are hidden.
 VTO device mute and VTO speaker/microphone volume controls are not shown.
+VTO still previews use the direct VTO snapshot endpoint first, then fall back to
+the bundled bridge logo if the browser cannot load the snapshot.
 
 ## Removed From HA Cards
 

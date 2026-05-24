@@ -121,7 +121,7 @@ NVR-specific fields:
 - `channel_recording_control_overrides`: override recorder-mode capability/state metadata.
 - `channel_imou_overrides`: map NVR channels to Imou cloud devices for events/lights/siren.
 - `direct_ipc_credentials`: call the real IPC directly for controls behind an NVR.
-- `allow_config_writes`: permit NVR config mutations such as record mode or stream-audio state; default is false.
+- `allow_config_writes`: permit NVR recorder-mode config mutations; default is false.
 
 VTO-specific fields:
 

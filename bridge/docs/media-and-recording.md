@@ -21,7 +21,7 @@ The bridge can expose stream-backed:
 - WebRTC helper pages and answers
 - HTML previews
 
-These outputs are generated from the stream catalog. The bridge does not toggle camera or NVR audio settings for normal viewing.
+These outputs are generated from the stream catalog. The bridge does not toggle camera or NVR audio settings for normal viewing; browser playback audio is controlled by the player.
 
 ## Bridge MP4 Clips
 
@@ -36,6 +36,8 @@ Bridge-owned MP4 clips are separate from the NVR archive. They are stored under 
 - `DELETE /api/v1/media/recordings/{clipID}`
 
 The archive database has a separate `bridge_mp4_clips` table for MP4 assets produced from SMD/IVS exports.
+
+MP4 clips and archive exports include audio when the selected source stream advertises an audio track. If a source has no audio metadata, the bridge records video only rather than mutating device audio settings.
 
 ## Archive Tables
 

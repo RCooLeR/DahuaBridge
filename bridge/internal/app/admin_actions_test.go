@@ -11,6 +11,7 @@ import (
 	"RCooLeR/DahuaBridge/internal/config"
 	"RCooLeR/DahuaBridge/internal/dahua"
 	"RCooLeR/DahuaBridge/internal/metrics"
+	"RCooLeR/DahuaBridge/internal/ptr"
 	"RCooLeR/DahuaBridge/internal/store"
 	"github.com/rs/zerolog"
 )
@@ -23,9 +24,6 @@ type stubDriver struct {
 	answerFn      func(context.Context) error
 	hangupFn      func(context.Context) error
 	vtoControlsFn func(context.Context) (dahua.VTOControlCapabilities, error)
-	vtoOutputFn   func(context.Context, int, int) error
-	vtoInputFn    func(context.Context, int, int) error
-	vtoMuteFn     func(context.Context, bool) error
 	vtoRecordFn   func(context.Context, bool) error
 	auxFn         func(context.Context, dahua.NVRAuxRequest) error
 	recordingFn   func(context.Context, dahua.NVRRecordingRequest) error
@@ -66,24 +64,6 @@ func (s stubDriver) ControlCapabilities(ctx context.Context) (dahua.VTOControlCa
 	}
 	return s.vtoControlsFn(ctx)
 }
-func (s stubDriver) SetAudioOutputVolume(ctx context.Context, slot int, level int) error {
-	if s.vtoOutputFn == nil {
-		return nil
-	}
-	return s.vtoOutputFn(ctx, slot, level)
-}
-func (s stubDriver) SetAudioInputVolume(ctx context.Context, slot int, level int) error {
-	if s.vtoInputFn == nil {
-		return nil
-	}
-	return s.vtoInputFn(ctx, slot, level)
-}
-func (s stubDriver) SetAudioMute(ctx context.Context, muted bool) error {
-	if s.vtoMuteFn == nil {
-		return nil
-	}
-	return s.vtoMuteFn(ctx, muted)
-}
 func (s stubDriver) SetRecordingEnabled(ctx context.Context, enabled bool) error {
 	if s.vtoRecordFn == nil {
 		return nil
@@ -118,7 +98,6 @@ var _ dahua.Driver = stubDriver{}
 var _ dahua.VTOLockController = stubDriver{}
 var _ dahua.VTOCallController = stubDriver{}
 var _ dahua.VTOControlReader = stubDriver{}
-var _ dahua.VTOAudioController = stubDriver{}
 var _ dahua.VTORecordingController = stubDriver{}
 var _ dahua.NVRAuxController = stubDriver{}
 var _ dahua.NVRRecordingController = stubDriver{}
@@ -288,7 +267,7 @@ func TestAdminActionsRotateDeviceCredentials(t *testing.T) {
 			Username:       "admin",
 			Password:       "old-secret",
 			RequestTimeout: 10 * time.Second,
-			Enabled:        boolPtr(true),
+			Enabled:        ptr.Bool(true),
 		},
 	}}
 
@@ -463,36 +442,6 @@ func TestAdminActionsVTOControlCapabilities(t *testing.T) {
 	}
 	if !reflect.DeepEqual(result, expected) {
 		t.Fatalf("unexpected capabilities %+v", result)
-	}
-}
-
-func TestAdminActionsSetVTOAudioOutputVolume(t *testing.T) {
-	called := false
-	actions := newAdminActions(
-		zerolog.Nop(),
-		metrics.New(buildinfo.BuildInfo{}),
-		store.NewProbeStore(),
-		&stubDeviceConfigStore{},
-		[]dahua.Driver{
-			stubDriver{
-				id:   "front_vto",
-				kind: dahua.DeviceKindVTO,
-				vtoOutputFn: func(_ context.Context, slot int, level int) error {
-					called = true
-					if slot != 1 || level != 80 {
-						t.Fatalf("unexpected slot/level %d/%d", slot, level)
-					}
-					return nil
-				},
-			},
-		},
-	)
-
-	if err := actions.SetVTOAudioOutputVolume(context.Background(), "front_vto", 1, 80); err != nil {
-		t.Fatalf("SetVTOAudioOutputVolume returned error: %v", err)
-	}
-	if !called {
-		t.Fatal("expected output volume controller to be called")
 	}
 }
 

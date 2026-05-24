@@ -25,6 +25,9 @@ func (m *Manager) shouldIncludeSourceAudio(profile streams.Profile, logger zerol
 	if m == nil {
 		return true
 	}
+	if strings.TrimSpace(profile.AudioCodec) != "" {
+		return true
+	}
 
 	streamURL := strings.TrimSpace(profile.StreamURL)
 	if streamURL == "" {

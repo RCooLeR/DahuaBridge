@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"RCooLeR/DahuaBridge/internal/config"
 	"RCooLeR/DahuaBridge/internal/streams"
 	"github.com/pion/rtp"
 	"github.com/pion/webrtc/v4"
@@ -141,7 +142,7 @@ func (s *webrtcSession) start(ctx context.Context, offer WebRTCSessionDescriptio
 		Int("audio_port", audioPort).
 		Msg("starting webrtc session")
 
-	peerConnection, tracks, err := newPeerConnection(s.parent.WebRTCICEServers(), includeAudio)
+	peerConnection, tracks, err := newPeerConnection(s.parent.WebRTCICEServers(), includeAudio, webrtcH264CodecCapability(s.profile, s.parent.cfg))
 	if err != nil {
 		_ = videoConn.Close()
 		if audioConn != nil {
@@ -257,7 +258,7 @@ type webrtcTracks struct {
 	senders []*webrtc.RTPSender
 }
 
-func newPeerConnection(iceServers []WebRTCICEServer, includeAudio bool) (*webrtc.PeerConnection, webrtcTracks, error) {
+func newPeerConnection(iceServers []WebRTCICEServer, includeAudio bool, videoCapability webrtc.RTPCodecCapability) (*webrtc.PeerConnection, webrtcTracks, error) {
 	mediaEngine := &webrtc.MediaEngine{}
 	if err := mediaEngine.RegisterDefaultCodecs(); err != nil {
 		return nil, webrtcTracks{}, fmt.Errorf("register webrtc codecs: %w", err)
@@ -271,11 +272,7 @@ func newPeerConnection(iceServers []WebRTCICEServer, includeAudio bool) (*webrtc
 		return nil, webrtcTracks{}, fmt.Errorf("create peer connection: %w", err)
 	}
 
-	videoTrack, err := webrtc.NewTrackLocalStaticRTP(webrtc.RTPCodecCapability{
-		MimeType:    webrtc.MimeTypeH264,
-		ClockRate:   90000,
-		SDPFmtpLine: "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f",
-	}, "video", "dahuabridge")
+	videoTrack, err := webrtc.NewTrackLocalStaticRTP(videoCapability, "video", "dahuabridge")
 	if err != nil {
 		_ = peerConnection.Close()
 		return nil, webrtcTracks{}, fmt.Errorf("create video track: %w", err)
@@ -316,6 +313,80 @@ func newPeerConnection(iceServers []WebRTCICEServer, includeAudio bool) (*webrtc
 		audio:   audioTrack,
 		senders: []*webrtc.RTPSender{videoSender},
 	}, nil
+}
+
+func webrtcH264CodecCapability(profile streams.Profile, cfg config.MediaConfig) webrtc.RTPCodecCapability {
+	return webrtc.RTPCodecCapability{
+		MimeType:    webrtc.MimeTypeH264,
+		ClockRate:   90000,
+		SDPFmtpLine: "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e0" + webrtcH264LevelID(profile, cfg),
+	}
+}
+
+func webrtcH264EncoderLevel(profile streams.Profile, cfg config.MediaConfig) string {
+	switch webrtcH264LevelID(profile, cfg) {
+	case "28":
+		return "4.0"
+	case "2a":
+		return "4.2"
+	case "32":
+		return "5.0"
+	case "33":
+		return "5.1"
+	case "34":
+		return "5.2"
+	default:
+		return "3.1"
+	}
+}
+
+func webrtcH264LevelID(profile streams.Profile, cfg config.MediaConfig) string {
+	width, height := resolvedOutputDimensions(profile.SourceWidth, profile.SourceHeight, cfg.ScaleWidth)
+	frameRate := profile.FrameRate
+	if frameRate <= 0 {
+		frameRate = cfg.FrameRate
+	}
+	if frameRate <= 0 {
+		frameRate = 5
+	}
+	return h264LevelIDForOutput(width, height, frameRate)
+}
+
+func h264LevelIDForOutput(width int, height int, frameRate int) string {
+	if width <= 0 || height <= 0 {
+		return "1f"
+	}
+	if frameRate <= 0 {
+		frameRate = 5
+	}
+
+	macroblocks := ceilDiv(width, 16) * ceilDiv(height, 16)
+	macroblocksPerSecond := macroblocks * frameRate
+	levels := []struct {
+		id      string
+		maxFS   int
+		maxMBPS int
+	}{
+		{id: "1f", maxFS: 3600, maxMBPS: 108000},
+		{id: "28", maxFS: 8192, maxMBPS: 245760},
+		{id: "2a", maxFS: 8704, maxMBPS: 522240},
+		{id: "32", maxFS: 22080, maxMBPS: 589824},
+		{id: "33", maxFS: 36864, maxMBPS: 983040},
+		{id: "34", maxFS: 36864, maxMBPS: 2073600},
+	}
+	for _, level := range levels {
+		if macroblocks <= level.maxFS && macroblocksPerSecond <= level.maxMBPS {
+			return level.id
+		}
+	}
+	return "34"
+}
+
+func ceilDiv(value int, divisor int) int {
+	if divisor <= 0 {
+		return 0
+	}
+	return (value + divisor - 1) / divisor
 }
 
 func (s *webrtcSession) startFFmpeg(videoPort int, audioPort int, includeAudio bool, conns ...*net.UDPConn) (*exec.Cmd, error) {
@@ -502,6 +573,7 @@ func (s *webrtcSession) buildFFmpegArgs(videoPort int, audioPort int, attempt ff
 		"-map", "0:v:0",
 	)
 	args = appendVideoEncoderArgs(args, s.parent.cfg, attempt.useHWAccel, gopSize, "ultrafast")
+	args = append(args, "-level:v", webrtcH264EncoderLevel(s.profile, s.parent.cfg))
 	args = appendVideoFilterArgs(args, s.parent.cfg, s.parent.cfg.ScaleWidth, s.profile, attempt.useHWAccel, frameRate)
 	args = append(args,
 		"-f", "rtp",

@@ -2,7 +2,6 @@ package nvr
 
 import (
 	"context"
-	"errors"
 	"testing"
 	"time"
 
@@ -16,13 +15,12 @@ type imouServiceStub struct {
 	statuses   []imou.CameraStatusChange
 	nightModes []imou.NightVisionModeChange
 	mode       imou.NightVisionMode
-	audioOn    bool
 }
 
 func (s *imouServiceStub) Enabled() bool { return true }
 
 func (s *imouServiceStub) GetCameraStatus(context.Context, imou.CameraStatusRequest) (imou.CameraStatus, error) {
-	return imou.CameraStatus{Enabled: s.audioOn}, nil
+	return imou.CameraStatus{}, nil
 }
 
 func (s *imouServiceStub) SetCameraStatus(_ context.Context, change imou.CameraStatusChange) error {
@@ -142,38 +140,6 @@ func TestDriverAuxLightUsesNightVisionModeForImouOverride(t *testing.T) {
 	}
 	if len(imouStub.nightModes) != 2 || imouStub.nightModes[1].Mode != "SmartLowLight" {
 		t.Fatalf("unexpected night mode changes %+v", imouStub.nightModes)
-	}
-}
-
-func TestDriverSetAudioMuteReturnsUnsupported(t *testing.T) {
-	imouStub := &imouServiceStub{audioOn: true}
-	driver := &Driver{
-		cfg: config.DeviceConfig{
-			ID:               "nvr",
-			ChannelAllowlist: []int{5},
-			ChannelImouOverrides: []config.ChannelImouOverride{
-				{Channel: 5, DeviceID: "serial", ChannelID: "0", Features: []string{"events"}},
-			},
-		},
-		imou:    imouStub,
-		imouCfg: config.ImouConfig{Enabled: true},
-		logger:  zerolog.Nop(),
-	}
-
-	capabilities, notes := driver.audioCapabilities(context.Background(), 5)
-	if capabilities.Mute || capabilities.Supported {
-		t.Fatalf("unexpected audio capabilities %+v", capabilities)
-	}
-	_ = notes
-
-	if err := driver.SetAudioMute(context.Background(), dahua.NVRAudioRequest{
-		Channel: 5,
-		Muted:   true,
-	}); !errors.Is(err, dahua.ErrUnsupportedOperation) {
-		t.Fatalf("expected unsupported operation, got %v", err)
-	}
-	if len(imouStub.statuses) != 0 {
-		t.Fatalf("expected no imou audio status changes %+v", imouStub.statuses)
 	}
 }
 

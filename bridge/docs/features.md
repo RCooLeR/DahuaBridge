@@ -67,6 +67,7 @@ Current behavior:
 
 - snapshot endpoints now prefer capturing from the configured stream path
 - device snapshot providers remain available as fallback where needed
+- failed or empty snapshot responses return the bundled DahuaBridge logo placeholder
 - identical snapshot requests are cached briefly and coalesced in-flight to reduce repeated NVR/VTO/IPC fetches
 
 APIs:
@@ -115,6 +116,7 @@ Capabilities:
 - fetch clip metadata
 - download the resulting MP4
 - merge bridge clips into NVR recordings search results
+- keep audio in MP4 clips when the selected source stream has audio
 
 Read more:
 
@@ -189,9 +191,6 @@ The bridge exposes:
 - lock unlock
 - call answer
 - call hangup
-- audio output volume
-- audio input volume
-- mute
 - VTO auto-record toggle
 - intercom session status
 - bridge session reset
@@ -203,9 +202,6 @@ APIs:
 - `POST /api/v1/vto/{deviceID}/locks/{lockIndex}/unlock`
 - `POST /api/v1/vto/{deviceID}/call/answer`
 - `POST /api/v1/vto/{deviceID}/call/hangup`
-- `POST /api/v1/vto/{deviceID}/audio/output-volume`
-- `POST /api/v1/vto/{deviceID}/audio/input-volume`
-- `POST /api/v1/vto/{deviceID}/audio/mute`
 - `POST /api/v1/vto/{deviceID}/recording`
 - `GET /api/v1/vto/{deviceID}/intercom`
 - `GET /api/v1/vto/{deviceID}/intercom/status`

@@ -33,6 +33,9 @@ Use `include_credentials=true` only for operator-only diagnostics. It can includ
 ## Live Media
 
 - `GET /api/v1/media/snapshot/{streamID}`: JPEG snapshot from a bridge stream.
+- `GET /api/v1/nvr/{deviceID}/channels/{channel}/snapshot`: NVR channel snapshot.
+- `GET /api/v1/vto/{deviceID}/snapshot`: VTO snapshot.
+- `GET /api/v1/ipc/{deviceID}/snapshot`: standalone IPC snapshot.
 - `GET /api/v1/media/preview/{streamID}`: HTML preview.
 - `GET /api/v1/media/mjpeg/{streamID}`: MJPEG stream.
 - `GET /api/v1/media/hls/{streamID}/{profile}/index.m3u8`: HLS playlist.
@@ -41,6 +44,7 @@ Use `include_credentials=true` only for operator-only diagnostics. It can includ
 - `GET /api/v1/media/workers`: current media worker state.
 
 The only published profile names are `quality` and `stable`. Legacy aliases are accepted and normalized.
+Snapshot endpoints return the bundled DahuaBridge logo as a `200 image/png` placeholder when the device or stream snapshot path cannot produce an image.
 
 ## Bridge MP4 Clips
 
@@ -53,6 +57,7 @@ The only published profile names are `quality` and `stable`. Legacy aliases are 
 - `DELETE /api/v1/media/recordings/{clipID}`: delete a completed/stopped clip.
 
 Archive exports also create bridge MP4 clips. SMD/IVS export state is stored back on `smd_ivs_events`.
+MP4 clips keep audio when the selected source stream advertises an audio track; the bridge no longer toggles device-side audio settings to force that.
 
 ## NVR Archive APIs
 
@@ -145,4 +150,4 @@ The query order is always `channel`, `subtype`, `starttime`, then optional `endt
 
 ## NVR Controls
 
-The bridge exposes channel controls under `/api/v1/nvr/{deviceID}/channels/{channel}` for snapshot, PTZ, aux/light/siren, audio, and recorder-mode operations. The exact supported controls depend on probe results and are reflected in the stream catalog `controls` and `features` fields.
+The bridge exposes channel controls under `/api/v1/nvr/{deviceID}/channels/{channel}` for snapshot, PTZ, aux/light/siren, and recorder-mode operations. Browser audio is controlled by the player; the bridge does not expose device-side mute or volume controls. The exact supported controls depend on probe results and are reflected in the stream catalog `controls` and `features` fields.

@@ -63,9 +63,6 @@ type Driver struct {
 	configWriteKnown   bool
 	configWriteAllowed bool
 	configWriteReason  string
-
-	audioWriteMu     sync.RWMutex
-	audioWriteStatus map[int]channelWriteStatus
 }
 
 type inventorySnapshot struct {
@@ -382,9 +379,6 @@ func (d *Driver) Probe(ctx context.Context) (*dahua.ProbeResult, error) {
 			states[childID].Info["direct_ipc_configured"] = true
 			states[childID].Info["direct_ipc_configured_ip"] = directIPCCredential.DirectIPCIP
 		}
-		if channel.AudioKnown {
-			states[childID].Info["control_audio_stream_enabled"] = channel.AudioEnabled
-		}
 		state := states[childID]
 		recordingCapabilities := dahua.NVRRecordingCapabilities{}
 		if recordModeErr == nil {
@@ -415,8 +409,6 @@ func (d *Driver) Probe(ctx context.Context) (*dahua.ProbeResult, error) {
 			Audio:     audioCapabilities,
 			Recording: recordingCapabilities,
 		})
-		state.Info["control_audio_authority"] = d.audioControlAuthority(ctx, channel.Index+1)
-		state.Info["control_audio_semantic"] = "bridge_output_audio"
 		notes := make([]string, 0, 4)
 		if ptzErr != nil && auxCapabilities.Supported {
 			notes = append(notes, "ptz_capability_query_failed_aux_fallback_used")

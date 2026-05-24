@@ -388,7 +388,7 @@ export function renderSelectedVtoViewport(
   selectedSource: CameraViewportSource | null,
   t: Localizer = DEFAULT_LOCALIZER,
 ): TemplateResult {
-  const fallbackPreviewUrl = cameraImageSrc(vto.cameraEntity, vto.snapshotUrl);
+  const fallbackPreviewUrl = vtoPreviewImageSrc(vto);
 
   if (!playing) {
     return renderRemoteStream(
@@ -719,8 +719,19 @@ export function cameraImageSrc(
   entity: HassEntity | undefined,
   fallbackSnapshotUrl?: string | null,
 ): string {
-  const fallback = fallbackSnapshotUrl ?? entity?.attributes.snapshot_url;
+  const fallback = fallbackSnapshotUrl?.trim() || entity?.attributes.snapshot_url;
   return typeof fallback === "string" && fallback.trim() ? fallback : "";
+}
+
+export function vtoPreviewImageSrc(
+  vto: Pick<VtoViewModel, "cameraEntity" | "captureSnapshotUrl" | "snapshotUrl">,
+): string {
+  const snapshotUrl = vto.snapshotUrl?.trim() ?? "";
+  const captureSnapshotUrl = vto.captureSnapshotUrl?.trim() ?? "";
+  return cameraImageSrc(
+    vto.cameraEntity,
+    snapshotUrl || captureSnapshotUrl,
+  );
 }
 
 export function buildRtspPlaybackUrl({

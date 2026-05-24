@@ -80,7 +80,7 @@ func (c *controller) registerMediaRoutes(router chi.Router) {
 	})
 	router.With(rateLimitMiddleware(c.snapshotLimiter)).Get("/api/v1/media/snapshot/{streamID}", func(w http.ResponseWriter, r *http.Request) {
 		if c.media == nil || !c.media.Enabled() {
-			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "media layer is disabled"})
+			writeSnapshotPlaceholder(w, fmt.Errorf("media layer is disabled"))
 			return
 		}
 
@@ -90,16 +90,7 @@ func (c *controller) registerMediaRoutes(router chi.Router) {
 			return
 		}
 		body, contentType, err := c.media.CaptureFrame(r.Context(), chi.URLParam(r, "streamID"), strings.TrimSpace(r.URL.Query().Get("profile")), scaleWidth)
-		if err != nil {
-			writeClassifiedActionError(w, err, http.StatusBadGateway)
-			return
-		}
-		if contentType == "" {
-			contentType = "image/jpeg"
-		}
-		w.Header().Set("Content-Type", contentType)
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write(body)
+		writeSnapshotImage(w, body, contentType, err)
 	})
 	router.With(rateLimitMiddleware(c.mediaLimiter)).Post("/api/v1/media/streams/{streamID}/recordings", func(w http.ResponseWriter, r *http.Request) {
 		if c.media == nil || !c.media.Enabled() {

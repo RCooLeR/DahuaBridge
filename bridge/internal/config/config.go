@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"RCooLeR/DahuaBridge/internal/ptr"
 	"gopkg.in/yaml.v3"
 )
 
@@ -70,8 +71,9 @@ type MediaConfig struct {
 	WebRTCICEServers    []WebRTCICEServerConfig `yaml:"webrtc_ice_servers"`
 	WebRTCUplinkTargets []string                `yaml:"webrtc_uplink_targets"`
 	HLSTmpDir           string                  `yaml:"hls_tmp_dir"`
-	HLSTempPath         string                  `yaml:"hls_temp_path"`
-	HLSKeepAfterExit    time.Duration           `yaml:"hls_keep_after_exit"`
+	// HLSTempPath is a deprecated YAML alias for HLSTmpDir, kept for existing configs.
+	HLSTempPath      string        `yaml:"hls_temp_path"`
+	HLSKeepAfterExit time.Duration `yaml:"hls_keep_after_exit"`
 }
 
 type ArchiveConfig struct {
@@ -577,7 +579,7 @@ func normalizeDevice(dev *DeviceConfig) error {
 	}
 
 	if dev.Enabled == nil {
-		dev.Enabled = boolPtr(true)
+		dev.Enabled = ptr.Bool(true)
 	}
 	dev.OnvifUsername = strings.TrimSpace(dev.OnvifUsername)
 	dev.OnvifPassword = strings.TrimSpace(dev.OnvifPassword)
@@ -696,10 +698,6 @@ func (d DeviceConfig) AllowsAlarm(alarm int) bool {
 		return true
 	}
 	return slices.Contains(d.AlarmAllowlist, alarm)
-}
-
-func boolPtr(value bool) *bool {
-	return &value
 }
 
 func (d DeviceConfig) ONVIFEnabledValue() bool {
@@ -1071,7 +1069,25 @@ func featuresForAuxOutputs(outputs []string) []string {
 }
 
 func appendMissingString(values []string, additions ...string) []string {
-	return append(values, additions...)
+	seen := make(map[string]struct{}, len(values)+len(additions))
+	for _, value := range values {
+		normalized := strings.ToLower(strings.TrimSpace(value))
+		if normalized != "" {
+			seen[normalized] = struct{}{}
+		}
+	}
+	for _, addition := range additions {
+		normalized := strings.ToLower(strings.TrimSpace(addition))
+		if normalized == "" {
+			continue
+		}
+		if _, ok := seen[normalized]; ok {
+			continue
+		}
+		seen[normalized] = struct{}{}
+		values = append(values, addition)
+	}
+	return values
 }
 
 func uniqueLowerStrings(values []string) []string {

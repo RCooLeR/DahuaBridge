@@ -69,14 +69,14 @@ RUN set -eux; \
     mkdir -p /config /data /data/tmp; \
     chown -R dahuabridge:dahuabridge /data /data/tmp /var/lib/dahuabridge
 
-EXPOSE 9205
+EXPOSE 9020
 
 VOLUME ["/config", "/data"]
 
 ENV DAHUABRIDGE_CONFIG=/config/config.yaml
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
-  CMD wget -qO- http://127.0.0.1:9205/readyz >/dev/null || exit 1
+  CMD wget -qO- http://127.0.0.1:9020/readyz >/dev/null || exit 1
 
 ENTRYPOINT ["/app/docker-entrypoint.sh"]
 CMD ["--config", "/config/config.yaml"]

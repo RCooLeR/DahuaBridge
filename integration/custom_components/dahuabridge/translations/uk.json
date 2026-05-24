@@ -23,6 +23,7 @@
       "init": {
         "title": "Налаштування DahuaBridge",
         "data": {
+          "bridge_url": "URL Bridge",
           "scan_interval": "Інтервал опитування в секундах",
           "preferred_video_profile": "Бажаний відеопрофіль",
           "preferred_video_source": "Бажане джерело відео",

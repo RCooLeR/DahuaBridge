@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"RCooLeR/DahuaBridge/internal/ptr"
 	"gopkg.in/yaml.v3"
 )
 
@@ -125,7 +126,7 @@ func TestValidateRequiresArchiveTempDirWhenEnabled(t *testing.T) {
 		BaseURL:  "http://127.0.0.1",
 		Username: "admin",
 		Password: "secret",
-		Enabled:  boolPtr(true),
+		Enabled:  ptr.Bool(true),
 	}}
 
 	if err := cfg.normalize(); err != nil {
@@ -162,7 +163,7 @@ func TestValidateRequiresStateStorePathWhenEnabled(t *testing.T) {
 		BaseURL:  "http://127.0.0.1",
 		Username: "admin",
 		Password: "secret",
-		Enabled:  boolPtr(true),
+		Enabled:  ptr.Bool(true),
 	}}
 
 	err := cfg.validate()
@@ -290,7 +291,7 @@ func TestValidateRejectsUnsupportedMediaVideoEncoder(t *testing.T) {
 		BaseURL:  "http://127.0.0.1",
 		Username: "admin",
 		Password: "secret",
-		Enabled:  boolPtr(true),
+		Enabled:  ptr.Bool(true),
 	}}
 
 	err := cfg.validate()
@@ -307,7 +308,7 @@ func TestValidateRejectsUnsupportedMediaInputPreset(t *testing.T) {
 		BaseURL:  "http://127.0.0.1",
 		Username: "admin",
 		Password: "secret",
-		Enabled:  boolPtr(true),
+		Enabled:  ptr.Bool(true),
 	}}
 
 	err := cfg.validate()
@@ -349,7 +350,7 @@ func TestNormalizeImouConfigFromEnvAndOverrides(t *testing.T) {
 		BaseURL:  "http://127.0.0.1",
 		Username: "admin",
 		Password: "secret",
-		Enabled:  boolPtr(true),
+		Enabled:  ptr.Bool(true),
 		ChannelImouOverrides: []ChannelImouOverride{
 			{Channel: 6, DeviceID: " serial ", ChannelID: " 1 ", Features: []string{" warning_light ", "events", "siren", "bad"}},
 			{Channel: 5, DeviceID: " serial ", ChannelID: " 0 ", Features: []string{"light"}},
@@ -387,7 +388,7 @@ func TestValidateRequiresImouCredentialsWhenOverrideConfigured(t *testing.T) {
 		BaseURL:  "http://127.0.0.1",
 		Username: "admin",
 		Password: "secret",
-		Enabled:  boolPtr(true),
+		Enabled:  ptr.Bool(true),
 		ChannelImouOverrides: []ChannelImouOverride{
 			{Channel: 5, DeviceID: "serial", ChannelID: "0", Features: []string{"events"}},
 		},
@@ -413,7 +414,7 @@ func TestValidateRejectsUnsupportedImouDataCenter(t *testing.T) {
 		BaseURL:  "http://127.0.0.1",
 		Username: "admin",
 		Password: "secret",
-		Enabled:  boolPtr(true),
+		Enabled:  ptr.Bool(true),
 	}}
 
 	err := cfg.validate()
@@ -427,12 +428,12 @@ func TestNormalizeChannelPTZAndRecordingOverrides(t *testing.T) {
 		ID:      "nvr",
 		BaseURL: "http://127.0.0.1",
 		ChannelPTZControlOverrides: []ChannelPTZControlOverride{
-			{Channel: 9, Enabled: boolPtr(false)},
-			{Channel: -1, Enabled: boolPtr(false)},
+			{Channel: 9, Enabled: ptr.Bool(false)},
+			{Channel: -1, Enabled: ptr.Bool(false)},
 		},
 		ChannelRecordingOverrides: []ChannelRecordingControlOverride{
-			{Channel: 2, Supported: boolPtr(true), Active: boolPtr(true), Mode: " Auto "},
-			{Channel: 0, Supported: boolPtr(true)},
+			{Channel: 2, Supported: ptr.Bool(true), Active: ptr.Bool(true), Mode: " Auto "},
+			{Channel: 0, Supported: ptr.Bool(true)},
 		},
 	}
 

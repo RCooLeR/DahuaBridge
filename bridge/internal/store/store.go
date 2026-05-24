@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -17,6 +18,7 @@ type ProbeStore struct {
 	results  map[string]probeEntry
 	revision uint64
 	dirty    bool
+	imouAuth *imou.AuthState
 }
 
 type probeEntry struct {
@@ -111,7 +113,7 @@ func (s *ProbeStore) Stats() Stats {
 }
 
 func (s *ProbeStore) SaveFile(path string) error {
-	snapshot, revision, dirty := s.snapshot(nil)
+	snapshot, revision, dirty := s.snapshot(nil, false)
 	if !dirty {
 		return nil
 	}
@@ -119,7 +121,10 @@ func (s *ProbeStore) SaveFile(path string) error {
 }
 
 func (s *ProbeStore) SaveFileWithMetadata(path string, imouAuth *imou.AuthState) error {
-	snapshot, revision, _ := s.snapshot(imouAuth)
+	snapshot, revision, dirty := s.snapshot(imouAuth, true)
+	if !dirty {
+		return nil
+	}
 	return s.writeFile(path, snapshot, revision)
 }
 
@@ -146,6 +151,7 @@ func (s *ProbeStore) writeFile(path string, snapshot Snapshot, revision uint64) 
 	defer s.mu.Unlock()
 	if s.revision == revision {
 		s.dirty = false
+		s.imouAuth = cloneIMOUAuthState(snapshot.IMOUAuth)
 	}
 	return nil
 }
@@ -179,11 +185,12 @@ func (s *ProbeStore) LoadFileWithMetadata(path string) (bool, *imou.AuthState, e
 			UpdatedAt: entry.UpdatedAt,
 		}
 	}
+	s.imouAuth = cloneIMOUAuthState(snapshot.IMOUAuth)
 	s.dirty = false
 	return true, cloneIMOUAuthState(snapshot.IMOUAuth), nil
 }
 
-func (s *ProbeStore) snapshot(imouAuth *imou.AuthState) (Snapshot, uint64, bool) {
+func (s *ProbeStore) snapshot(imouAuth *imou.AuthState, includeMetadata bool) (Snapshot, uint64, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -195,12 +202,18 @@ func (s *ProbeStore) snapshot(imouAuth *imou.AuthState) (Snapshot, uint64, bool)
 		}
 	}
 
+	authState := cloneIMOUAuthState(imouAuth)
+	dirty := s.dirty
+	if includeMetadata && !equalIMOUAuthState(s.imouAuth, authState) {
+		dirty = true
+	}
+
 	return Snapshot{
 		Version:  2,
 		SavedAt:  time.Now().UTC(),
 		Results:  results,
-		IMOUAuth: cloneIMOUAuthState(imouAuth),
-	}, s.revision, s.dirty
+		IMOUAuth: authState,
+	}, s.revision, dirty
 }
 
 func (s *ProbeStore) markDirty() {
@@ -291,4 +304,12 @@ func cloneIMOUAuthState(input *imou.AuthState) *imou.AuthState {
 	}
 	output := *input
 	return &output
+}
+
+func equalIMOUAuthState(left *imou.AuthState, right *imou.AuthState) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return strings.TrimSpace(left.AccessToken) == strings.TrimSpace(right.AccessToken) &&
+		left.ExpiresAt.UTC().Equal(right.ExpiresAt.UTC())
 }

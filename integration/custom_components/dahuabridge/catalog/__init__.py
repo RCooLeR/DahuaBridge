@@ -24,7 +24,6 @@ from .accessors import (
 from .controls import (
     bool_switch_value_for_record,
     button_specs_for_record,
-    number_specs_for_record,
     switch_payload_for_value,
     switch_specs_for_record,
 )
@@ -41,7 +40,7 @@ from .fields import (
     unit_for_field,
     value_for_field,
 )
-from .models import ButtonSpec, NumberSpec, SwitchSpec
+from .models import ButtonSpec, SwitchSpec
 from .streams import (
     mjpeg_url_for_record_with_preferences,
     normalize_profile_name,
@@ -56,7 +55,6 @@ from .streams import (
 
 __all__ = [
     "ButtonSpec",
-    "NumberSpec",
     "SwitchSpec",
     "attributes_for_record",
     "available_for_record",
@@ -83,7 +81,6 @@ __all__ = [
     "name_for_field",
     "native_value_for_field",
     "normalize_profile_name",
-    "number_specs_for_record",
     "parent_id_for_record",
     "profile_order_for_record",
     "record_by_device_id",

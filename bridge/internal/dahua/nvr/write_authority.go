@@ -11,12 +11,6 @@ import (
 
 const nvrConfigWriteCacheTTL = 15 * time.Minute
 
-type channelWriteStatus struct {
-	Checked time.Time
-	Allowed bool
-	Reason  string
-}
-
 func (d *Driver) nvrConfigWriteStatus(ctx context.Context) (bool, string) {
 	d.configWriteMu.RLock()
 	if d.configWriteKnown && time.Since(d.configWriteChecked) < nvrConfigWriteCacheTTL {
@@ -79,10 +73,6 @@ func (d *Driver) resetConfigWriteStatus() {
 	d.configWriteAllowed = false
 	d.configWriteReason = ""
 	d.configWriteMu.Unlock()
-
-	d.audioWriteMu.Lock()
-	d.audioWriteStatus = nil
-	d.audioWriteMu.Unlock()
 }
 
 func (d *Driver) requireNVRConfigWrite(ctx context.Context, channel int, operation string) error {

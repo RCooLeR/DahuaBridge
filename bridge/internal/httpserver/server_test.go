@@ -52,6 +52,9 @@ func (s stubProbeReader) Stats() store.Stats {
 }
 
 type stubSnapshotReader struct {
+	nvrSnapshot              func(context.Context, string, int) ([]byte, string, error)
+	vtoSnapshot              func(context.Context, string) ([]byte, string, error)
+	ipcSnapshot              func(context.Context, string) ([]byte, string, error)
 	listStreams              func(bool) []streams.Entry
 	adminSettings            func() map[string]any
 	nvrRecordings            func(context.Context, string, dahua.NVRRecordingQuery) (dahua.NVRRecordingSearchResult, error)
@@ -65,7 +68,10 @@ type stubSnapshotReader struct {
 	getStream                func(string, string, bool) (streams.Entry, streams.Profile, bool)
 }
 
-func (stubSnapshotReader) NVRSnapshot(context.Context, string, int) ([]byte, string, error) {
+func (s stubSnapshotReader) NVRSnapshot(ctx context.Context, deviceID string, channel int) ([]byte, string, error) {
+	if s.nvrSnapshot != nil {
+		return s.nvrSnapshot(ctx, deviceID, channel)
+	}
 	return nil, "", nil
 }
 func (s stubSnapshotReader) NVRRecordings(ctx context.Context, deviceID string, query dahua.NVRRecordingQuery) (dahua.NVRRecordingSearchResult, error) {
@@ -125,10 +131,16 @@ func (s stubSnapshotReader) GetStream(streamID string, profileName string, inclu
 	}
 	return streams.Entry{}, streams.Profile{}, false
 }
-func (stubSnapshotReader) VTOSnapshot(context.Context, string) ([]byte, string, error) {
+func (s stubSnapshotReader) VTOSnapshot(ctx context.Context, deviceID string) ([]byte, string, error) {
+	if s.vtoSnapshot != nil {
+		return s.vtoSnapshot(ctx, deviceID)
+	}
 	return nil, "", nil
 }
-func (stubSnapshotReader) IPCSnapshot(context.Context, string) ([]byte, string, error) {
+func (s stubSnapshotReader) IPCSnapshot(ctx context.Context, deviceID string) ([]byte, string, error) {
+	if s.ipcSnapshot != nil {
+		return s.ipcSnapshot(ctx, deviceID)
+	}
 	return nil, "", nil
 }
 func (s stubSnapshotReader) ListStreams(includeCredentials bool) []streams.Entry {
@@ -174,14 +186,10 @@ type stubActionReader struct {
 	answer        func(context.Context, string) error
 	hangup        func(context.Context, string) error
 	vtoControls   func(context.Context, string) (dahua.VTOControlCapabilities, error)
-	vtoOutputVol  func(context.Context, string, int, int) error
-	vtoInputVol   func(context.Context, string, int, int) error
-	vtoMute       func(context.Context, string, bool) error
 	vtoRecord     func(context.Context, string, bool) error
 	nvrControls   func(context.Context, string, int) (dahua.NVRChannelControlCapabilities, error)
 	nvrPTZ        func(context.Context, string, dahua.NVRPTZRequest) error
 	nvrAux        func(context.Context, string, dahua.NVRAuxRequest) error
-	nvrAudio      func(context.Context, string, dahua.NVRAudioRequest) error
 	nvrRecording  func(context.Context, string, dahua.NVRRecordingRequest) error
 	nvrDiagnostic func(context.Context, string, dahua.NVRDiagnosticActionRequest) (dahua.NVRDiagnosticActionResult, error)
 	probe         func(context.Context, string) (*dahua.ProbeResult, error)
@@ -417,27 +425,6 @@ func (s stubActionReader) VTOControlCapabilities(ctx context.Context, deviceID s
 	return s.vtoControls(ctx, deviceID)
 }
 
-func (s stubActionReader) SetVTOAudioOutputVolume(ctx context.Context, deviceID string, slot int, level int) error {
-	if s.vtoOutputVol == nil {
-		return nil
-	}
-	return s.vtoOutputVol(ctx, deviceID, slot, level)
-}
-
-func (s stubActionReader) SetVTOAudioInputVolume(ctx context.Context, deviceID string, slot int, level int) error {
-	if s.vtoInputVol == nil {
-		return nil
-	}
-	return s.vtoInputVol(ctx, deviceID, slot, level)
-}
-
-func (s stubActionReader) SetVTOMute(ctx context.Context, deviceID string, muted bool) error {
-	if s.vtoMute == nil {
-		return nil
-	}
-	return s.vtoMute(ctx, deviceID, muted)
-}
-
 func (s stubActionReader) SetVTORecordingEnabled(ctx context.Context, deviceID string, enabled bool) error {
 	if s.vtoRecord == nil {
 		return nil
@@ -464,13 +451,6 @@ func (s stubActionReader) ControlNVRAux(ctx context.Context, deviceID string, re
 		return nil
 	}
 	return s.nvrAux(ctx, deviceID, request)
-}
-
-func (s stubActionReader) ControlNVRAudio(ctx context.Context, deviceID string, request dahua.NVRAudioRequest) error {
-	if s.nvrAudio == nil {
-		return nil
-	}
-	return s.nvrAudio(ctx, deviceID, request)
 }
 
 func (s stubActionReader) ControlNVRRecording(ctx context.Context, deviceID string, request dahua.NVRRecordingRequest) error {
@@ -762,12 +742,6 @@ func TestVTOControlsEndpoint(t *testing.T) {
 					Count:     1,
 					Indexes:   []int{0},
 				},
-				Audio: dahua.VTOAudioCapabilities{
-					OutputVolume: false,
-					InputVolume:  false,
-					Mute:         false,
-					Codec:        "PCM",
-				},
 				Recording: dahua.VTORecordingCapabilities{
 					Supported:          false,
 					EventSnapshotLocal: false,
@@ -790,52 +764,6 @@ func TestVTOControlsEndpoint(t *testing.T) {
 	if !strings.Contains(rec.Body.String(), `"device_id":"front_vto"`) ||
 		!strings.Contains(rec.Body.String(), `"state":"Idle"`) ||
 		!strings.Contains(rec.Body.String(), `"direct_talkback_supported":false`) {
-		t.Fatalf("unexpected response body: %s", rec.Body.String())
-	}
-}
-
-func TestVTOAudioOutputVolumeEndpoint(t *testing.T) {
-	server := newTestServer(stubActionReader{
-		vtoOutputVol: func(_ context.Context, deviceID string, slot int, level int) error {
-			if deviceID != "front_vto" || slot != 1 || level != 75 {
-				t.Fatalf("unexpected request %q %d %d", deviceID, slot, level)
-			}
-			return nil
-		},
-	}, stubEventReader{})
-
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/vto/front_vto/audio/output-volume", strings.NewReader(`{"slot":1,"level":75}`))
-	rec := httptest.NewRecorder()
-
-	server.httpServer.Handler.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("expected status 200, got %d: %s", rec.Code, rec.Body.String())
-	}
-	if !strings.Contains(rec.Body.String(), `"target":"output_volume"`) {
-		t.Fatalf("unexpected response body: %s", rec.Body.String())
-	}
-}
-
-func TestVTOMuteEndpoint(t *testing.T) {
-	server := newTestServer(stubActionReader{
-		vtoMute: func(_ context.Context, deviceID string, muted bool) error {
-			if deviceID != "front_vto" || !muted {
-				t.Fatalf("unexpected request %q muted=%v", deviceID, muted)
-			}
-			return nil
-		},
-	}, stubEventReader{})
-
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/vto/front_vto/audio/mute", strings.NewReader(`{"muted":true}`))
-	rec := httptest.NewRecorder()
-
-	server.httpServer.Handler.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("expected status 200, got %d: %s", rec.Code, rec.Body.String())
-	}
-	if !strings.Contains(rec.Body.String(), `"muted":true`) {
 		t.Fatalf("unexpected response body: %s", rec.Body.String())
 	}
 }
@@ -1281,6 +1209,68 @@ func TestIPCSnapshotEndpointRateLimited(t *testing.T) {
 	}
 }
 
+func TestVTOSnapshotEndpointServesLogoPlaceholderWhenUnavailable(t *testing.T) {
+	server := newTestServerWithConfig(config.HTTPConfig{
+		ListenAddress: ":0",
+		MetricsPath:   "/metrics",
+		HealthPath:    "/healthz",
+	}, stubSnapshotReader{
+		vtoSnapshot: func(context.Context, string) ([]byte, string, error) {
+			return nil, "", errors.New("snapshot unavailable")
+		},
+	}, nil, stubActionReader{}, stubEventReader{})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/vto/front_vto/snapshot", nil)
+	rec := httptest.NewRecorder()
+	server.httpServer.Handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected placeholder status 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if rec.Header().Get("Content-Type") != "image/png" {
+		t.Fatalf("unexpected content type %q", rec.Header().Get("Content-Type"))
+	}
+	if rec.Header().Get("X-DahuaBridge-Snapshot-Fallback") != "error" {
+		t.Fatalf("expected error fallback header, got %q", rec.Header().Get("X-DahuaBridge-Snapshot-Fallback"))
+	}
+	assertPNGBody(t, rec.Body.Bytes())
+}
+
+func TestSnapshotEndpointServesLogoPlaceholderForEmptyBody(t *testing.T) {
+	server := newTestServerWithConfig(config.HTTPConfig{
+		ListenAddress: ":0",
+		MetricsPath:   "/metrics",
+		HealthPath:    "/healthz",
+	}, stubSnapshotReader{
+		ipcSnapshot: func(context.Context, string) ([]byte, string, error) {
+			return nil, "", nil
+		},
+	}, nil, stubActionReader{}, stubEventReader{})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/ipc/yard_ipc/snapshot", nil)
+	rec := httptest.NewRecorder()
+	server.httpServer.Handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected placeholder status 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if rec.Header().Get("Content-Type") != "image/png" {
+		t.Fatalf("unexpected content type %q", rec.Header().Get("Content-Type"))
+	}
+	if rec.Header().Get("X-DahuaBridge-Snapshot-Fallback") != "empty" {
+		t.Fatalf("expected empty fallback header, got %q", rec.Header().Get("X-DahuaBridge-Snapshot-Fallback"))
+	}
+	assertPNGBody(t, rec.Body.Bytes())
+}
+
+func assertPNGBody(t *testing.T, body []byte) {
+	t.Helper()
+	const pngSignature = "\x89PNG\r\n\x1a\n"
+	if len(body) < len(pngSignature) || string(body[:len(pngSignature)]) != pngSignature {
+		t.Fatalf("expected PNG body, got %d bytes starting %q", len(body), string(body[:min(len(body), len(pngSignature))]))
+	}
+}
+
 func TestMediaMjpegEndpointRateLimited(t *testing.T) {
 	server := newTestServerWithConfig(config.HTTPConfig{
 		ListenAddress:           ":0",
@@ -1500,24 +1490,17 @@ func TestAdminPageEndpoint(t *testing.T) {
 				MainResolution:     "1280x720",
 				AudioCodec:         "PCM",
 				Intercom: &streams.IntercomSummary{
-					AnswerURL:                      "/api/v1/vto/front_vto/call/answer",
-					HangupURL:                      "/api/v1/vto/front_vto/call/hangup",
-					BridgeSessionResetURL:          "/api/v1/vto/front_vto/intercom/reset",
-					LockURLs:                       []string{"/api/v1/vto/front_vto/locks/0/unlock"},
-					OutputVolumeURL:                "/api/v1/vto/front_vto/audio/output-volume",
-					InputVolumeURL:                 "/api/v1/vto/front_vto/audio/input-volume",
-					MuteURL:                        "/api/v1/vto/front_vto/audio/mute",
-					RecordingURL:                   "/api/v1/vto/front_vto/recording",
-					SupportsVTOCallAnswer:          true,
-					SupportsHangup:                 true,
-					SupportsUnlock:                 true,
-					SupportsVTOOutputVolumeControl: true,
-					SupportsVTOInputVolumeControl:  true,
-					SupportsVTOMuteControl:         true,
-					SupportsVTORecordingControl:    true,
+					AnswerURL:                   "/api/v1/vto/front_vto/call/answer",
+					HangupURL:                   "/api/v1/vto/front_vto/call/hangup",
+					BridgeSessionResetURL:       "/api/v1/vto/front_vto/intercom/reset",
+					LockURLs:                    []string{"/api/v1/vto/front_vto/locks/0/unlock"},
+					RecordingURL:                "/api/v1/vto/front_vto/recording",
+					SupportsVTOCallAnswer:       true,
+					SupportsHangup:              true,
+					SupportsUnlock:              true,
+					SupportsVTORecordingControl: true,
 					ValidationNotes: []string{
-						"AudioInputVolume writable",
-						"AudioOutputVolume writable",
+						"vto_recording_control_auto_record_config_backed",
 					},
 				},
 				Profiles: map[string]streams.Profile{
@@ -1568,8 +1551,11 @@ func TestAdminPageEndpoint(t *testing.T) {
 	if !strings.Contains(body, `/api/v1/vto/front_vto/intercom?profile=stable`) || !strings.Contains(body, `/api/v1/media/webrtc/front_vto/stable`) {
 		t.Fatalf("missing concrete stream links:\n%s", body)
 	}
-	if !strings.Contains(body, `/api/v1/vto/front_vto/controls`) || !strings.Contains(body, `/api/v1/vto/front_vto/audio/output-volume`) || !strings.Contains(body, `validated: AudioInputVolume writable | AudioOutputVolume writable`) {
+	if !strings.Contains(body, `/api/v1/vto/front_vto/controls`) || !strings.Contains(body, `/api/v1/vto/front_vto/recording`) || !strings.Contains(body, `validated: vto_recording_control_auto_record_config_backed`) {
 		t.Fatalf("missing vto control detail:\n%s", body)
+	}
+	if strings.Contains(body, `/api/v1/vto/front_vto/audio/`) {
+		t.Fatalf("unexpected VTO audio control link:\n%s", body)
 	}
 	if !strings.Contains(body, `/admin/assets/logo.png`) || !strings.Contains(body, `/admin/assets/bootstrap.min.css`) || !strings.Contains(body, `data-bs-theme="dark"`) {
 		t.Fatalf("missing embedded admin assets or dark theme marker:\n%s", body)
@@ -3406,8 +3392,6 @@ func TestNVRChannelControlsEndpoint(t *testing.T) {
 				},
 				Audio: dahua.NVRChannelAudioCapabilities{
 					Supported: false,
-					Mute:      false,
-					Volume:    false,
 				},
 			}, nil
 		},
@@ -3421,7 +3405,7 @@ func TestNVRChannelControlsEndpoint(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected status 200, got %d: %s", rec.Code, rec.Body.String())
 	}
-	if !strings.Contains(rec.Body.String(), `"channel":5`) || !strings.Contains(rec.Body.String(), `"outputs":["aux","light","wiper"]`) || !strings.Contains(rec.Body.String(), `"audio":{"supported":false,"mute":false,"volume":false,`) {
+	if !strings.Contains(rec.Body.String(), `"channel":5`) || !strings.Contains(rec.Body.String(), `"outputs":["aux","light","wiper"]`) || !strings.Contains(rec.Body.String(), `"audio":{"supported":false,`) {
 		t.Fatalf("unexpected response body: %s", rec.Body.String())
 	}
 }

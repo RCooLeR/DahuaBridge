@@ -30,10 +30,15 @@ configure the integration bridge URL as:
 https://ha.example.com/dahua-bridge
 ```
 
+If `/dahua-bridge/api/...` requests return `404`, check that the proxy strips
+the `/dahua-bridge` prefix before forwarding to the bridge process. The bridge
+routes themselves are mounted at `/api/...`.
+
 ## Options
 
 The options flow exposes:
 
+- bridge URL
 - poll interval
 - preferred video profile
 - preferred video source
@@ -43,10 +48,14 @@ Defaults:
 
 | Option | Default | Allowed values |
 | --- | --- | --- |
+| Bridge URL | Current configured URL | Any reachable `http://` or `https://` bridge base URL |
 | Poll interval | `15` seconds | `5` to `300` seconds |
 | Preferred video profile | `quality` | `auto`, `quality`, `stable` |
-| Preferred video source | `hls` | `auto`, `hls`, `mjpeg`, `rtsp` |
+| Preferred video source | `rtsp` | `auto`, `hls`, `mjpeg`, `rtsp` |
 | Integration language | `auto` | `auto`, `en`, `uk` |
+
+Changing the bridge URL in options validates the new URL with `GET /api/v1/status`
+and then reloads the config entry.
 
 ## Poll Interval
 

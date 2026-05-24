@@ -11,6 +11,7 @@ import (
 	"RCooLeR/DahuaBridge/internal/config"
 	"RCooLeR/DahuaBridge/internal/dahua"
 	"RCooLeR/DahuaBridge/internal/metrics"
+	"RCooLeR/DahuaBridge/internal/ptr"
 	"RCooLeR/DahuaBridge/internal/store"
 	"github.com/rs/zerolog"
 )
@@ -24,12 +25,10 @@ type adminActions struct {
 	lockControllers   map[string]dahua.VTOLockController
 	callControllers   map[string]dahua.VTOCallController
 	vtoControls       map[string]dahua.VTOControlReader
-	vtoAudio          map[string]dahua.VTOAudioController
 	vtoRecording      map[string]dahua.VTORecordingController
 	channelControls   map[string]dahua.NVRChannelControlReader
 	ptzControllers    map[string]dahua.NVRPTZController
 	auxControllers    map[string]dahua.NVRAuxController
-	audioControllers  map[string]dahua.NVRAudioController
 	recordControllers map[string]dahua.NVRRecordingController
 	nvrDiagnostics    map[string]dahua.NVRDiagnosticController
 	nvrRefresh        map[string]dahua.NVRInventoryRefresher
@@ -57,12 +56,10 @@ func newAdminActions(
 		lockControllers:   make(map[string]dahua.VTOLockController),
 		callControllers:   make(map[string]dahua.VTOCallController),
 		vtoControls:       make(map[string]dahua.VTOControlReader),
-		vtoAudio:          make(map[string]dahua.VTOAudioController),
 		vtoRecording:      make(map[string]dahua.VTORecordingController),
 		channelControls:   make(map[string]dahua.NVRChannelControlReader),
 		ptzControllers:    make(map[string]dahua.NVRPTZController),
 		auxControllers:    make(map[string]dahua.NVRAuxController),
-		audioControllers:  make(map[string]dahua.NVRAudioController),
 		recordControllers: make(map[string]dahua.NVRRecordingController),
 		nvrDiagnostics:    make(map[string]dahua.NVRDiagnosticController),
 		nvrRefresh:        make(map[string]dahua.NVRInventoryRefresher),
@@ -80,9 +77,6 @@ func newAdminActions(
 		if controller, ok := driver.(dahua.VTOControlReader); ok && driver.Kind() == dahua.DeviceKindVTO {
 			actions.vtoControls[driver.ID()] = controller
 		}
-		if controller, ok := driver.(dahua.VTOAudioController); ok && driver.Kind() == dahua.DeviceKindVTO {
-			actions.vtoAudio[driver.ID()] = controller
-		}
 		if controller, ok := driver.(dahua.VTORecordingController); ok && driver.Kind() == dahua.DeviceKindVTO {
 			actions.vtoRecording[driver.ID()] = controller
 		}
@@ -94,9 +88,6 @@ func newAdminActions(
 		}
 		if controller, ok := driver.(dahua.NVRAuxController); ok && driver.Kind() == dahua.DeviceKindNVR {
 			actions.auxControllers[driver.ID()] = controller
-		}
-		if controller, ok := driver.(dahua.NVRAudioController); ok && driver.Kind() == dahua.DeviceKindNVR {
-			actions.audioControllers[driver.ID()] = controller
 		}
 		if controller, ok := driver.(dahua.NVRRecordingController); ok && driver.Kind() == dahua.DeviceKindNVR {
 			actions.recordControllers[driver.ID()] = controller
@@ -164,7 +155,7 @@ func (a *adminActions) HangupVTOCall(ctx context.Context, deviceID string) error
 		return err
 	}
 
-	a.publishVTOHangupState(ctx, deviceID, time.Now().UTC())
+	a.updateVTOHangupState(deviceID, time.Now().UTC())
 	return nil
 }
 
@@ -182,30 +173,6 @@ func (a *adminActions) VTOControlCapabilities(ctx context.Context, deviceID stri
 		return dahua.VTOControlCapabilities{}, fmt.Errorf("%w: %s", dahua.ErrDeviceNotFound, deviceID)
 	}
 	return controller.ControlCapabilities(ctx)
-}
-
-func (a *adminActions) SetVTOAudioOutputVolume(ctx context.Context, deviceID string, slot int, level int) error {
-	controller, ok := a.vtoAudio[deviceID]
-	if !ok {
-		return fmt.Errorf("%w: %s", dahua.ErrDeviceNotFound, deviceID)
-	}
-	return controller.SetAudioOutputVolume(ctx, slot, level)
-}
-
-func (a *adminActions) SetVTOAudioInputVolume(ctx context.Context, deviceID string, slot int, level int) error {
-	controller, ok := a.vtoAudio[deviceID]
-	if !ok {
-		return fmt.Errorf("%w: %s", dahua.ErrDeviceNotFound, deviceID)
-	}
-	return controller.SetAudioInputVolume(ctx, slot, level)
-}
-
-func (a *adminActions) SetVTOMute(ctx context.Context, deviceID string, muted bool) error {
-	controller, ok := a.vtoAudio[deviceID]
-	if !ok {
-		return fmt.Errorf("%w: %s", dahua.ErrDeviceNotFound, deviceID)
-	}
-	return controller.SetAudioMute(ctx, muted)
 }
 
 func (a *adminActions) SetVTORecordingEnabled(ctx context.Context, deviceID string, enabled bool) error {
@@ -251,18 +218,6 @@ func (a *adminActions) ControlNVRAux(ctx context.Context, deviceID string, reque
 		return err
 	}
 	a.publishNVRAuxState(deviceID, request, time.Now().UTC())
-	return nil
-}
-
-func (a *adminActions) ControlNVRAudio(ctx context.Context, deviceID string, request dahua.NVRAudioRequest) error {
-	controller, ok := a.audioControllers[deviceID]
-	if !ok {
-		return fmt.Errorf("%w: %s", dahua.ErrDeviceNotFound, deviceID)
-	}
-	if err := controller.SetAudioMute(ctx, request); err != nil {
-		return err
-	}
-	a.publishNVRAudioState(deviceID, request)
 	return nil
 }
 
@@ -360,7 +315,7 @@ func applyDeviceConfigUpdate(current config.DeviceConfig, update dahua.DeviceCon
 		next.Password = *update.Password
 	}
 	if update.OnvifEnabled != nil {
-		next.OnvifEnabled = boolPtr(*update.OnvifEnabled)
+		next.OnvifEnabled = ptr.Bool(*update.OnvifEnabled)
 	}
 	if update.OnvifUsername != nil {
 		next.OnvifUsername = strings.TrimSpace(*update.OnvifUsername)
@@ -388,11 +343,7 @@ func applyDeviceConfigUpdate(current config.DeviceConfig, update dahua.DeviceCon
 	return normalized, nil
 }
 
-func boolPtr(value bool) *bool {
-	return &value
-}
-
-func (a *adminActions) publishVTOHangupState(ctx context.Context, deviceID string, endedAt time.Time) {
+func (a *adminActions) updateVTOHangupState(deviceID string, endedAt time.Time) {
 	timestamp := endedAt.Format(time.RFC3339Nano)
 	duration := ""
 
@@ -419,8 +370,6 @@ func (a *adminActions) publishVTOHangupState(ctx context.Context, deviceID strin
 			result.States[deviceID] = state
 		})
 	}
-
-	_ = ctx
 }
 
 func stringStateValue(value any) string {
@@ -477,29 +426,6 @@ func (a *adminActions) publishNVRAuxState(deviceID string, request dahua.NVRAuxR
 			setNVRAuxFeatureState(state.Info, "wiper", active, time.Time{})
 		}
 
-		result.States[channelDeviceID] = state
-	})
-}
-
-func (a *adminActions) publishNVRAudioState(deviceID string, request dahua.NVRAudioRequest) {
-	if a.probes == nil {
-		return
-	}
-	a.probes.Update(deviceID, func(result *dahua.ProbeResult) {
-		channelDeviceID := findNVRChannelDeviceID(result, request.Channel)
-		if channelDeviceID == "" {
-			return
-		}
-		if result.States == nil {
-			result.States = make(map[string]dahua.DeviceState)
-		}
-		state := result.States[channelDeviceID]
-		if state.Info == nil {
-			state.Info = make(map[string]any)
-		}
-		state.Available = true
-		state.Info["control_audio_muted"] = request.Muted
-		state.Info["control_audio_stream_enabled"] = !request.Muted
 		result.States[channelDeviceID] = state
 	})
 }

@@ -74,8 +74,6 @@ describe("discoverBridgeTopology", () => {
               },
               audio: {
                 supported: true,
-                mute: true,
-                volume: true,
                 playback_supported: true,
                 playback_siren: true,
                 playback_quick_reply: true,
@@ -450,27 +448,6 @@ describe("discoverBridgeTopology", () => {
           last_changed: now,
           last_updated: now,
         },
-        "number.front_station_output_level": {
-          entity_id: "number.front_station_output_level",
-          state: "72",
-          attributes: {},
-          last_changed: now,
-          last_updated: now,
-        },
-        "number.front_station_input_level": {
-          entity_id: "number.front_station_input_level",
-          state: "61",
-          attributes: {},
-          last_changed: now,
-          last_updated: now,
-        },
-        "switch.front_station_muted_toggle": {
-          entity_id: "switch.front_station_muted_toggle",
-          state: "on",
-          attributes: {},
-          last_changed: now,
-          last_updated: now,
-        },
         "switch.front_station_auto_record_toggle": {
           entity_id: "switch.front_station_auto_record_toggle",
           state: "on",
@@ -673,21 +650,6 @@ describe("discoverBridgeTopology", () => {
           unique_id: "front_vto_hangup_call",
         },
         {
-          entity_id: "number.front_station_output_level",
-          device_id: "dev-vto",
-          unique_id: "front_vto_output_volume",
-        },
-        {
-          entity_id: "number.front_station_input_level",
-          device_id: "dev-vto",
-          unique_id: "front_vto_input_volume",
-        },
-        {
-          entity_id: "switch.front_station_muted_toggle",
-          device_id: "dev-vto",
-          unique_id: "front_vto_muted",
-        },
-        {
           entity_id: "switch.front_station_auto_record_toggle",
           device_id: "dev-vto",
           unique_id: "front_vto_auto_record_enabled",
@@ -827,8 +789,6 @@ describe("discoverBridgeTopology", () => {
     });
     expect(topology.nvrs[0]?.channels[0]?.capabilities.audio).toMatchObject({
       supported: true,
-      mute: true,
-      volume: true,
       playback: {
         supported: true,
         siren: true,

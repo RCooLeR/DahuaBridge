@@ -126,7 +126,47 @@ class DahuaBridgeOptionsFlow(config_entries.OptionsFlow):
         self._config_entry = config_entry
 
     async def async_step_init(self, user_input: dict | None = None):
+        errors: dict[str, str] = {}
+
         if user_input is not None:
+            bridge_url = str(self._config_entry.data.get(CONF_BRIDGE_URL, "")).strip()
+            try:
+                requested_bridge_url = normalize_bridge_url(
+                    user_input.get(CONF_BRIDGE_URL, bridge_url)
+                )
+            except ValueError:
+                errors["base"] = "invalid_url"
+            else:
+                bridge_url_changed = requested_bridge_url != bridge_url
+                if bridge_url_changed:
+                    api = DahuaBridgeAPI(
+                        async_get_clientsession(self.hass), requested_bridge_url
+                    )
+                    try:
+                        await api.async_get_status()
+                    except DahuaBridgeAPIError as err:
+                        _LOGGER.warning(
+                            "Bridge connectivity check failed for %s: %s",
+                            requested_bridge_url,
+                            err,
+                        )
+                        errors["base"] = "cannot_connect"
+                    else:
+                        self.hass.config_entries.async_update_entry(
+                            self._config_entry,
+                            data={
+                                **dict(self._config_entry.data),
+                                CONF_BRIDGE_URL: requested_bridge_url,
+                            },
+                            title=urlsplit(requested_bridge_url).hostname or "DahuaBridge",
+                        )
+
+            if errors:
+                schema = build_options_schema(self._config_entry)
+                return self.async_show_form(
+                    step_id="init", data_schema=schema, errors=errors
+                )
+
             preferred_profile = normalize_choice(
                 user_input.get(
                     CONF_PREFERRED_VIDEO_PROFILE, DEFAULT_PREFERRED_VIDEO_PROFILE

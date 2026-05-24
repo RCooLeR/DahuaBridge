@@ -322,9 +322,6 @@ func buildPlaybackProfiles(cfg config.Config, deviceCfg config.DeviceConfig, ses
 		session.EndTime,
 		includeCredentials,
 	)
-	useWallclock := true
-	fileSeekOffset := time.Duration(0)
-	filePlaybackDuration := time.Duration(0)
 
 	return map[string]streams.Profile{
 		"quality": {
@@ -340,9 +337,7 @@ func buildPlaybackProfiles(cfg config.Config, deviceCfg config.DeviceConfig, ses
 			AudioCodec:               session.AudioCodec,
 			SourceWidth:              mainWidth,
 			SourceHeight:             mainHeight,
-			UseWallclockAsTimestamps: useWallclock,
-			InputSeekOffset:          int64(fileSeekOffset),
-			InputDuration:            int64(filePlaybackDuration),
+			UseWallclockAsTimestamps: true,
 			Recommended:              recommended == "quality",
 		},
 		"stable": {
@@ -359,9 +354,7 @@ func buildPlaybackProfiles(cfg config.Config, deviceCfg config.DeviceConfig, ses
 			AudioCodec:               session.AudioCodec,
 			SourceWidth:              stableWidth,
 			SourceHeight:             stableHeight,
-			UseWallclockAsTimestamps: useWallclock,
-			InputSeekOffset:          int64(fileSeekOffset),
-			InputDuration:            int64(filePlaybackDuration),
+			UseWallclockAsTimestamps: true,
 			Recommended:              recommended == "stable",
 		},
 	}

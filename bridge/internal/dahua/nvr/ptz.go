@@ -519,11 +519,6 @@ func attachChannelControlState(state *dahua.DeviceState, capabilities dahua.NVRC
 	state.Info["control_ptz_tour"] = capabilities.PTZ.Tour
 	state.Info["control_aux_supported"] = capabilities.Aux.Supported
 	state.Info["control_audio_supported"] = capabilities.Audio.Supported
-	state.Info["control_audio_mute_supported"] = capabilities.Audio.Mute
-	state.Info["control_audio_volume_supported"] = capabilities.Audio.Volume
-	state.Info["control_audio_volume_permission_denied"] = capabilities.Audio.VolumePermissionDenied
-	state.Info["control_audio_muted"] = capabilities.Audio.Muted
-	state.Info["control_audio_stream_enabled"] = capabilities.Audio.StreamEnabled
 	state.Info["control_audio_playback_supported"] = capabilities.Audio.Playback.Supported
 	state.Info["control_audio_playback_siren"] = capabilities.Audio.Playback.Siren
 	state.Info["control_audio_playback_quick_reply"] = capabilities.Audio.Playback.QuickReply

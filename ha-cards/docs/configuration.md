@@ -8,6 +8,17 @@ If the browser reaches the bridge through a different base URL than Home
 Assistant, set `browser_bridge_url`. The card rewrites bridge media and action
 URLs for the browser only.
 
+When the bridge is mounted under a reverse-proxy path, include that path:
+
+```yaml
+browser_bridge_url: https://ha.example.com/dahua-bridge
+```
+
+The proxy must forward `/dahua-bridge/api/...` to the bridge as `/api/...`.
+If event summary or snapshot URLs return `404` with the prefix in the browser,
+the card configuration is usually correct and the proxy path rewrite is the
+piece to check.
+
 ## Language
 
 The cards do not have their own language option. They read the resolved
@@ -102,6 +113,8 @@ Both cards accept the same optional `vto` object:
 Only controls backed by real Home Assistant entities or bridge URLs are shown.
 The cards do not expose VTO device mute or VTO speaker/microphone volume
 controls; camera audio is controlled only in the browser player.
+VTO preview images prefer the direct VTO snapshot endpoint and fall back to the
+bundled card logo if the snapshot image fails to load.
 
 ## Archive Metadata Used By The Cards
 

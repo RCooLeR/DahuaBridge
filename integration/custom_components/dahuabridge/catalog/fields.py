@@ -12,8 +12,6 @@ from .accessors import attributes_for_record, info_for_record, stream_fields_for
 
 DIAGNOSTIC_FIELDS = {
     "audio_codec",
-    "control_audio_authority",
-    "control_audio_semantic",
     "bridge_forward_errors",
     "bridge_forwarded_packets",
     "bridge_session_count",

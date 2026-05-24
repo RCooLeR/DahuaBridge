@@ -74,7 +74,7 @@ class CatalogControlTests(unittest.TestCase):
         self.assertTrue(bool_switch_value_for_record(record, specs[0]))
         self.assertFalse(bool_switch_value_for_record(record, specs[1]))
 
-    def test_vto_switch_specs_keep_boolean_payloads(self) -> None:
+    def test_vto_switch_specs_keep_recording_boolean_payloads(self) -> None:
         record = {
             "device": {
                 "id": "front_vto",
@@ -82,9 +82,9 @@ class CatalogControlTests(unittest.TestCase):
             },
             "stream": {
                 "intercom": {
-                    "mute_url": "/api/v1/vto/front_vto/audio/mute",
-                    "supports_vto_mute_control": True,
-                    "muted": True,
+                    "recording_url": "/api/v1/vto/front_vto/recording",
+                    "supports_vto_recording_control": True,
+                    "auto_record_enabled": True,
                 }
             },
         }
@@ -92,8 +92,11 @@ class CatalogControlTests(unittest.TestCase):
         specs = switch_specs_for_record(record)
 
         self.assertEqual(len(specs), 1)
-        self.assertEqual(specs[0].key, "muted")
-        self.assertEqual(switch_payload_for_value(specs[0], False), {"muted": False})
+        self.assertEqual(specs[0].key, "auto_record_enabled")
+        self.assertEqual(
+            switch_payload_for_value(specs[0], False),
+            {"auto_record_enabled": False},
+        )
         self.assertTrue(bool_switch_value_for_record(record, specs[0]))
 
 

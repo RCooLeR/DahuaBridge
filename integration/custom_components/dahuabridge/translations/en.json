@@ -24,6 +24,7 @@
       "init": {
         "title": "DahuaBridge Options",
         "data": {
+          "bridge_url": "Bridge URL",
           "scan_interval": "Poll interval in seconds",
           "preferred_video_profile": "Preferred video profile",
           "preferred_video_source": "Preferred video source",

@@ -1,6 +1,7 @@
 package httpserver
 
 import (
+	"io/fs"
 	"net/http"
 	"strconv"
 
@@ -17,45 +18,50 @@ func (c *controller) registerSnapshotRoutes(router chi.Router) {
 		}
 
 		body, contentType, err := c.snapshots.NVRSnapshot(r.Context(), deviceID, channel)
-		if err != nil {
-			writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
-			return
-		}
-
-		if contentType == "" {
-			contentType = "image/jpeg"
-		}
-
-		w.Header().Set("Content-Type", contentType)
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write(body)
+		writeSnapshotImage(w, body, contentType, err)
 	})
 	router.With(rateLimitMiddleware(c.snapshotLimiter)).Get("/api/v1/vto/{deviceID}/snapshot", func(w http.ResponseWriter, r *http.Request) {
 		deviceID := chi.URLParam(r, "deviceID")
 		body, contentType, err := c.snapshots.VTOSnapshot(r.Context(), deviceID)
-		if err != nil {
-			writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
-			return
-		}
-		if contentType == "" {
-			contentType = "image/jpeg"
-		}
-		w.Header().Set("Content-Type", contentType)
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write(body)
+		writeSnapshotImage(w, body, contentType, err)
 	})
 	router.With(rateLimitMiddleware(c.snapshotLimiter)).Get("/api/v1/ipc/{deviceID}/snapshot", func(w http.ResponseWriter, r *http.Request) {
 		deviceID := chi.URLParam(r, "deviceID")
 		body, contentType, err := c.snapshots.IPCSnapshot(r.Context(), deviceID)
-		if err != nil {
-			writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		writeSnapshotImage(w, body, contentType, err)
+	})
+}
+
+func writeSnapshotImage(w http.ResponseWriter, body []byte, contentType string, err error) {
+	if err != nil || len(body) == 0 {
+		writeSnapshotPlaceholder(w, err)
+		return
+	}
+	if contentType == "" {
+		contentType = "image/jpeg"
+	}
+	w.Header().Set("Content-Type", contentType)
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(body)
+}
+
+func writeSnapshotPlaceholder(w http.ResponseWriter, snapshotErr error) {
+	body, err := fs.ReadFile(embeddedAdminAssets, "logo.png")
+	if err != nil || len(body) == 0 {
+		if snapshotErr != nil {
+			writeJSON(w, http.StatusBadGateway, map[string]string{"error": snapshotErr.Error()})
 			return
 		}
-		if contentType == "" {
-			contentType = "image/jpeg"
-		}
-		w.Header().Set("Content-Type", contentType)
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write(body)
-	})
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "snapshot unavailable"})
+		return
+	}
+	if snapshotErr != nil {
+		w.Header().Set("X-DahuaBridge-Snapshot-Fallback", "error")
+	} else {
+		w.Header().Set("X-DahuaBridge-Snapshot-Fallback", "empty")
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Content-Type", "image/png")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(body)
 }

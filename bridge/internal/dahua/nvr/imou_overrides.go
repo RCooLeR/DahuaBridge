@@ -23,8 +23,6 @@ var imouEnableTypeByFeature = map[string]string{
 	imouFeatureSiren:        "linkageSiren",
 }
 
-var imouAudioEnableTypes = []string{"audioEncodeControl", "aecv3"}
-
 func (d *Driver) imouOverride(channel int) (config.ChannelImouOverride, bool) {
 	if d.imou == nil || !d.imou.Enabled() {
 		return config.ChannelImouOverride{}, false
@@ -400,43 +398,4 @@ func containsString(values []string, target string) bool {
 		}
 	}
 	return false
-}
-
-func (d *Driver) imouAudioMuted(ctx context.Context, override config.ChannelImouOverride) (bool, bool, error) {
-	if d.imou == nil || !d.imou.Enabled() {
-		return false, false, nil
-	}
-	var lastErr error
-	for _, enableType := range imouAudioEnableTypes {
-		status, err := d.imou.GetCameraStatus(ctx, imou.CameraStatusRequest{
-			DeviceID:   override.DeviceID,
-			ChannelID:  override.ChannelID,
-			EnableType: enableType,
-		})
-		if err == nil {
-			return !status.Enabled, true, nil
-		}
-		lastErr = err
-	}
-	return false, false, lastErr
-}
-
-func (d *Driver) setImouAudioMuted(ctx context.Context, override config.ChannelImouOverride, muted bool) error {
-	if d.imou == nil || !d.imou.Enabled() {
-		return fmt.Errorf("%w: imou audio control is unavailable", dahua.ErrUnsupportedOperation)
-	}
-	var lastErr error
-	for _, enableType := range imouAudioEnableTypes {
-		err := d.imou.SetCameraStatus(ctx, imou.CameraStatusChange{
-			DeviceID:   override.DeviceID,
-			ChannelID:  override.ChannelID,
-			EnableType: enableType,
-			Enable:     !muted,
-		})
-		if err == nil {
-			return nil
-		}
-		lastErr = err
-	}
-	return lastErr
 }

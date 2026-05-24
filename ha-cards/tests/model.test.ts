@@ -1313,7 +1313,7 @@ describe("buildPanelModel", () => {
     });
   });
 
-  it("keeps camera stream audio browser-local even when legacy mute actions are advertised", () => {
+  it("keeps camera stream audio browser-local when the stream has an audio codec", () => {
     const now = new Date().toISOString();
     const hass: HomeAssistant = {
       states: {
@@ -1326,15 +1326,6 @@ describe("buildPanelModel", () => {
             bridge_root_device_id: "west20_nvr",
             bridge_device_kind: "nvr_channel",
             stream_source: "http://bridge.local:9205/api/v1/media/hls/west20_nvr_channel_01/quality",
-            bridge_features: [
-              {
-                key: "mute",
-                label: "Mute",
-                kind: "action",
-                url: "http://bridge.local:9205/api/v1/nvr/west20_nvr/channels/1/audio/mute",
-                supported: true,
-              },
-            ],
           },
           last_changed: now,
           last_updated: now,

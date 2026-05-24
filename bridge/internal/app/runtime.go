@@ -149,6 +149,15 @@ func (r *runtimeServices) RegisterIPC(deviceID string, provider dahua.SnapshotPr
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.ipcSnapshots[deviceID] = provider
+	if downloader, ok := provider.(dahua.NVRRecordingDownloader); ok && downloader != nil {
+		r.nvrDownloads[deviceID] = downloader
+	}
+	if downloader, ok := provider.(dahua.NVRRecordingClipDownloader); ok && downloader != nil {
+		r.nvrClipDownloads[deviceID] = downloader
+	}
+	if recordings, ok := provider.(dahua.NVRRecordingSearcher); ok && recordings != nil {
+		r.nvrRecordings[deviceID] = recordings
+	}
 	r.ipcConfigs[deviceID] = cfg
 }
 
@@ -379,7 +388,7 @@ func (r *runtimeServices) NVRArchiveCoverage(
 }
 
 func (r *runtimeServices) VTOSnapshot(ctx context.Context, deviceID string) ([]byte, string, error) {
-	cacheKey := snapshotCacheKey("vto", deviceID, 0)
+	cacheKey := snapshotCacheKey("vto", deviceID, 1)
 	if body, contentType, ok := r.cachedSnapshot(cacheKey); ok {
 		return body, contentType, nil
 	}
@@ -410,7 +419,7 @@ func (r *runtimeServices) VTOSnapshot(ctx context.Context, deviceID string) ([]b
 		return nil, "", err
 	}
 
-	body, contentType, err = provider.Snapshot(ctx, 0)
+	body, contentType, err = provider.Snapshot(ctx, 1)
 	if err != nil {
 		r.finishSnapshotFlight(cacheKey, flight, nil, "", err)
 		return nil, "", err

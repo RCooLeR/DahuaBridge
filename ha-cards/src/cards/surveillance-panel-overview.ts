@@ -414,7 +414,10 @@ function renderVtoTile({
           : html`
               <img
                 class="tile-image"
-                src=${cameraImageSrc(vto.cameraEntity, vto.snapshotUrl)}
+                src=${cameraImageSrc(
+                  vto.cameraEntity,
+                  vto.captureSnapshotUrl?.trim() || vto.snapshotUrl,
+                )}
                 alt=${vto.label}
                 loading="lazy"
               />

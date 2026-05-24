@@ -72,14 +72,10 @@ type ActionReader interface {
 	AnswerVTOCall(context.Context, string) error
 	HangupVTOCall(context.Context, string) error
 	VTOControlCapabilities(context.Context, string) (dahua.VTOControlCapabilities, error)
-	SetVTOAudioOutputVolume(context.Context, string, int, int) error
-	SetVTOAudioInputVolume(context.Context, string, int, int) error
-	SetVTOMute(context.Context, string, bool) error
 	SetVTORecordingEnabled(context.Context, string, bool) error
 	NVRChannelControlCapabilities(context.Context, string, int) (dahua.NVRChannelControlCapabilities, error)
 	ControlNVRPTZ(context.Context, string, dahua.NVRPTZRequest) error
 	ControlNVRAux(context.Context, string, dahua.NVRAuxRequest) error
-	ControlNVRAudio(context.Context, string, dahua.NVRAudioRequest) error
 	ControlNVRRecording(context.Context, string, dahua.NVRRecordingRequest) error
 	NVRDiagnosticAction(context.Context, string, dahua.NVRDiagnosticActionRequest) (dahua.NVRDiagnosticActionResult, error)
 	ProbeDevice(context.Context, string) (*dahua.ProbeResult, error)
@@ -960,50 +956,6 @@ func parseNVRDiagnosticActionRequest(r *http.Request) (dahua.NVRDiagnosticAction
 		Action:   action,
 		Duration: time.Duration(request.DurationMS) * time.Millisecond,
 	}, nil
-}
-
-func parseVTOVolumeRequest(r *http.Request) (int, int, error) {
-	if r.Body == nil {
-		return 0, 0, fmt.Errorf("json body is required")
-	}
-
-	var request struct {
-		Level int `json:"level"`
-		Slot  int `json:"slot"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
-		if errors.Is(err, io.EOF) {
-			return 0, 0, fmt.Errorf("json body is required")
-		}
-		return 0, 0, fmt.Errorf("invalid json body")
-	}
-	if request.Level < 0 || request.Level > 100 {
-		return 0, 0, fmt.Errorf("invalid level")
-	}
-	if request.Slot < 0 {
-		return 0, 0, fmt.Errorf("invalid slot")
-	}
-	return request.Level, request.Slot, nil
-}
-
-func parseVTOMuteRequest(r *http.Request) (bool, error) {
-	if r.Body == nil {
-		return false, fmt.Errorf("json body is required")
-	}
-
-	var request struct {
-		Muted *bool `json:"muted"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
-		if errors.Is(err, io.EOF) {
-			return false, fmt.Errorf("json body is required")
-		}
-		return false, fmt.Errorf("invalid json body")
-	}
-	if request.Muted == nil {
-		return false, fmt.Errorf("muted is required")
-	}
-	return *request.Muted, nil
 }
 
 func parseVTORecordingRequest(r *http.Request) (bool, error) {
@@ -2126,8 +2078,6 @@ func renderAdminTestBridgePage(streamEntries []streams.Entry, actionsAvailable b
           <button type="button" data-call="aux" data-output="wiper" data-action="stop">Wiper Stop</button>
         </div>
         <div class="button-row">
-          <button type="button" data-call="audio" data-muted="true">Mute Stream Audio</button>
-          <button type="button" data-call="audio" data-muted="false">Unmute Stream Audio</button>
           <button type="button" data-call="recording" data-action="start">Recording Start</button>
           <button type="button" data-call="recording" data-action="stop">Recording Stop</button>
           <button type="button" data-call="recording" data-action="auto">Recording Auto</button>
@@ -2190,15 +2140,7 @@ func renderAdminTestBridgePage(streamEntries []streams.Entry, actionsAvailable b
       </section>
 
       <section class="panel">
-        <h2>Audio And Recording APIs</h2>
-        <div class="button-row">
-          <button type="button" data-call="diagnostic" data-method="bridge_audio" data-action="mute">Bridge Audio Mute</button>
-          <button type="button" data-call="diagnostic" data-method="bridge_audio" data-action="unmute">Bridge Audio Unmute</button>
-          <button type="button" data-call="diagnostic" data-method="nvr_audio_config" data-action="off">NVR Audio Off</button>
-          <button type="button" data-call="diagnostic" data-method="nvr_audio_config" data-action="on">NVR Audio On</button>
-          <button type="button" data-call="diagnostic" data-method="direct_ipc_audio" data-action="off">Direct IPC Audio Off</button>
-          <button type="button" data-call="diagnostic" data-method="direct_ipc_audio" data-action="on">Direct IPC Audio On</button>
-        </div>
+        <h2>Recording APIs</h2>
         <div class="button-row">
           <button type="button" data-call="diagnostic" data-method="record_mode" data-action="start">RecordMode Manual</button>
           <button type="button" data-call="diagnostic" data-method="record_mode" data-action="stop">RecordMode Stop</button>
@@ -2436,9 +2378,6 @@ func renderAdminTestBridgePage(streamEntries []streams.Entry, actionsAvailable b
             output: button.dataset.output,
             duration_ms: Number(button.dataset.duration || 300),
           };
-        } else if (call === 'audio') {
-          path = channelURL(channel, '/audio/mute');
-          payload = { muted: button.dataset.muted === 'true' };
         } else if (call === 'recording') {
           path = channelURL(channel, '/recording');
           payload = { action: button.dataset.action };
@@ -2667,13 +2606,10 @@ func buildAdminEndpointSections(healthPath string, metricsPath string) string {
 				{Method: "POST", Path: "/api/v1/nvr/{deviceID}/playback/sessions", Description: "Create an NVR archive playback session backed by bridge media endpoints", Linkable: false},
 				{Method: "GET", Path: "/api/v1/nvr/playback/sessions/{sessionID}", Description: "Inspect an active NVR archive playback session", Linkable: false},
 				{Method: "POST", Path: "/api/v1/nvr/playback/sessions/{sessionID}/seek", Description: "Create a new playback session starting from a different archive timestamp", Linkable: false},
-				{Method: "GET", Path: "/api/v1/vto/{deviceID}/controls", Description: "Inspect detected VTO call, lock, audio, recording, and talkback capabilities", Linkable: false},
+				{Method: "GET", Path: "/api/v1/vto/{deviceID}/controls", Description: "Inspect detected VTO call, lock, recording, and talkback capabilities", Linkable: false},
 				{Method: "POST", Path: "/api/v1/vto/{deviceID}/call/answer", Description: "Request VTO call answer", Linkable: false},
 				{Method: "POST", Path: "/api/v1/vto/{deviceID}/call/hangup", Description: "Request VTO hangup", Linkable: false},
 				{Method: "POST", Path: "/api/v1/vto/{deviceID}/locks/{lockIndex}/unlock", Description: "Trigger VTO door unlock for one configured lock", Linkable: false},
-				{Method: "POST", Path: "/api/v1/vto/{deviceID}/audio/output-volume", Description: "Set VTO output volume for a specific slot", Linkable: false},
-				{Method: "POST", Path: "/api/v1/vto/{deviceID}/audio/input-volume", Description: "Set VTO input volume for a specific slot", Linkable: false},
-				{Method: "POST", Path: "/api/v1/vto/{deviceID}/audio/mute", Description: "Set VTO silent mode", Linkable: false},
 				{Method: "POST", Path: "/api/v1/vto/{deviceID}/recording", Description: "Set VTO automatic call recording", Linkable: false},
 				{Method: "POST", Path: "/api/v1/vto/{deviceID}/intercom/reset", Description: "Reset active bridge WebRTC intercom session", Linkable: false},
 				{Method: "POST", Path: "/api/v1/vto/{deviceID}/intercom/uplink/enable", Description: "Enable external RTP uplink forwarding for the VTO intercom session", Linkable: false},
@@ -2707,19 +2643,15 @@ type adminControlStats struct {
 	NVRPTZEntries       int
 	NVRAuxEntries       int
 	NVRRecordingEntries int
-	VTOVolumeEntries    int
-	VTOMuteEntries      int
 	VTORecordingEntries int
 }
 
 func (s adminControlStats) Summary() string {
 	return fmt.Sprintf(
-		"%d PTZ | %d aux | %d NVR rec | %d VTO vol | %d VTO mute | %d VTO rec",
+		"%d PTZ | %d aux | %d NVR rec | %d VTO rec",
 		s.NVRPTZEntries,
 		s.NVRAuxEntries,
 		s.NVRRecordingEntries,
-		s.VTOVolumeEntries,
-		s.VTOMuteEntries,
 		s.VTORecordingEntries,
 	)
 }
@@ -2743,14 +2675,6 @@ func summarizeAdminControlStats(streamEntries []streams.Entry) adminControlStats
 			}
 		}
 		if entry.Intercom != nil {
-			if entry.Intercom.SupportsVTOOutputVolumeControl || entry.Intercom.SupportsVTOInputVolumeControl {
-				stats.VTOVolumeEntries++
-				actionable = true
-			}
-			if entry.Intercom.SupportsVTOMuteControl {
-				stats.VTOMuteEntries++
-				actionable = true
-			}
 			if entry.Intercom.SupportsVTORecordingControl {
 				stats.VTORecordingEntries++
 				actionable = true
@@ -2909,9 +2833,6 @@ func buildAdminRootControlSummary(entries []streams.Entry) string {
 		if len(entry.Intercom.LockURLs) > 0 {
 			parts = append(parts, fmt.Sprintf("locks=%d", len(entry.Intercom.LockURLs)))
 		}
-		if entry.Intercom.SupportsVTOOutputVolumeControl || entry.Intercom.SupportsVTOInputVolumeControl || entry.Intercom.SupportsVTOMuteControl {
-			parts = append(parts, "audio control")
-		}
 		if entry.Intercom.SupportsVTORecordingControl {
 			parts = append(parts, "auto record")
 		}
@@ -2935,15 +2856,6 @@ func buildAdminRootControlChips(rootID string, entries []streams.Entry) []string
 		}
 		for index, lockURL := range entry.Intercom.LockURLs {
 			chips = append(chips, adminLinkChip(fmt.Sprintf("unlock %d", index+1), lockURL, false))
-		}
-		if entry.Intercom.OutputVolumeURL != "" {
-			chips = append(chips, adminLinkChip("output volume", entry.Intercom.OutputVolumeURL, true))
-		}
-		if entry.Intercom.InputVolumeURL != "" {
-			chips = append(chips, adminLinkChip("input volume", entry.Intercom.InputVolumeURL, true))
-		}
-		if entry.Intercom.MuteURL != "" {
-			chips = append(chips, adminLinkChip("mute", entry.Intercom.MuteURL, true))
 		}
 		if entry.Intercom.RecordingURL != "" {
 			chips = append(chips, adminLinkChip("auto record", entry.Intercom.RecordingURL, true))
@@ -2973,12 +2885,6 @@ func buildAdminStreamControlSummary(entry streams.Entry) string {
 		}
 		if entry.Controls.Audio != nil {
 			audioParts := make([]string, 0, 3)
-			if entry.Controls.Audio.Mute {
-				audioParts = append(audioParts, "mute")
-			}
-			if entry.Controls.Audio.Volume {
-				audioParts = append(audioParts, "volume")
-			}
 			if entry.Controls.Audio.PlaybackSupported {
 				audioParts = append(audioParts, "playback")
 			}
@@ -2995,9 +2901,6 @@ func buildAdminStreamControlSummary(entry streams.Entry) string {
 		}
 	}
 	if entry.Intercom != nil {
-		if entry.Intercom.SupportsVTOOutputVolumeControl || entry.Intercom.SupportsVTOInputVolumeControl || entry.Intercom.SupportsVTOMuteControl {
-			parts = append(parts, "vto audio")
-		}
 		if entry.Intercom.SupportsVTORecordingControl {
 			parts = append(parts, "vto recording")
 		}
@@ -3031,15 +2934,6 @@ func buildAdminStreamControlChips(entry streams.Entry) []string {
 		}
 		if entry.Intercom.HangupURL != "" {
 			chips = append(chips, adminLinkChip("hangup", entry.Intercom.HangupURL, true))
-		}
-		if entry.Intercom.OutputVolumeURL != "" {
-			chips = append(chips, adminLinkChip("output volume", entry.Intercom.OutputVolumeURL, true))
-		}
-		if entry.Intercom.InputVolumeURL != "" {
-			chips = append(chips, adminLinkChip("input volume", entry.Intercom.InputVolumeURL, true))
-		}
-		if entry.Intercom.MuteURL != "" {
-			chips = append(chips, adminLinkChip("mute", entry.Intercom.MuteURL, true))
 		}
 		if entry.Intercom.RecordingURL != "" {
 			chips = append(chips, adminLinkChip("auto record", entry.Intercom.RecordingURL, true))

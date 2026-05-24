@@ -141,7 +141,6 @@ export class DahuaBridgeSurveillanceTileCard
         position: absolute;
         top: 10px;
         left: 10px;
-        right: 10px;
         z-index: 2;
         display: flex;
         align-items: flex-start;
@@ -858,11 +857,11 @@ export class DahuaBridgeSurveillanceTileCard
   }
 
   private resolveVtoSnapshotUrl(vto: VtoViewModel): string {
-    if (typeof vto.captureSnapshotUrl === "string" && vto.captureSnapshotUrl.trim()) {
-      return vto.captureSnapshotUrl;
-    }
     if (typeof vto.snapshotUrl === "string" && vto.snapshotUrl.trim()) {
       return vto.snapshotUrl;
+    }
+    if (typeof vto.captureSnapshotUrl === "string" && vto.captureSnapshotUrl.trim()) {
+      return vto.captureSnapshotUrl;
     }
     return cameraImageSrc(vto.cameraEntity, vto.snapshotUrl);
   }

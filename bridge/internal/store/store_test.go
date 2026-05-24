@@ -1,10 +1,13 @@
 package store
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"RCooLeR/DahuaBridge/internal/dahua"
+	"RCooLeR/DahuaBridge/internal/imou"
 )
 
 func TestProbeStoreReturnsClones(t *testing.T) {
@@ -70,5 +73,54 @@ func TestProbeStoreSaveAndLoadFile(t *testing.T) {
 	}
 	if result.Root.ID != "ipc_30" {
 		t.Fatalf("unexpected root id %q", result.Root.ID)
+	}
+}
+
+func TestProbeStoreSaveFileWithMetadataSkipsUnchangedState(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "state.json")
+	auth := &imou.AuthState{
+		AccessToken: "token-1",
+		ExpiresAt:   time.Date(2026, 5, 16, 12, 0, 0, 0, time.UTC),
+	}
+
+	s := NewProbeStore()
+	s.Set("ipc_30", &dahua.ProbeResult{
+		Root: dahua.Device{ID: "ipc_30", Kind: dahua.DeviceKindIPC},
+	})
+	if err := s.SaveFileWithMetadata(path, auth); err != nil {
+		t.Fatalf("SaveFileWithMetadata returned error: %v", err)
+	}
+	firstInfo, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat state file: %v", err)
+	}
+
+	time.Sleep(20 * time.Millisecond)
+	if err := s.SaveFileWithMetadata(path, auth); err != nil {
+		t.Fatalf("second SaveFileWithMetadata returned error: %v", err)
+	}
+	secondInfo, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat state file after unchanged save: %v", err)
+	}
+	if !secondInfo.ModTime().Equal(firstInfo.ModTime()) {
+		t.Fatalf("expected unchanged metadata save to skip write: before=%s after=%s", firstInfo.ModTime(), secondInfo.ModTime())
+	}
+
+	changedAuth := &imou.AuthState{
+		AccessToken: "token-2",
+		ExpiresAt:   auth.ExpiresAt,
+	}
+	time.Sleep(20 * time.Millisecond)
+	if err := s.SaveFileWithMetadata(path, changedAuth); err != nil {
+		t.Fatalf("changed SaveFileWithMetadata returned error: %v", err)
+	}
+	thirdInfo, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat state file after changed save: %v", err)
+	}
+	if !thirdInfo.ModTime().After(secondInfo.ModTime()) {
+		t.Fatalf("expected changed metadata save to write: before=%s after=%s", secondInfo.ModTime(), thirdInfo.ModTime())
 	}
 }

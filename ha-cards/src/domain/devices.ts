@@ -107,9 +107,6 @@ export interface BridgeAuxControlSummary {
 
 export interface BridgeAudioControlSummary {
   supported: boolean;
-  mute: boolean;
-  volume: boolean;
-  volumePermissionDenied: boolean;
   playbackSupported: boolean;
   playbackSiren: boolean;
   playbackQuickReply: boolean;
@@ -168,7 +165,6 @@ export interface BridgeIntercomSummary {
   supportsFullCallAcceptance: boolean;
   autoRecordEnabled: boolean;
   autoRecordTimeSeconds: number | null;
-  streamAudioEnabled: boolean;
   validationNotes: string[];
 }
 
@@ -272,9 +268,6 @@ export interface CameraAudioPlaybackCapabilities {
 
 export interface CameraAudioCapabilities {
   supported: boolean;
-  mute: boolean;
-  volume: boolean;
-  volumePermissionDenied: boolean;
   playback: CameraAudioPlaybackCapabilities;
 }
 
@@ -496,9 +489,6 @@ interface BridgeControlsShape {
   };
   audio?: {
     supported?: unknown;
-    mute?: unknown;
-    volume?: unknown;
-    volume_permission_denied?: unknown;
     playback_supported?: unknown;
     playback_siren?: unknown;
     playback_quick_reply?: unknown;
@@ -1437,9 +1427,6 @@ function buildCameraCapabilities(
     recording: controls?.recording ?? null,
     audio: {
       supported: controls?.audio?.supported === true,
-      mute: controls?.audio?.mute === true,
-      volume: controls?.audio?.volume === true,
-      volumePermissionDenied: controls?.audio?.volumePermissionDenied === true,
       playback: {
         supported: controls?.audio?.playbackSupported === true,
         siren: controls?.audio?.playbackSiren === true,
@@ -1840,9 +1827,6 @@ function bridgeControlsForEntity(
     audio: isObject(typed.audio)
       ? {
           supported: booleanValue(typed.audio.supported),
-          mute: booleanValue(typed.audio.mute),
-          volume: booleanValue(typed.audio.volume),
-          volumePermissionDenied: booleanValue(typed.audio.volume_permission_denied),
           playbackSupported: booleanValue(typed.audio.playback_supported),
           playbackSiren: booleanValue(typed.audio.playback_siren),
           playbackQuickReply: booleanValue(typed.audio.playback_quick_reply),
@@ -1909,7 +1893,6 @@ function bridgeIntercomForEntity(
     supportsFullCallAcceptance: booleanValue(typed.supports_full_call_acceptance),
     autoRecordEnabled: booleanValue(typed.auto_record_enabled),
     autoRecordTimeSeconds: numberValue(typed.auto_record_time_seconds),
-    streamAudioEnabled: booleanValue(typed.stream_audio_enabled),
     validationNotes: stringArray(typed.validation_notes),
   };
 }

@@ -10,7 +10,6 @@ The integration registers:
 - `binary_sensor`
 - `sensor`
 - `button`
-- `number`
 - `switch`
 
 Each platform receives the same catalog and creates only the entities it can back with current catalog data.
@@ -25,7 +24,7 @@ The bridge normalizes Dahua devices into records. The integration follows those 
 | `nvr_channel` | Camera-like child device, camera entity, state sensors, archive attributes. |
 | `nvr_disk` | Disk child device, online/state entities only. |
 | `ipc` | Camera device, camera entity, state sensors, `Probe Now`. |
-| `vto` | Door station, camera entity, call/intercom state, intercom buttons, volume numbers, switches. |
+| `vto` | Door station, camera entity, call/intercom state, intercom buttons, and switches. |
 | `vto_lock` | Lock child record, online/state entities only; unlock buttons live on the VTO root. |
 | `vto_alarm` | Alarm child record, online/state entities when advertised. |
 
@@ -140,22 +139,11 @@ Current buttons:
 
 Button presses call the bridge and then request a catalog refresh.
 
-## Numbers
-
-Numbers are created only when the catalog advertises a backing URL and capability flag.
-
-Current numbers:
-
-- VTO output volume
-- VTO input volume
-
-The value range is `0` to `100`. Writes send a JSON body with `slot` and `level`.
-
 ## Switches
 
 Switches are created from two sources:
 
-- VTO intercom controls such as mute and auto record
+- VTO intercom controls such as auto record
 - supported output features such as light, warning light, and siren
 
 Feature switches send bridge payloads such as:
@@ -170,7 +158,7 @@ and:
 {"output": "light", "action": "stop"}
 ```
 
-NVR channel audio mute is not exposed as a Home Assistant switch. Bridge output audio is decided during capture/transcode.
+Device-side audio mute and volume controls are not exposed as Home Assistant entities. Browser playback audio stays in the player, and bridge MP4/export audio is decided during capture/transcode.
 
 ## Entity Availability
 

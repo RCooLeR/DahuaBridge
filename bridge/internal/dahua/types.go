@@ -269,13 +269,8 @@ type NVRChannelControlCapabilities struct {
 }
 
 type NVRChannelAudioCapabilities struct {
-	Supported              bool                                `json:"supported"`
-	Mute                   bool                                `json:"mute"`
-	Volume                 bool                                `json:"volume"`
-	VolumePermissionDenied bool                                `json:"volume_permission_denied,omitempty"`
-	Muted                  bool                                `json:"muted,omitempty"`
-	StreamEnabled          bool                                `json:"stream_enabled,omitempty"`
-	Playback               NVRChannelAudioPlaybackCapabilities `json:"playback"`
+	Supported bool                                `json:"supported"`
+	Playback  NVRChannelAudioPlaybackCapabilities `json:"playback"`
 }
 
 type NVRChannelAudioPlaybackCapabilities struct {
@@ -379,11 +374,6 @@ type NVRAuxRequest struct {
 	Duration time.Duration
 }
 
-type NVRAudioRequest struct {
-	Channel int
-	Muted   bool
-}
-
 type NVRRecordingAction string
 
 const (
@@ -428,10 +418,6 @@ type NVRAuxController interface {
 	Aux(context.Context, NVRAuxRequest) error
 }
 
-type NVRAudioController interface {
-	SetAudioMute(context.Context, NVRAudioRequest) error
-}
-
 type NVRRecordingController interface {
 	Recording(context.Context, NVRRecordingRequest) error
 }
@@ -457,7 +443,6 @@ type VTOControlCapabilities struct {
 	DeviceID                    string                   `json:"device_id"`
 	Call                        VTOCallCapabilities      `json:"call"`
 	Locks                       VTOLockCapabilities      `json:"locks"`
-	Audio                       VTOAudioCapabilities     `json:"audio"`
 	Recording                   VTORecordingCapabilities `json:"recording"`
 	DirectTalkbackSupported     bool                     `json:"direct_talkback_supported"`
 	FullCallAcceptanceSupported bool                     `json:"full_call_acceptance_supported"`
@@ -476,19 +461,6 @@ type VTOLockCapabilities struct {
 	Indexes   []int `json:"indexes,omitempty"`
 }
 
-type VTOAudioCapabilities struct {
-	OutputVolume       bool   `json:"output_volume"`
-	InputVolume        bool   `json:"input_volume"`
-	Mute               bool   `json:"mute"`
-	Codec              string `json:"codec,omitempty"`
-	OutputVolumeLevel  int    `json:"output_volume_level,omitempty"`
-	OutputVolumeLevels []int  `json:"output_volume_levels,omitempty"`
-	InputVolumeLevel   int    `json:"input_volume_level,omitempty"`
-	InputVolumeLevels  []int  `json:"input_volume_levels,omitempty"`
-	Muted              bool   `json:"muted,omitempty"`
-	StreamAudioEnabled bool   `json:"stream_audio_enabled,omitempty"`
-}
-
 type VTORecordingCapabilities struct {
 	Supported             bool `json:"supported"`
 	EventSnapshotLocal    bool `json:"event_snapshot_local"`
@@ -498,12 +470,6 @@ type VTORecordingCapabilities struct {
 
 type VTOControlReader interface {
 	ControlCapabilities(context.Context) (VTOControlCapabilities, error)
-}
-
-type VTOAudioController interface {
-	SetAudioOutputVolume(context.Context, int, int) error
-	SetAudioInputVolume(context.Context, int, int) error
-	SetAudioMute(context.Context, bool) error
 }
 
 type VTORecordingController interface {

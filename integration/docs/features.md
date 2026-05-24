@@ -17,7 +17,6 @@
 - `binary_sensor`
 - `sensor`
 - `button`
-- `number`
 - `switch`
 
 ## Cameras
@@ -46,8 +45,7 @@ Controls appear only when the catalog advertises a backing URL.
 - Refresh NVR inventory.
 - VTO answer/hangup/reset/RTP export actions.
 - VTO unlock actions.
-- VTO input/output volume.
-- VTO mute and auto record.
+- VTO auto record.
 - Camera output feature toggles for light, warning light, and siren.
 
 ## Boundaries
