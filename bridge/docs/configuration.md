@@ -69,6 +69,11 @@ Legacy note: `hls_temp_path` is still accepted as an alias for `hls_tmp_dir`, bu
 - `max_parallel_jobs`: archive MP4 asset prefetch concurrency cap.
 - `prefetch_smd`: index SMD events.
 - `prefetch_ivs`: index IVS events.
+- `export_delay`: delay after an SMD/IVS event ends before automatic MP4 export starts. Defaults to `1h`.
+- `export_ivs`: IVS event channels allowed for automatic MP4 export. Empty means all channels.
+- `export_smd_person`: SMD person/human event channels allowed for automatic MP4 export. Empty means all channels.
+- `export_smd_transport`: SMD transport/vehicle event channels allowed for automatic MP4 export. Empty means all channels.
+- `export_smd_animal`: SMD animal event channels allowed for automatic MP4 export. Empty means all channels.
 - `cron`: 5-field cron schedule for chunk sync.
 
 SMD/IVS list APIs read from SQLite first. Event filters match normalized event codes and Dahua event-type strings stored in the database, including values such as `Event.smdTypeHuman`.

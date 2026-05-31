@@ -120,6 +120,14 @@ archive:
   prefetch_smd: true
   # Enable IVS event indexing.
   prefetch_ivs: true
+  # Wait this long after an event ends before automatic MP4 export starts.
+  export_delay: 1h
+  # Optional automatic event-video export channel lists. Empty means all channels.
+  # Events are still indexed outside these channels; only background MP4 creation is skipped.
+  export_ivs: []
+  export_smd_person: []
+  export_smd_transport: []
+  export_smd_animal: []
   # Cron-like schedule for archive sync runs. Example: "5,35 * * * *"
   cron: "5,35 * * * *"
 

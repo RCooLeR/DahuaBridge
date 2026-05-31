@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"path/filepath"
+	"reflect"
 	"sync"
 	"testing"
 	"time"
@@ -369,6 +370,162 @@ func TestServicePrefetchPendingEventAssetsUsesDBRows(t *testing.T) {
 	}
 	if clipID != "clip_db_pending" || status != string(mediaapi.ClipStatusRecording) {
 		t.Fatalf("unexpected mp4 asset state clip=%q status=%q", clipID, status)
+	}
+}
+
+func TestServicePrefetchPendingEventAssetsHonorsEventExportChannels(t *testing.T) {
+	tempDir := t.TempDir()
+	service, err := New(config.ArchiveConfig{
+		Enabled:            true,
+		DBPath:             filepath.Join(tempDir, "archive.db"),
+		TempDir:            filepath.Join(tempDir, "tmp"),
+		PrefetchDays:       7,
+		RetainDays:         7,
+		MaxParallelJobs:    1,
+		PrefetchSMD:        true,
+		PrefetchIVS:        true,
+		ExportSMDTransport: []int{1, 3, 7},
+		Cron:               "5 * * * *",
+	}, nil, stubSearcher{
+		find: func(context.Context, string, dahua.NVRRecordingQuery) (dahua.NVRRecordingSearchResult, error) {
+			return dahua.NVRRecordingSearchResult{}, nil
+		},
+	}, store.NewProbeStore(), zerolog.Nop())
+	if err != nil {
+		t.Fatalf("new service: %v", err)
+	}
+	defer service.Close()
+
+	startTime := time.Now().In(time.Local).Add(-time.Hour)
+	disallowedVehicle := dahua.NVRRecording{
+		Source:    "nvr_event",
+		Channel:   2,
+		StartTime: startTime.Add(2 * time.Minute).Format(archiveTimeLayout),
+		EndTime:   startTime.Add(2*time.Minute + 20*time.Second).Format(archiveTimeLayout),
+		FilePath:  "/mnt/dvr/disallowed-vehicle.dav",
+		Type:      "Event.smdTypeVehicle",
+		Flags:     []string{"Event", "smdTypeVehicle"},
+	}
+	allowedVehicle := dahua.NVRRecording{
+		Source:    "nvr_event",
+		Channel:   3,
+		StartTime: startTime.Format(archiveTimeLayout),
+		EndTime:   startTime.Add(20 * time.Second).Format(archiveTimeLayout),
+		FilePath:  "/mnt/dvr/allowed-vehicle.dav",
+		Type:      "Event.smdTypeVehicle",
+		Flags:     []string{"Event", "smdTypeVehicle"},
+	}
+	if err := service.store.UpsertArchiveEvents(context.Background(), "west20_nvr", []dahua.NVRRecording{disallowedVehicle, allowedVehicle}, time.Now().UTC()); err != nil {
+		t.Fatalf("upsert events: %v", err)
+	}
+
+	exportedChannels := make([]int, 0)
+	service.clips = stubClipPrefetcher{
+		ensure: func(_ context.Context, _ string, item dahua.NVRRecording) (mediaapi.ClipInfo, error) {
+			exportedChannels = append(exportedChannels, item.Channel)
+			return mediaapi.ClipInfo{
+				ID:            "clip_allowed",
+				Channel:       item.Channel,
+				Status:        mediaapi.ClipStatusRecording,
+				SourceStartAt: startTime.UTC(),
+				SourceEndAt:   startTime.Add(20 * time.Second).UTC(),
+				FileName:      "clip_allowed.mp4",
+			}, nil
+		},
+	}
+
+	if err := service.prefetchPendingEventAssets(context.Background()); err != nil {
+		t.Fatalf("prefetch pending assets: %v", err)
+	}
+	if !reflect.DeepEqual(exportedChannels, []int{3}) {
+		t.Fatalf("exported channels = %+v, want [3]", exportedChannels)
+	}
+
+	disallowedID, _ := archiveRecordID("west20_nvr", disallowedVehicle)
+	var disallowedClipID string
+	if err := service.db.QueryRow(`SELECT mp4_clip_id FROM smd_ivs_events WHERE event_id = ?`, disallowedID).Scan(&disallowedClipID); err != nil {
+		t.Fatalf("query disallowed clip id: %v", err)
+	}
+	if disallowedClipID != "" {
+		t.Fatalf("disallowed vehicle event got clip id %q", disallowedClipID)
+	}
+}
+
+func TestServicePrefetchPendingEventAssetsHonorsExportDelay(t *testing.T) {
+	tempDir := t.TempDir()
+	service, err := New(config.ArchiveConfig{
+		Enabled:         true,
+		DBPath:          filepath.Join(tempDir, "archive.db"),
+		TempDir:         filepath.Join(tempDir, "tmp"),
+		PrefetchDays:    7,
+		RetainDays:      7,
+		MaxParallelJobs: 2,
+		PrefetchSMD:     true,
+		PrefetchIVS:     true,
+		ExportDelay:     time.Hour,
+		Cron:            "5 * * * *",
+	}, nil, stubSearcher{
+		find: func(context.Context, string, dahua.NVRRecordingQuery) (dahua.NVRRecordingSearchResult, error) {
+			return dahua.NVRRecordingSearchResult{}, nil
+		},
+	}, store.NewProbeStore(), zerolog.Nop())
+	if err != nil {
+		t.Fatalf("new service: %v", err)
+	}
+	defer service.Close()
+
+	now := time.Now().In(time.Local)
+	recentVehicle := dahua.NVRRecording{
+		Source:    "nvr_event",
+		Channel:   1,
+		StartTime: now.Add(-35 * time.Minute).Format(archiveTimeLayout),
+		EndTime:   now.Add(-30 * time.Minute).Format(archiveTimeLayout),
+		FilePath:  "/mnt/dvr/recent-vehicle.dav",
+		Type:      "Event.smdTypeVehicle",
+		Flags:     []string{"Event", "smdTypeVehicle"},
+	}
+	oldHuman := dahua.NVRRecording{
+		Source:    "nvr_event",
+		Channel:   1,
+		StartTime: now.Add(-95 * time.Minute).Format(archiveTimeLayout),
+		EndTime:   now.Add(-90 * time.Minute).Format(archiveTimeLayout),
+		FilePath:  "/mnt/dvr/old-human.dav",
+		Type:      "Event.smdTypeHuman",
+		Flags:     []string{"Event", "smdTypeHuman"},
+	}
+	if err := service.store.UpsertArchiveEvents(context.Background(), "west20_nvr", []dahua.NVRRecording{recentVehicle, oldHuman}, time.Now().UTC()); err != nil {
+		t.Fatalf("upsert events: %v", err)
+	}
+
+	exportedPaths := make([]string, 0)
+	service.clips = stubClipPrefetcher{
+		ensure: func(_ context.Context, _ string, item dahua.NVRRecording) (mediaapi.ClipInfo, error) {
+			exportedPaths = append(exportedPaths, item.FilePath)
+			return mediaapi.ClipInfo{
+				ID:            "clip_old",
+				Channel:       item.Channel,
+				Status:        mediaapi.ClipStatusRecording,
+				SourceStartAt: now.Add(-95 * time.Minute).UTC(),
+				SourceEndAt:   now.Add(-90 * time.Minute).UTC(),
+				FileName:      "clip_old.mp4",
+			}, nil
+		},
+	}
+
+	if err := service.prefetchPendingEventAssets(context.Background()); err != nil {
+		t.Fatalf("prefetch pending assets: %v", err)
+	}
+	if !reflect.DeepEqual(exportedPaths, []string{oldHuman.FilePath}) {
+		t.Fatalf("exported paths = %+v, want [%s]", exportedPaths, oldHuman.FilePath)
+	}
+
+	recentID, _ := archiveRecordID("west20_nvr", recentVehicle)
+	var recentClipID string
+	if err := service.db.QueryRow(`SELECT mp4_clip_id FROM smd_ivs_events WHERE event_id = ?`, recentID).Scan(&recentClipID); err != nil {
+		t.Fatalf("query recent clip id: %v", err)
+	}
+	if recentClipID != "" {
+		t.Fatalf("recent event got clip id %q before export delay elapsed", recentClipID)
 	}
 }
 

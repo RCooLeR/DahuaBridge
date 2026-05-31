@@ -83,6 +83,13 @@ There are two archive indexing flows:
 - recording chunk sync fills `nvr_recording_chunks`
 - SMD/IVS sync fills `smd_ivs_events` and queues MP4 backup export when enabled
 
+Automatic event MP4 export waits for `archive.export_delay` after the event ends
+before creating the clip. Use `archive.export_ivs`, `archive.export_smd_person`,
+`archive.export_smd_transport`, and `archive.export_smd_animal` to limit automatic
+MP4 creation for noisy event types while still keeping those events in the index.
+For example, `export_smd_transport: [1, 3, 7]` keeps Dahua transport/vehicle event
+videos only on channels 1, 3, and 7. Empty channel lists mean all channels.
+
 API reads use SQLite only. SMD/IVS list requests do not call the NVR, and recording chunk list requests do not call the NVR. Event filters are applied in SQLite before `LIMIT`, then checked again in Go against the normalized Dahua event names.
 
 ## Native Historical Playback

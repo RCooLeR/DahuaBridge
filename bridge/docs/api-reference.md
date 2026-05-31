@@ -71,7 +71,7 @@ Query fields:
 - `start` or `start_time`: required start time.
 - `end` or `end_time`: required end time.
 - `limit`: optional, default from the card/domain model.
-- `event`: optional event filter. Supported normalized values are `all`, `human`, `vehicle`, `animal`, `tripwire`, and `intrusion`. Dahua names such as `smdTypeHuman`, `smdTypeVehicle`, `CrossLineDetection`, and `CrossRegionDetection` are accepted. SQLite filtering also matches stored `event_type` values such as `Event.smdTypeHuman`.
+- `event`: optional event filter. Supported normalized values are `all`, `human`, `vehicle`, `animal`, `tripwire`, and `intrusion`. `transport` is accepted as an alias for Dahua vehicle SMD events. Dahua names such as `smdTypeHuman`, `smdTypeVehicle`, `CrossLineDetection`, and `CrossRegionDetection` are accepted. SQLite filtering also matches stored `event_type` values such as `Event.smdTypeHuman`.
 - `db_only`, `skip_assets`, or `skip_asset_enrichment`: compatibility flags that skip MP4 asset enrichment work for list responses.
 - `include_assets` or `with_assets`: enables asset enrichment for event list responses.
 - `include_credentials` or `with_credentials`: includes raw RTSP playback URLs. Leave this off for normal clients.

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -191,24 +192,33 @@ func (s *SQLiteStore) CountActiveClipJobs(ctx context.Context) (int, error) {
 	return count, nil
 }
 
-func (s *SQLiteStore) LoadPendingEventClipCandidates(ctx context.Context, cutoff time.Time, limit int) ([]eventClipCandidate, error) {
+func (s *SQLiteStore) LoadPendingEventClipCandidates(ctx context.Context, cutoff time.Time, readyBefore time.Time, limit int, allowlists map[string][]int) ([]eventClipCandidate, error) {
 	if limit <= 0 {
 		limit = archiveQueryLimit
 	}
+	where := `start_time >= ?
+			AND end_time <= ?
+			AND (
+				mp4_clip_id = ''
+				OR LOWER(COALESCE(mp4_status, '')) NOT IN ('completed', 'ready', 'recording', 'transcoding', 'queued', 'downloading')
+			)`
+	args := []any{
+		cutoff.In(time.Local).Format(archiveTimeLayout),
+		readyBefore.In(time.Local).Format(archiveTimeLayout),
+	}
+	if filterSQL, filterArgs := archiveEventVideoChannelSQLFilter(allowlists); filterSQL != "" {
+		where += ` AND (` + filterSQL + `)`
+		args = append(args, filterArgs...)
+	}
+	args = append(args, limit)
+
 	rows, err := s.db.QueryContext(ctx, `SELECT
 		device_id, event_id, channel, start_time, end_time, source_file_path, event_type, video_stream,
 		rtsp_main_url, rtsp_sub_url, flags_json
 		FROM smd_ivs_events
-		WHERE start_time >= ?
-			AND (
-				mp4_clip_id = ''
-				OR LOWER(COALESCE(mp4_status, '')) NOT IN ('completed', 'ready', 'recording', 'transcoding', 'queued', 'downloading')
-			)
+		WHERE `+where+`
 		ORDER BY start_time DESC
-		LIMIT ?`,
-		cutoff.In(time.Local).Format(archiveTimeLayout),
-		limit,
-	)
+		LIMIT ?`, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -242,6 +252,61 @@ func (s *SQLiteStore) LoadPendingEventClipCandidates(ctx context.Context, cutoff
 		})
 	}
 	return candidates, rows.Err()
+}
+
+func archiveEventVideoChannelSQLFilter(allowlists map[string][]int) (string, []any) {
+	if len(allowlists) == 0 {
+		return "", nil
+	}
+
+	codes := make([]string, 0, len(allowlists))
+	for code := range allowlists {
+		if code != "all" {
+			codes = append(codes, code)
+		}
+	}
+	slices.Sort(codes)
+
+	clauses := make([]string, 0, len(codes)+1)
+	args := make([]any, 0)
+	for _, code := range codes {
+		eventSQL, eventArgs := archiveEventSQLFilter(code)
+		if eventSQL == "" {
+			continue
+		}
+		channelSQL, channelArgs := archiveEventVideoChannelSQLList(allowlists[code])
+		clauses = append(clauses, "WHEN ("+eventSQL+") THEN "+channelSQL)
+		args = append(args, eventArgs...)
+		args = append(args, channelArgs...)
+	}
+
+	elseSQL := "1"
+	if channels, ok := allowlists["all"]; ok {
+		var channelArgs []any
+		elseSQL, channelArgs = archiveEventVideoChannelSQLList(channels)
+		args = append(args, channelArgs...)
+	}
+	if len(clauses) == 0 {
+		if elseSQL == "1" {
+			return "", nil
+		}
+		return elseSQL, args
+	}
+	return "CASE " + strings.Join(clauses, " ") + " ELSE " + elseSQL + " END", args
+}
+
+func archiveEventVideoChannelSQLList(channels []int) (string, []any) {
+	channels = normalizeArchiveEventVideoChannels(channels)
+	if len(channels) == 0 {
+		return "1", nil
+	}
+	placeholders := make([]string, 0, len(channels))
+	args := make([]any, 0, len(channels))
+	for _, channel := range channels {
+		placeholders = append(placeholders, "?")
+		args = append(args, channel)
+	}
+	return "channel IN (" + strings.Join(placeholders, ",") + ")", args
 }
 
 func (s *SQLiteStore) LoadActiveEventClipAssets(ctx context.Context, limit int) ([]activeEventClipAsset, error) {

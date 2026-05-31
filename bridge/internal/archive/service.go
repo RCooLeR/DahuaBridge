@@ -173,6 +173,7 @@ func (s *Service) Start(ctx context.Context) error {
 		Int("max_parallel_jobs", s.cfg.MaxParallelJobs).
 		Bool("prefetch_smd", s.cfg.PrefetchSMD).
 		Bool("prefetch_ivs", s.cfg.PrefetchIVS).
+		Dur("export_delay", s.cfg.ExportDelay).
 		Str("cron", s.cfg.Cron).
 		Msg("archive service configured")
 	s.cron.Start()
@@ -575,6 +576,7 @@ func (s *Service) SyncSMDIVSNow(ctx context.Context) error {
 		Int("max_parallel_jobs", s.cfg.MaxParallelJobs).
 		Bool("prefetch_smd", s.cfg.PrefetchSMD).
 		Bool("prefetch_ivs", s.cfg.PrefetchIVS).
+		Dur("export_delay", s.cfg.ExportDelay).
 		Str("db_path", s.cfg.DBPath).
 		Msg("archive smd_ivs sync started")
 
@@ -936,7 +938,7 @@ func (s *Service) prefetchEventAssets(ctx context.Context, deviceID string, item
 	pending := make([]dahua.NVRRecording, 0, len(items))
 	for _, item := range items {
 		ensureArchiveRecordIdentity(deviceID, &item)
-		if !shouldPrefetchArchiveEventClip(item) {
+		if !s.shouldPrefetchArchiveEventClip(item) {
 			continue
 		}
 		pending = append(pending, item)
@@ -1010,7 +1012,8 @@ func (s *Service) prefetchPendingEventAssets(ctx context.Context) error {
 		limit = maxActiveJobs - activeJobs
 	}
 	cutoff := time.Now().In(time.Local).AddDate(0, 0, -s.cfg.PrefetchDays)
-	candidates, err := s.store.LoadPendingEventClipCandidates(ctx, cutoff, limit)
+	readyBefore := time.Now().In(time.Local).Add(-s.cfg.ExportDelay)
+	candidates, err := s.store.LoadPendingEventClipCandidates(ctx, cutoff, readyBefore, limit, archiveEventVideoExportAllowlists(s.cfg))
 	if err != nil {
 		return err
 	}
@@ -1020,6 +1023,8 @@ func (s *Service) prefetchPendingEventAssets(ctx context.Context) error {
 		Int("candidate_limit", limit).
 		Int("candidate_count", len(candidates)).
 		Str("cutoff", cutoff.Format(archiveTimeLayout)).
+		Str("ready_before", readyBefore.Format(archiveTimeLayout)).
+		Dur("export_delay", s.cfg.ExportDelay).
 		Msg("archive smd_ivs pending mp4 candidates loaded")
 	if len(candidates) == 0 {
 		return nil
@@ -1109,6 +1114,98 @@ func shouldPrefetchArchiveEventClip(item dahua.NVRRecording) bool {
 	startTime, okStart := parseArchiveLocalTime(item.StartTime)
 	endTime, okEnd := parseArchiveLocalTime(item.EndTime)
 	return okStart && okEnd && endTime.After(startTime)
+}
+
+func (s *Service) shouldPrefetchArchiveEventClip(item dahua.NVRRecording) bool {
+	if !shouldPrefetchArchiveEventClip(item) {
+		return false
+	}
+	if !archiveEventVideoExportDelayElapsed(item, time.Now(), s.cfg.ExportDelay) {
+		return false
+	}
+	return archiveEventVideoChannelAllowed(archiveEventVideoExportAllowlists(s.cfg), item)
+}
+
+func archiveEventVideoChannelAllowed(allowlists map[string][]int, item dahua.NVRRecording) bool {
+	if len(allowlists) == 0 {
+		return true
+	}
+	code := archiveEventCodeForRecording(item)
+	if code != "" {
+		if channels, ok := allowlists[code]; ok {
+			return slices.Contains(channels, item.Channel)
+		}
+	}
+	if channels, ok := allowlists["all"]; ok {
+		return slices.Contains(channels, item.Channel)
+	}
+	return true
+}
+
+func archiveEventVideoExportAllowlists(cfg config.ArchiveConfig) map[string][]int {
+	allowlists := make(map[string][]int)
+	if len(cfg.ExportSMDPerson) > 0 {
+		allowlists["human"] = normalizeArchiveEventVideoChannels(cfg.ExportSMDPerson)
+	}
+	if len(cfg.ExportSMDTransport) > 0 {
+		allowlists["vehicle"] = normalizeArchiveEventVideoChannels(cfg.ExportSMDTransport)
+	}
+	if len(cfg.ExportSMDAnimal) > 0 {
+		allowlists["animal"] = normalizeArchiveEventVideoChannels(cfg.ExportSMDAnimal)
+	}
+	if len(cfg.ExportIVS) > 0 {
+		channels := normalizeArchiveEventVideoChannels(cfg.ExportIVS)
+		allowlists["tripwire"] = channels
+		allowlists["intrusion"] = channels
+	}
+	if len(allowlists) == 0 {
+		return nil
+	}
+	return allowlists
+}
+
+func archiveEventVideoExportDelayElapsed(item dahua.NVRRecording, now time.Time, delay time.Duration) bool {
+	if delay <= 0 {
+		return true
+	}
+	endTime, ok := parseArchiveLocalTime(item.EndTime)
+	if !ok {
+		return false
+	}
+	readyAt := endTime.Add(delay)
+	return !readyAt.After(now.In(time.Local))
+}
+
+func normalizeArchiveEventVideoChannels(channels []int) []int {
+	if len(channels) == 0 {
+		return nil
+	}
+	seen := make(map[int]struct{}, len(channels))
+	normalized := make([]int, 0, len(channels))
+	for _, channel := range channels {
+		if channel <= 0 {
+			continue
+		}
+		if _, ok := seen[channel]; ok {
+			continue
+		}
+		seen[channel] = struct{}{}
+		normalized = append(normalized, channel)
+	}
+	slices.Sort(normalized)
+	return normalized
+}
+
+func archiveEventCodeForRecording(item dahua.NVRRecording) string {
+	if code := normalizeArchiveEventCode(item.Type); code != "" {
+		return code
+	}
+	for _, flag := range item.Flags {
+		if code := normalizeArchiveEventCode(flag); code != "" {
+			return code
+		}
+	}
+	return ""
 }
 
 func (s *Service) populateArchiveEventRTSPURLs(deviceID string, items []dahua.NVRRecording) {

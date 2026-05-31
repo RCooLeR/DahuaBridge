@@ -140,6 +140,7 @@ Operational notes:
 - identical recorder archive searches are cached briefly and coalesced in-flight to reduce repeated recorder RPC/CGI searches
 - event-backed archive rows are indexed in SQLite first and carry bridge-generated main/sub RTSP playback URLs
 - the archive background service rechecks recent SMD/IVS rows every 5 minutes and queues MP4 extraction for new or missing assets
+- automatic event-video MP4 export waits for the configured delay and can be limited per event type and channel, for example to keep transport/vehicle videos only on selected channels
 - archive export is the supported bridge path for recorder footage download
 - when `file_path` is known, archive export can transcode directly from the recorder `.dav` file instead of going through archive RTSP playback
 - SMD and IVS event-backed archive items are exported and prefetched through archive playback RTSP rather than direct DAV download

@@ -77,15 +77,20 @@ type MediaConfig struct {
 }
 
 type ArchiveConfig struct {
-	Enabled         bool   `yaml:"enabled"`
-	DBPath          string `yaml:"db_path"`
-	TempDir         string `yaml:"temp_dir"`
-	PrefetchDays    int    `yaml:"prefetch_days"`
-	RetainDays      int    `yaml:"retain_days"`
-	MaxParallelJobs int    `yaml:"max_parallel_jobs"`
-	PrefetchSMD     bool   `yaml:"prefetch_smd"`
-	PrefetchIVS     bool   `yaml:"prefetch_ivs"`
-	Cron            string `yaml:"cron"`
+	Enabled            bool          `yaml:"enabled"`
+	DBPath             string        `yaml:"db_path"`
+	TempDir            string        `yaml:"temp_dir"`
+	PrefetchDays       int           `yaml:"prefetch_days"`
+	RetainDays         int           `yaml:"retain_days"`
+	MaxParallelJobs    int           `yaml:"max_parallel_jobs"`
+	PrefetchSMD        bool          `yaml:"prefetch_smd"`
+	PrefetchIVS        bool          `yaml:"prefetch_ivs"`
+	ExportDelay        time.Duration `yaml:"export_delay"`
+	ExportIVS          []int         `yaml:"export_ivs"`
+	ExportSMDPerson    []int         `yaml:"export_smd_person"`
+	ExportSMDTransport []int         `yaml:"export_smd_transport"`
+	ExportSMDAnimal    []int         `yaml:"export_smd_animal"`
+	Cron               string        `yaml:"cron"`
 }
 
 type WebRTCICEServerConfig struct {
@@ -260,6 +265,7 @@ func defaultConfig() Config {
 			MaxParallelJobs: 2,
 			PrefetchSMD:     true,
 			PrefetchIVS:     true,
+			ExportDelay:     time.Hour,
 			Cron:            "5,35 * * * *",
 		},
 		StateStore: StateStoreConfig{
@@ -397,6 +403,13 @@ func (c *Config) normalize() error {
 	if c.Archive.MaxParallelJobs <= 0 {
 		c.Archive.MaxParallelJobs = 2
 	}
+	if c.Archive.ExportDelay <= 0 {
+		c.Archive.ExportDelay = time.Hour
+	}
+	c.Archive.ExportIVS = normalizePositiveIntList(c.Archive.ExportIVS)
+	c.Archive.ExportSMDPerson = normalizePositiveIntList(c.Archive.ExportSMDPerson)
+	c.Archive.ExportSMDTransport = normalizePositiveIntList(c.Archive.ExportSMDTransport)
+	c.Archive.ExportSMDAnimal = normalizePositiveIntList(c.Archive.ExportSMDAnimal)
 	c.Archive.Cron = strings.TrimSpace(c.Archive.Cron)
 	if c.Archive.Cron == "" {
 		c.Archive.Cron = "5,35 * * * *"

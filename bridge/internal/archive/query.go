@@ -248,7 +248,7 @@ func normalizeArchiveEventCode(value string) string {
 		return ""
 	case "human", "humandetection", "smartmotionhuman", "intelliframehuman", "smdtypehuman":
 		return "human"
-	case "vehicle", "vehicledetection", "smartmotionvehicle", "motorvehicle", "smdtypevehicle":
+	case "vehicle", "transport", "vehicledetection", "smartmotionvehicle", "motorvehicle", "smdtypevehicle":
 		return "vehicle"
 	case "animal", "animaldetection", "smdtypeanimal":
 		return "animal"

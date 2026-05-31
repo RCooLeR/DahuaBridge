@@ -1,6 +1,7 @@
 package config
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -101,6 +102,54 @@ func TestArchiveDefaults(t *testing.T) {
 	}
 	if cfg.Archive.Cron != "5,35 * * * *" {
 		t.Fatalf("unexpected default archive cron %q", cfg.Archive.Cron)
+	}
+	if cfg.Archive.ExportDelay != time.Hour {
+		t.Fatalf("unexpected default archive export_delay %s", cfg.Archive.ExportDelay)
+	}
+	if len(cfg.Archive.ExportIVS) != 0 ||
+		len(cfg.Archive.ExportSMDPerson) != 0 ||
+		len(cfg.Archive.ExportSMDTransport) != 0 ||
+		len(cfg.Archive.ExportSMDAnimal) != 0 {
+		t.Fatalf("expected no default archive export channel restrictions, got ivs=%+v person=%+v transport=%+v animal=%+v",
+			cfg.Archive.ExportIVS,
+			cfg.Archive.ExportSMDPerson,
+			cfg.Archive.ExportSMDTransport,
+			cfg.Archive.ExportSMDAnimal,
+		)
+	}
+}
+
+func TestArchiveExportChannelSettingsNormalize(t *testing.T) {
+	cfg := defaultConfig()
+	data := []byte(`
+archive:
+  export_delay: 30m
+  export_ivs: [7, 3, 7, 0]
+  export_smd_person: []
+  export_smd_transport: [3, 1, 3, 0, -1, 7]
+  export_smd_animal: [2, 1]
+`)
+	if err := yaml.Unmarshal(data, &cfg); err != nil {
+		t.Fatalf("yaml.Unmarshal returned error: %v", err)
+	}
+	if err := cfg.normalize(); err != nil {
+		t.Fatalf("normalize returned error: %v", err)
+	}
+
+	if cfg.Archive.ExportDelay != 30*time.Minute {
+		t.Fatalf("unexpected export delay %s", cfg.Archive.ExportDelay)
+	}
+	if !reflect.DeepEqual(cfg.Archive.ExportIVS, []int{3, 7}) {
+		t.Fatalf("unexpected ivs export channels %+v", cfg.Archive.ExportIVS)
+	}
+	if cfg.Archive.ExportSMDPerson != nil {
+		t.Fatalf("expected empty person export channels to mean all, got %+v", cfg.Archive.ExportSMDPerson)
+	}
+	if !reflect.DeepEqual(cfg.Archive.ExportSMDTransport, []int{1, 3, 7}) {
+		t.Fatalf("unexpected transport export channels %+v", cfg.Archive.ExportSMDTransport)
+	}
+	if !reflect.DeepEqual(cfg.Archive.ExportSMDAnimal, []int{1, 2}) {
+		t.Fatalf("unexpected animal export channels %+v", cfg.Archive.ExportSMDAnimal)
 	}
 }
 
