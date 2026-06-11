@@ -94,6 +94,37 @@ class FakeCoordinator:
         self.refresh_count += 1
 
 
+class FakeBridgeResponse:
+    def __init__(self, body: str = '{"ready": true}', status: int = 200) -> None:
+        self._body = body
+        self.status = status
+
+    async def __aenter__(self) -> "FakeBridgeResponse":
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb) -> None:
+        return None
+
+    async def text(self) -> str:
+        return self._body
+
+    async def read(self) -> bytes:
+        return self._body.encode()
+
+
+class HeaderCaptureSession:
+    def __init__(self) -> None:
+        self.requests: list[dict] = []
+
+    def request(self, method: str, url: str, **kwargs) -> FakeBridgeResponse:
+        self.requests.append({"method": method, "url": url, **kwargs})
+        return FakeBridgeResponse()
+
+    def get(self, url: str, **kwargs) -> FakeBridgeResponse:
+        self.requests.append({"method": "GET", "url": url, **kwargs})
+        return FakeBridgeResponse("snapshot-bytes")
+
+
 class CameraCaptureTests(unittest.IsolatedAsyncioTestCase):
     def test_bridge_api_preserves_rtsp_targets(self) -> None:
         api = DahuaBridgeAPI(object(), "http://bridge.local:8080")
@@ -133,6 +164,18 @@ class CameraCaptureTests(unittest.IsolatedAsyncioTestCase):
                 "https://public.example/bridge/api/v1/media/mjpeg/cam1?profile=stable&auth_token=secret-token"
             ),
             "https://public.example/bridge/api/v1/media/mjpeg/cam1?profile=stable&auth_token=%2A%2AREDACTED%2A%2A",
+        )
+
+    async def test_bridge_api_sends_bearer_token_for_api_requests(self) -> None:
+        session = HeaderCaptureSession()
+        api = DahuaBridgeAPI(session, "https://public.example/bridge", "secret-token")
+
+        await api.async_get_status()
+
+        self.assertEqual(len(session.requests), 1)
+        self.assertEqual(
+            session.requests[0]["headers"],
+            {"Authorization": "Bearer secret-token"},
         )
 
     def test_is_recording_reflects_bridge_capture_state(self) -> None:

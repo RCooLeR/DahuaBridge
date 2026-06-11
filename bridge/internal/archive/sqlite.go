@@ -253,6 +253,9 @@ func (s *SQLiteStore) PruneOlderThan(ctx context.Context, cutoff time.Time) (cli
 		}
 	}()
 
+	// Collect candidate clip IDs before pruning event rows. A clip is returned
+	// for filesystem deletion only after the row delete proves no retained event
+	// still references it.
 	rows, err := tx.QueryContext(ctx, `SELECT DISTINCT mp4_clip_id
 		FROM smd_ivs_events
 		WHERE last_seen_at < ?

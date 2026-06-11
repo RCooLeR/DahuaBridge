@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -727,6 +728,48 @@ func TestAPIAuthAcceptsQueryTokenWhenEnabled(t *testing.T) {
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected status 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestAPIAuthRejectsQueryTokenWhenDisabled(t *testing.T) {
+	server := newTestServerWithConfig(config.HTTPConfig{
+		ListenAddress:  ":0",
+		MetricsPath:    "/metrics",
+		HealthPath:     "/healthz",
+		AuthToken:      "secret-token",
+		AuthQueryToken: false,
+		AuthTokenEnv:   "DAHUABRIDGE_HTTP_AUTH_TOKEN",
+	}, stubSnapshotReader{
+		listStreams: func(bool) []streams.Entry {
+			return nil
+		},
+	}, nil, stubActionReader{}, stubEventReader{})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/streams?auth_token=secret-token", nil)
+	rec := httptest.NewRecorder()
+	server.httpServer.Handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected status 401, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestMaxRequestBodyMiddlewareCapsBodySize(t *testing.T) {
+	handler := maxRequestBodyMiddleware(4)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusRequestEntityTooLarge)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/test", strings.NewReader("12345"))
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("expected status 413, got %d: %s", rec.Code, rec.Body.String())
 	}
 }
 

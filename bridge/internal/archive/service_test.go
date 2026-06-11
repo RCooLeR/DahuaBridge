@@ -6,6 +6,7 @@ import (
 	"errors"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -96,6 +97,38 @@ func TestSQLiteStoreUpsertSMDIVSEventsDoesNotCreateChunks(t *testing.T) {
 	}
 	if chunkCount != 0 {
 		t.Fatalf("nvr_recording_chunks count = %d, want 0", chunkCount)
+	}
+}
+
+func TestOpenArchiveSQLiteDBAppliesOperationalPragmas(t *testing.T) {
+	db, err := openArchiveSQLiteDB(context.Background(), filepath.Join(t.TempDir(), "archive.db"))
+	if err != nil {
+		t.Fatalf("open archive sqlite db: %v", err)
+	}
+	defer db.Close()
+
+	var busyTimeout int
+	if err := db.QueryRowContext(context.Background(), `PRAGMA busy_timeout`).Scan(&busyTimeout); err != nil {
+		t.Fatalf("query busy_timeout: %v", err)
+	}
+	if busyTimeout != 5000 {
+		t.Fatalf("busy_timeout = %d, want 5000", busyTimeout)
+	}
+
+	var journalMode string
+	if err := db.QueryRowContext(context.Background(), `PRAGMA journal_mode`).Scan(&journalMode); err != nil {
+		t.Fatalf("query journal_mode: %v", err)
+	}
+	if strings.ToLower(strings.TrimSpace(journalMode)) != "wal" {
+		t.Fatalf("journal_mode = %q, want wal", journalMode)
+	}
+
+	var foreignKeys int
+	if err := db.QueryRowContext(context.Background(), `PRAGMA foreign_keys`).Scan(&foreignKeys); err != nil {
+		t.Fatalf("query foreign_keys: %v", err)
+	}
+	if foreignKeys != 1 {
+		t.Fatalf("foreign_keys = %d, want 1", foreignKeys)
 	}
 }
 

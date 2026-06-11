@@ -1,10 +1,11 @@
 name: CI
 
-on:
+"on":
   push:
     branches:
-      - main
+      - "**"
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -13,6 +14,7 @@ jobs:
   bridge:
     name: Bridge Go Tests
     runs-on: ubuntu-latest
+    timeout-minutes: 20
 
     defaults:
       run:
@@ -51,6 +53,7 @@ jobs:
   integration:
     name: Home Assistant Integration Tests
     runs-on: ubuntu-latest
+    timeout-minutes: 10
 
     steps:
       - name: Checkout
@@ -70,6 +73,7 @@ jobs:
   ha-cards:
     name: HA Cards Checks
     runs-on: ubuntu-latest
+    timeout-minutes: 15
 
     defaults:
       run:

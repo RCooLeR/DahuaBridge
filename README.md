@@ -26,6 +26,24 @@ Most users need:
 2. Set up the bridge with [bridge/docs/getting-started.md](bridge/docs/getting-started.md).
 3. Install the Home Assistant integration with [integration/docs/install.md](integration/docs/install.md).
 
+## CI
+
+GitHub Actions runs on every branch push, every pull request, and manual
+dispatch. The workflow checks:
+
+- Go tests and Docker image build for `bridge/`
+- Python compile plus unittest coverage for `integration/`
+- Typecheck, tests, and production build for `ha-cards/`
+
+Run the same checks locally before pushing when possible:
+
+```bash
+(cd bridge && go test ./...)
+python -m compileall integration/custom_components/dahuabridge integration/tests
+python -m unittest discover -s integration/tests
+(cd ha-cards && npm ci && npm run lint && npm run test && npm run build)
+```
+
 ## Repository Layout
 
 - [bridge/README.md](bridge/README.md)
