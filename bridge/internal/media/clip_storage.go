@@ -157,6 +157,9 @@ func clipFilePath(clipPath string, fileName string) (string, error) {
 	if filepath.IsAbs(name) {
 		return "", fmt.Errorf("clip file name must be relative")
 	}
+	if filepath.Separator != '\\' && strings.Contains(name, `\`) {
+		return "", fmt.Errorf("clip file name contains unsupported path separator")
+	}
 	rootAbs, err := filepath.Abs(root)
 	if err != nil {
 		return "", err
