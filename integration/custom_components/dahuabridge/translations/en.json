@@ -6,6 +6,7 @@
         "description": "Add a DahuaBridge instance that will expose camera and state entities as one Home Assistant integration.",
         "data": {
           "bridge_url": "Bridge URL",
+          "api_token": "Bridge API token",
           "scan_interval": "Poll interval in seconds",
           "preferred_video_profile": "Preferred video profile",
           "preferred_video_source": "Preferred video source",
@@ -25,6 +26,7 @@
         "title": "DahuaBridge Options",
         "data": {
           "bridge_url": "Bridge URL",
+          "api_token": "Bridge API token",
           "scan_interval": "Poll interval in seconds",
           "preferred_video_profile": "Preferred video profile",
           "preferred_video_source": "Preferred video source",

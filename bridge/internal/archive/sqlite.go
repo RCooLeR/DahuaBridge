@@ -241,11 +241,11 @@ func (s *SQLiteStore) UpsertArchiveEvents(ctx context.Context, deviceID string, 
 	return err
 }
 
-func (s *SQLiteStore) PruneOlderThan(ctx context.Context, cutoff time.Time) (err error) {
+func (s *SQLiteStore) PruneOlderThan(ctx context.Context, cutoff time.Time) (clipIDs []string, err error) {
 	formatted := cutoff.UTC().Format(time.RFC3339Nano)
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer func() {
 		if err != nil {
@@ -253,8 +253,36 @@ func (s *SQLiteStore) PruneOlderThan(ctx context.Context, cutoff time.Time) (err
 		}
 	}()
 
+	rows, err := tx.QueryContext(ctx, `SELECT DISTINCT mp4_clip_id
+		FROM smd_ivs_events
+		WHERE last_seen_at < ?
+			AND mp4_clip_id <> ''
+			AND LOWER(COALESCE(mp4_status, '')) NOT IN ('recording', 'transcoding', 'queued', 'downloading')
+		ORDER BY mp4_clip_id`,
+		formatted,
+	)
+	if err != nil {
+		return nil, err
+	}
+	for rows.Next() {
+		var clipID string
+		if err = rows.Scan(&clipID); err != nil {
+			_ = rows.Close()
+			return nil, err
+		}
+		clipID = strings.TrimSpace(clipID)
+		if clipID != "" {
+			clipIDs = append(clipIDs, clipID)
+		}
+	}
+	if err = rows.Close(); err != nil {
+		return nil, err
+	}
+
 	statements := []string{
-		`DELETE FROM smd_ivs_events WHERE last_seen_at < ?`,
+		`DELETE FROM smd_ivs_events
+			WHERE last_seen_at < ?
+				AND LOWER(COALESCE(mp4_status, '')) NOT IN ('recording', 'transcoding', 'queued', 'downloading')`,
 		`DELETE FROM nvr_recording_chunks WHERE last_seen_at < ?`,
 	}
 	args := [][]any{
@@ -263,11 +291,32 @@ func (s *SQLiteStore) PruneOlderThan(ctx context.Context, cutoff time.Time) (err
 	}
 	for index, statement := range statements {
 		if _, err = tx.ExecContext(ctx, statement, args[index]...); err != nil {
-			return err
+			return nil, err
+		}
+	}
+	deletedClipIDs := make([]string, 0, len(clipIDs))
+	for _, clipID := range clipIDs {
+		result, execErr := tx.ExecContext(ctx, `DELETE FROM bridge_mp4_clips
+			WHERE clip_id = ?
+				AND NOT EXISTS (
+					SELECT 1 FROM smd_ivs_events WHERE mp4_clip_id = ?
+				)`,
+			clipID,
+			clipID,
+		)
+		if execErr != nil {
+			err = execErr
+			return nil, err
+		}
+		if rowsAffected, rowsErr := result.RowsAffected(); rowsErr == nil && rowsAffected > 0 {
+			deletedClipIDs = append(deletedClipIDs, clipID)
 		}
 	}
 	err = tx.Commit()
-	return err
+	if err != nil {
+		return nil, err
+	}
+	return deletedClipIDs, nil
 }
 
 type archiveFileRow struct {

@@ -72,7 +72,11 @@ func (m *Manager) persistClip(info ClipInfo) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(m.cfg.ClipPath, info.ID+".json"), body, 0o644)
+	metaPath, err := clipFilePath(m.cfg.ClipPath, info.ID+".json")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(metaPath, body, 0o644)
 }
 
 func (m *Manager) loadClip(clipID string) (ClipInfo, error) {
@@ -80,7 +84,11 @@ func (m *Manager) loadClip(clipID string) (ClipInfo, error) {
 	if clipID == "" {
 		return ClipInfo{}, ErrClipNotFound
 	}
-	body, err := os.ReadFile(filepath.Join(strings.TrimSpace(m.cfg.ClipPath), clipID+".json"))
+	metaPath, pathErr := clipFilePath(m.cfg.ClipPath, clipID+".json")
+	if pathErr != nil {
+		return ClipInfo{}, ErrClipNotFound
+	}
+	body, err := os.ReadFile(metaPath)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return ClipInfo{}, ErrClipNotFound
@@ -138,10 +146,30 @@ func clipSourceWindowForProfile(profile streams.Profile, duration time.Duration)
 }
 
 func clipFilePath(clipPath string, fileName string) (string, error) {
-	if strings.TrimSpace(fileName) == "" {
+	root := strings.TrimSpace(clipPath)
+	name := strings.TrimSpace(fileName)
+	if root == "" {
+		return "", fmt.Errorf("clip path is empty")
+	}
+	if name == "" {
 		return "", fmt.Errorf("clip file name is empty")
 	}
-	return filepath.Join(strings.TrimSpace(clipPath), fileName), nil
+	if filepath.IsAbs(name) {
+		return "", fmt.Errorf("clip file name must be relative")
+	}
+	rootAbs, err := filepath.Abs(root)
+	if err != nil {
+		return "", err
+	}
+	joined := filepath.Join(rootAbs, name)
+	rel, err := filepath.Rel(rootAbs, joined)
+	if err != nil {
+		return "", err
+	}
+	if rel == "." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || rel == ".." || filepath.IsAbs(rel) {
+		return "", fmt.Errorf("clip file path escapes clip directory")
+	}
+	return joined, nil
 }
 
 func removeClipStorageFile(path string) error {

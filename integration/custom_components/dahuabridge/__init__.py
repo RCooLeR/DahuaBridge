@@ -6,6 +6,7 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .api import DahuaBridgeAPI
 from .const import (
+    CONF_API_TOKEN,
     CONF_BRIDGE_URL,
     CONF_SCAN_INTERVAL,
     DEFAULT_SCAN_INTERVAL,
@@ -19,6 +20,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     api = DahuaBridgeAPI(
         async_get_clientsession(hass),
         entry.data[CONF_BRIDGE_URL],
+        str(entry.data.get(CONF_API_TOKEN, "")).strip(),
     )
     coordinator = DahuaBridgeCoordinator(
         hass,

@@ -63,3 +63,19 @@ func (s archiveLiveSearcher) GetClip(clipID string) (media.ClipInfo, error) {
 	}
 	return s.runtime.GetClip(clipID)
 }
+
+func (s archiveLiveSearcher) DeleteClip(ctx context.Context, clipID string) error {
+	if s.runtime == nil {
+		return fmt.Errorf("runtime services are not configured")
+	}
+	s.runtime.mu.RLock()
+	mediaReader := s.runtime.media
+	s.runtime.mu.RUnlock()
+	deleter, ok := mediaReader.(interface {
+		DeleteClip(context.Context, string) error
+	})
+	if !ok || deleter == nil {
+		return fmt.Errorf("media layer does not support clip deletion")
+	}
+	return deleter.DeleteClip(ctx, clipID)
+}

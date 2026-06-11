@@ -28,9 +28,24 @@ Unknown legacy YAML keys are ignored by the loader. Remove old keys from local c
 - `metrics_path`: Prometheus metrics route.
 - `health_path`: liveness route.
 - `read_timeout`, `write_timeout`, `idle_timeout`: HTTP server timeouts.
+- `auth_token`: optional bearer-style API token. Empty disables bridge-level HTTP auth.
+- `auth_token_env`: environment variable read when `auth_token` is empty; defaults to `DAHUABRIDGE_HTTP_AUTH_TOKEN`.
+- `auth_query_token`: allow `?auth_token=...` / `?token=...` on browser-facing URLs when auth is enabled.
+- `allowed_origins`: optional CORS allowlist. Empty keeps the permissive default for trusted reverse-proxy deployments.
+- `trusted_proxies`: proxy IPs/CIDRs whose forwarded client-IP headers are trusted for rate limiting.
+- `max_request_body_bytes`: request body cap for API/admin routes.
 - `admin_rate_limit_*`: admin/API action limiter.
 - `snapshot_rate_limit_*`: snapshot limiter.
 - `media_rate_limit_*`: media endpoint limiter.
+
+When `auth_token` or `auth_token_env` is set, most API/admin/media routes require
+`Authorization: Bearer <token>` or `X-DahuaBridge-Token: <token>`. Health,
+readiness, status, metrics, CORS preflight, and static admin assets stay open for
+monitoring and browser startup. Query-token auth exists for Home Assistant camera
+resource URLs and should be used only behind HTTPS.
+
+Set `trusted_proxies` only to proxies you control. If it is empty, rate limiting
+uses the direct TCP peer address and ignores forwarded-IP headers.
 
 ## `media`
 

@@ -5,6 +5,7 @@ from typing import Any
 import voluptuous as vol
 
 from .const import (
+    CONF_API_TOKEN,
     CONF_BRIDGE_URL,
     CONF_ENABLE_VIDEO_FALLBACKS,
     CONF_LANGUAGE,
@@ -38,6 +39,7 @@ def build_user_schema(bridge_url_key: str) -> vol.Schema:
     return vol.Schema(
         {
             vol.Required(bridge_url_key): str,
+            vol.Optional(CONF_API_TOKEN, default=""): str,
             vol.Optional(
                 CONF_SCAN_INTERVAL, default=DEFAULT_SCAN_INTERVAL
             ): vol.All(vol.Coerce(int), vol.Range(min=5, max=300)),
@@ -62,6 +64,7 @@ def build_user_schema(bridge_url_key: str) -> vol.Schema:
 
 def build_options_schema(config_entry: Any) -> vol.Schema:
     current_bridge_url = str(config_entry.data.get(CONF_BRIDGE_URL, "")).strip()
+    current_api_token = str(config_entry.data.get(CONF_API_TOKEN, "")).strip()
     current_interval = int(
         config_entry.options.get(
             CONF_SCAN_INTERVAL,
@@ -99,6 +102,7 @@ def build_options_schema(config_entry: Any) -> vol.Schema:
     return vol.Schema(
         {
             vol.Optional(CONF_BRIDGE_URL, default=current_bridge_url): str,
+            vol.Optional(CONF_API_TOKEN, default=current_api_token): str,
             vol.Optional(
                 CONF_SCAN_INTERVAL, default=current_interval
             ): vol.All(vol.Coerce(int), vol.Range(min=5, max=300)),

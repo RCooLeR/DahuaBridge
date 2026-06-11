@@ -1,6 +1,7 @@
 package media
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -9,6 +10,23 @@ import (
 	"RCooLeR/DahuaBridge/internal/streams"
 	"github.com/rs/zerolog"
 )
+
+func TestClipFilePathRejectsEscapingNames(t *testing.T) {
+	root := t.TempDir()
+	for _, name := range []string{"../escape.mp4", "..\\escape.mp4", filepath.Join("nested", "..", "..", "escape.mp4")} {
+		if path, err := clipFilePath(root, name); err == nil {
+			t.Fatalf("expected %q to be rejected, got path %q", name, path)
+		}
+	}
+
+	path, err := clipFilePath(root, filepath.Join("nested", "clip.mp4"))
+	if err != nil {
+		t.Fatalf("expected nested clip path: %v", err)
+	}
+	if rel, err := filepath.Rel(root, path); err != nil || rel != filepath.Join("nested", "clip.mp4") {
+		t.Fatalf("unexpected relative path %q err=%v", rel, err)
+	}
+}
 
 func TestClipSourceWindowUsesPlaybackRangeAndDuration(t *testing.T) {
 	start, end := clipSourceWindow(

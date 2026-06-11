@@ -14,6 +14,7 @@ from homeassistant.exceptions import HomeAssistantError
 
 from custom_components.dahuabridge.api import DahuaBridgeAPI
 from custom_components.dahuabridge.api import DahuaBridgeAPIError
+from custom_components.dahuabridge.api.client import redact_url_for_log
 from custom_components.dahuabridge.camera import DahuaBridgeCamera
 
 
@@ -106,6 +107,32 @@ class CameraCaptureTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             api.bridge_resource_url("http://127.0.0.1:19215/api/v1/events"),
             "https://public.example/bridge/api/v1/events",
+        )
+
+    def test_bridge_api_appends_query_token_to_browser_urls(self) -> None:
+        api = DahuaBridgeAPI(object(), "https://public.example/bridge", "secret-token")
+
+        self.assertEqual(
+            api.bridge_resource_url(
+                "http://127.0.0.1:19215/api/v1/media/mjpeg/cam1?profile=stable"
+            ),
+            "https://public.example/bridge/api/v1/media/mjpeg/cam1?profile=stable&auth_token=secret-token",
+        )
+
+    def test_bridge_api_does_not_duplicate_existing_query_token(self) -> None:
+        api = DahuaBridgeAPI(object(), "https://public.example/bridge", "secret-token")
+
+        self.assertEqual(
+            api.absolute_url("/api/v1/media/hls/cam1/index.m3u8?auth_token=existing"),
+            "https://public.example/bridge/api/v1/media/hls/cam1/index.m3u8?auth_token=existing",
+        )
+
+    def test_redact_url_for_log_hides_tokens(self) -> None:
+        self.assertEqual(
+            redact_url_for_log(
+                "https://public.example/bridge/api/v1/media/mjpeg/cam1?profile=stable&auth_token=secret-token"
+            ),
+            "https://public.example/bridge/api/v1/media/mjpeg/cam1?profile=stable&auth_token=%2A%2AREDACTED%2A%2A",
         )
 
     def test_is_recording_reflects_bridge_capture_state(self) -> None:

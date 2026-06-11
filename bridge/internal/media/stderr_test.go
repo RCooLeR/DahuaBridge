@@ -14,3 +14,13 @@ func TestTailBufferKeepsOnlyNewestBytes(t *testing.T) {
 		t.Fatalf("unexpected tail %q", got)
 	}
 }
+
+func TestTailBufferRedactsFFmpegCredentials(t *testing.T) {
+	buffer := newTailBuffer(512)
+	_, _ = buffer.Write([]byte("rtsp://assistant:secret@192.0.2.10/live?auth_token=abc failed"))
+
+	got := buffer.String()
+	if got != "rtsp://[redacted]@192.0.2.10/live?auth_token=[redacted] failed" {
+		t.Fatalf("unexpected redacted stderr %q", got)
+	}
+}

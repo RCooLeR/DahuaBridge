@@ -24,14 +24,19 @@ def install() -> None:
 
     voluptuous = types.ModuleType("voluptuous")
 
-    def optional(key):
+    def optional(key, *args, **kwargs):
         return key
 
-    def required(key):
+    def required(key, *args, **kwargs):
         return key
 
     voluptuous.Optional = optional
     voluptuous.Required = required
+    voluptuous.All = lambda *args, **kwargs: args[0] if args else (lambda value: value)
+    voluptuous.Coerce = lambda target: target
+    voluptuous.Range = lambda *args, **kwargs: (lambda value: value)
+    voluptuous.In = lambda values: values
+    voluptuous.Schema = lambda value: value
     sys.modules["voluptuous"] = voluptuous
 
     homeassistant = types.ModuleType("homeassistant")

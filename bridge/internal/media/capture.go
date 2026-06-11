@@ -379,7 +379,7 @@ func (m *Manager) ClipFilePath(clipID string) (string, error) {
 	if strings.TrimSpace(info.FileName) == "" {
 		return "", fmt.Errorf("clip %q has no file", clipID)
 	}
-	return filepath.Join(strings.TrimSpace(m.cfg.ClipPath), info.FileName), nil
+	return clipFilePath(m.cfg.ClipPath, info.FileName)
 }
 
 func (m *Manager) DeleteClip(ctx context.Context, clipID string) error {
@@ -405,12 +405,19 @@ func (m *Manager) DeleteClip(ctx context.Context, clipID string) error {
 		return err
 	}
 
-	metaPath := filepath.Join(strings.TrimSpace(m.cfg.ClipPath), clipID+".json")
+	metaPath, err := clipFilePath(m.cfg.ClipPath, clipID+".json")
+	if err != nil {
+		return err
+	}
 	if err := removeClipStorageFile(metaPath); err != nil {
 		return err
 	}
 	if strings.TrimSpace(info.FileName) != "" {
-		if err := removeClipStorageFile(filepath.Join(strings.TrimSpace(m.cfg.ClipPath), info.FileName)); err != nil {
+		clipPath, err := clipFilePath(m.cfg.ClipPath, info.FileName)
+		if err != nil {
+			return err
+		}
+		if err := removeClipStorageFile(clipPath); err != nil {
 			return err
 		}
 	}

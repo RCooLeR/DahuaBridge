@@ -11,11 +11,12 @@ import (
 )
 
 type perClientRateLimiter struct {
-	mu         sync.Mutex
-	perSecond  float64
-	burst      float64
-	staleAfter time.Duration
-	clients    map[string]*rateBucket
+	mu             sync.Mutex
+	perSecond      float64
+	burst          float64
+	staleAfter     time.Duration
+	trustedProxies []*net.IPNet
+	clients        map[string]*rateBucket
 }
 
 type rateBucket struct {
@@ -24,15 +25,16 @@ type rateBucket struct {
 	lastSeen time.Time
 }
 
-func newPerClientRateLimiter(perMinute int, burst int) *perClientRateLimiter {
+func newPerClientRateLimiter(perMinute int, burst int, trustedProxies []string) *perClientRateLimiter {
 	if perMinute <= 0 || burst <= 0 {
 		return nil
 	}
 	return &perClientRateLimiter{
-		perSecond:  float64(perMinute) / 60.0,
-		burst:      float64(burst),
-		staleAfter: 15 * time.Minute,
-		clients:    make(map[string]*rateBucket),
+		perSecond:      float64(perMinute) / 60.0,
+		burst:          float64(burst),
+		staleAfter:     15 * time.Minute,
+		trustedProxies: parseTrustedProxies(trustedProxies),
+		clients:        make(map[string]*rateBucket),
 	}
 }
 
@@ -94,7 +96,7 @@ func rateLimitMiddleware(limiter *perClientRateLimiter) func(http.Handler) http.
 
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			allowed, retryAfter := limiter.Allow(clientIP(r))
+			allowed, retryAfter := limiter.Allow(limiter.clientIP(r))
 			if !allowed {
 				retryAfterSeconds := int(retryAfter / time.Second)
 				if retryAfterSeconds <= 0 {
@@ -112,21 +114,22 @@ func rateLimitMiddleware(limiter *perClientRateLimiter) func(http.Handler) http.
 	}
 }
 
-func clientIP(r *http.Request) string {
-	if forwarded := strings.TrimSpace(r.Header.Get("X-Forwarded-For")); forwarded != "" {
-		parts := strings.Split(forwarded, ",")
-		if len(parts) > 0 && strings.TrimSpace(parts[0]) != "" {
-			return strings.TrimSpace(parts[0])
+func (l *perClientRateLimiter) clientIP(r *http.Request) string {
+	remoteIP := remoteAddressIP(r)
+	if remoteIPTrusted(remoteIP, l.trustedProxies) {
+		if forwarded := strings.TrimSpace(r.Header.Get("X-Forwarded-For")); forwarded != "" {
+			parts := strings.Split(forwarded, ",")
+			if len(parts) > 0 && strings.TrimSpace(parts[0]) != "" {
+				return strings.TrimSpace(parts[0])
+			}
+		}
+		if realIP := strings.TrimSpace(r.Header.Get("X-Real-IP")); realIP != "" {
+			return realIP
 		}
 	}
 
-	if realIP := strings.TrimSpace(r.Header.Get("X-Real-IP")); realIP != "" {
-		return realIP
-	}
-
-	host, _, err := net.SplitHostPort(strings.TrimSpace(r.RemoteAddr))
-	if err == nil && host != "" {
-		return host
+	if remoteIP != "" {
+		return remoteIP
 	}
 
 	if remoteAddr := strings.TrimSpace(r.RemoteAddr); remoteAddr != "" {
@@ -134,4 +137,59 @@ func clientIP(r *http.Request) string {
 	}
 
 	return "unknown"
+}
+
+func remoteAddressIP(r *http.Request) string {
+	host, _, err := net.SplitHostPort(strings.TrimSpace(r.RemoteAddr))
+	if err == nil && host != "" {
+		return host
+	}
+	return strings.TrimSpace(r.RemoteAddr)
+}
+
+func remoteIPTrusted(remoteIP string, trustedProxies []*net.IPNet) bool {
+	if remoteIP == "" || len(trustedProxies) == 0 {
+		return false
+	}
+	parsed := net.ParseIP(remoteIP)
+	if parsed == nil {
+		return false
+	}
+	for _, trusted := range trustedProxies {
+		if trusted.Contains(parsed) {
+			return true
+		}
+	}
+	return false
+}
+
+func parseTrustedProxies(values []string) []*net.IPNet {
+	trusted := make([]*net.IPNet, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if !strings.Contains(value, "/") {
+			ip := net.ParseIP(value)
+			if ip == nil {
+				continue
+			}
+			bits := 32
+			if ip.To4() == nil {
+				bits = 128
+			}
+			trusted = append(trusted, &net.IPNet{IP: ip, Mask: net.CIDRMask(bits, bits)})
+			continue
+		}
+		_, network, err := net.ParseCIDR(value)
+		if err == nil {
+			trusted = append(trusted, network)
+		}
+	}
+	return trusted
+}
+
+func clientIP(r *http.Request) string {
+	return (&perClientRateLimiter{}).clientIP(r)
 }

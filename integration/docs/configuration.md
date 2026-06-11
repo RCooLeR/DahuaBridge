@@ -34,11 +34,19 @@ If `/dahua-bridge/api/...` requests return `404`, check that the proxy strips
 the `/dahua-bridge` prefix before forwarding to the bridge process. The bridge
 routes themselves are mounted at `/api/...`.
 
+## Bridge API Token
+
+If bridge-level HTTP auth is enabled, enter the same API token in the integration
+config flow or options flow. The integration sends it as a bearer token for API
+polling and appends a redacted query-token form to browser-facing media/snapshot
+URLs so Home Assistant camera entities can still load images and streams.
+
 ## Options
 
 The options flow exposes:
 
 - bridge URL
+- bridge API token
 - poll interval
 - preferred video profile
 - preferred video source
@@ -49,6 +57,7 @@ Defaults:
 | Option | Default | Allowed values |
 | --- | --- | --- |
 | Bridge URL | Current configured URL | Any reachable `http://` or `https://` bridge base URL |
+| Bridge API token | Empty | Token configured on the bridge, if any |
 | Poll interval | `15` seconds | `5` to `300` seconds |
 | Preferred video profile | `quality` | `auto`, `quality`, `stable` |
 | Preferred video source | `rtsp` | `auto`, `hls`, `mjpeg`, `rtsp` |

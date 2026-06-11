@@ -2,7 +2,13 @@ package media
 
 import (
 	"io"
+	"regexp"
 	"strings"
+)
+
+var (
+	ffmpegURLUserinfoPattern = regexp.MustCompile(`(?i)\b([a-z][a-z0-9+.-]*://)([^/\s:@]+)(?::[^@\s/]*)?@`)
+	ffmpegSecretQueryPattern = regexp.MustCompile(`(?i)([?&][^=\s]*(?:password|passwd|pwd|token|secret)[^=\s]*=)[^&\s]+`)
 )
 
 type tailBuffer struct {
@@ -32,7 +38,7 @@ func (b *tailBuffer) Write(p []byte) (int, error) {
 }
 
 func (b *tailBuffer) String() string {
-	return strings.TrimSpace(string(b.buf))
+	return redactFFmpegStderr(strings.TrimSpace(string(b.buf)))
 }
 
 func drainFFmpegStderr(r io.Reader, limit int) <-chan string {
@@ -43,4 +49,12 @@ func drainFFmpegStderr(r io.Reader, limit int) <-chan string {
 		done <- tail.String()
 	}()
 	return done
+}
+
+func redactFFmpegStderr(text string) string {
+	if strings.TrimSpace(text) == "" {
+		return ""
+	}
+	text = ffmpegURLUserinfoPattern.ReplaceAllString(text, "${1}[redacted]@")
+	return ffmpegSecretQueryPattern.ReplaceAllString(text, "${1}[redacted]")
 }

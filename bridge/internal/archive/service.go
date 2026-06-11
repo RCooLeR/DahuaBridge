@@ -55,6 +55,10 @@ type ClipPrefetcher interface {
 	EnsureNVRArchiveClip(context.Context, string, dahua.NVRRecording) (mediaapi.ClipInfo, error)
 }
 
+type ClipDeleter interface {
+	DeleteClip(context.Context, string) error
+}
+
 type syncRequest int
 
 const (
@@ -68,6 +72,7 @@ type Service struct {
 	searcher Searcher
 	probes   *store.ProbeStore
 	clips    ClipPrefetcher
+	deleter  ClipDeleter
 	clipInfo ClipStatusReader
 	logger   zerolog.Logger
 
@@ -120,12 +125,10 @@ func New(cfg config.ArchiveConfig, devices []config.DeviceConfig, searcher Searc
 		return nil, fmt.Errorf("create archive temp directory: %w", err)
 	}
 
-	db, err := sql.Open("sqlite", cfg.DBPath)
+	db, err := openArchiveSQLiteDB(context.Background(), cfg.DBPath)
 	if err != nil {
 		return nil, fmt.Errorf("open archive sqlite db: %w", err)
 	}
-	db.SetMaxOpenConns(1)
-	db.SetMaxIdleConns(1)
 	store := NewSQLiteStore(db)
 	if err := store.InitSchema(context.Background()); err != nil {
 		_ = db.Close()
@@ -138,12 +141,57 @@ func New(cfg config.ArchiveConfig, devices []config.DeviceConfig, searcher Searc
 		searcher: searcher,
 		probes:   probes,
 		clips:    resolveClipPrefetcher(searcher),
+		deleter:  resolveClipDeleter(searcher),
 		clipInfo: resolveClipStatusReader(searcher),
 		logger:   logger.With().Str("component", "archive").Logger(),
 		db:       db,
 		store:    store,
 		trigger:  make(chan syncRequest, 4),
 	}, nil
+}
+
+func openArchiveSQLiteDB(ctx context.Context, dbPath string) (*sql.DB, error) {
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		return nil, err
+	}
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
+	if err := configureArchiveSQLiteDB(ctx, db); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	return db, nil
+}
+
+func configureArchiveSQLiteDB(ctx context.Context, db *sql.DB) error {
+	statements := []string{
+		`PRAGMA busy_timeout = 5000`,
+		`PRAGMA journal_mode = WAL`,
+		`PRAGMA synchronous = NORMAL`,
+		`PRAGMA foreign_keys = ON`,
+	}
+	for _, statement := range statements {
+		if _, err := db.ExecContext(ctx, statement); err != nil {
+			return err
+		}
+	}
+
+	rows, err := db.QueryContext(ctx, `PRAGMA quick_check`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var result string
+		if err := rows.Scan(&result); err != nil {
+			return err
+		}
+		if strings.TrimSpace(strings.ToLower(result)) != "ok" {
+			return fmt.Errorf("sqlite quick_check failed: %s", result)
+		}
+	}
+	return rows.Err()
 }
 
 func (s *Service) Start(ctx context.Context) error {
@@ -271,11 +319,14 @@ func (s *Service) SyncNow(ctx context.Context) error {
 			}
 		}
 	}
-	if err := s.store.PruneOlderThan(ctx, startedAt.AddDate(0, 0, -s.cfg.RetainDays)); err != nil {
+	prunedClipIDs, err := s.store.PruneOlderThan(ctx, startedAt.AddDate(0, 0, -s.cfg.RetainDays))
+	if err != nil {
 		s.logger.Error().Err(err).Msg("archive prune failed")
 		if firstErr == nil {
 			firstErr = err
 		}
+	} else {
+		s.deletePrunedClips(ctx, prunedClipIDs)
 	}
 	if firstErr != nil {
 		return firstErr
@@ -914,12 +965,35 @@ func resolveClipPrefetcher(searcher Searcher) ClipPrefetcher {
 	return prefetcher
 }
 
+func resolveClipDeleter(searcher Searcher) ClipDeleter {
+	deleter, ok := searcher.(ClipDeleter)
+	if !ok {
+		return nil
+	}
+	return deleter
+}
+
 func resolveClipStatusReader(searcher Searcher) ClipStatusReader {
 	reader, ok := searcher.(ClipStatusReader)
 	if !ok {
 		return nil
 	}
 	return reader
+}
+
+func (s *Service) deletePrunedClips(ctx context.Context, clipIDs []string) {
+	if s == nil || s.deleter == nil || len(clipIDs) == 0 {
+		return
+	}
+	for _, clipID := range clipIDs {
+		clipID = strings.TrimSpace(clipID)
+		if clipID == "" {
+			continue
+		}
+		if err := s.deleter.DeleteClip(ctx, clipID); err != nil {
+			s.logger.Warn().Err(err).Str("clip_id", clipID).Msg("archive pruned clip cleanup failed")
+		}
+	}
 }
 
 func parseArchiveLocalTime(value string) (time.Time, bool) {

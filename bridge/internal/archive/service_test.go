@@ -99,6 +99,169 @@ func TestSQLiteStoreUpsertSMDIVSEventsDoesNotCreateChunks(t *testing.T) {
 	}
 }
 
+func TestSQLiteStorePruneReturnsCompletedClipIDsAndKeepsActiveExports(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	defer db.Close()
+
+	archiveStore := NewSQLiteStore(db)
+	if err := archiveStore.InitSchema(context.Background()); err != nil {
+		t.Fatalf("init schema: %v", err)
+	}
+
+	oldSeenAt := time.Date(2026, 5, 1, 10, 0, 0, 0, time.UTC)
+	items := []dahua.NVRRecording{
+		{
+			Source:      "nvr_event",
+			Channel:     1,
+			StartTime:   "2026-05-01 11:32:48",
+			EndTime:     "2026-05-01 11:33:08",
+			FilePath:    "/mnt/dvr/completed.dav",
+			Type:        "Event.smdTypeHuman",
+			VideoStream: "Main",
+			Flags:       []string{"Event", "smdTypeHuman"},
+		},
+		{
+			Source:      "nvr_event",
+			Channel:     1,
+			StartTime:   "2026-05-01 11:34:48",
+			EndTime:     "2026-05-01 11:35:08",
+			FilePath:    "/mnt/dvr/active.dav",
+			Type:        "Event.smdTypeHuman",
+			VideoStream: "Main",
+			Flags:       []string{"Event", "smdTypeHuman"},
+		},
+	}
+	if err := archiveStore.UpsertArchiveEvents(context.Background(), "west20_nvr", items, oldSeenAt); err != nil {
+		t.Fatalf("upsert archive events: %v", err)
+	}
+
+	completedID, completedKind := archiveRecordID("west20_nvr", items[0])
+	activeID, activeKind := archiveRecordID("west20_nvr", items[1])
+	if err := archiveStore.UpsertClipAsset(context.Background(), completedKind, completedID, "west20_nvr", items[0].FilePath, mediaapi.ClipInfo{
+		ID:       "clip_completed",
+		Channel:  1,
+		Status:   mediaapi.ClipStatusCompleted,
+		FileName: "clip_completed.mp4",
+	}); err != nil {
+		t.Fatalf("upsert completed clip: %v", err)
+	}
+	if err := archiveStore.UpsertClipAsset(context.Background(), activeKind, activeID, "west20_nvr", items[1].FilePath, mediaapi.ClipInfo{
+		ID:       "clip_active",
+		Channel:  1,
+		Status:   mediaapi.ClipStatusRecording,
+		FileName: "clip_active.mp4",
+	}); err != nil {
+		t.Fatalf("upsert active clip: %v", err)
+	}
+	if _, err := db.Exec(`UPDATE smd_ivs_events SET last_seen_at = ?`, oldSeenAt.Format(time.RFC3339Nano)); err != nil {
+		t.Fatalf("age events: %v", err)
+	}
+
+	clipIDs, err := archiveStore.PruneOlderThan(context.Background(), oldSeenAt.Add(24*time.Hour))
+	if err != nil {
+		t.Fatalf("prune: %v", err)
+	}
+	if !reflect.DeepEqual(clipIDs, []string{"clip_completed"}) {
+		t.Fatalf("unexpected pruned clip ids %+v", clipIDs)
+	}
+
+	var completedCount int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM smd_ivs_events WHERE event_id = ?`, completedID).Scan(&completedCount); err != nil {
+		t.Fatalf("query completed count: %v", err)
+	}
+	if completedCount != 0 {
+		t.Fatalf("expected completed event pruned, got %d", completedCount)
+	}
+	var activeCount int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM smd_ivs_events WHERE event_id = ?`, activeID).Scan(&activeCount); err != nil {
+		t.Fatalf("query active count: %v", err)
+	}
+	if activeCount != 1 {
+		t.Fatalf("expected active event retained, got %d", activeCount)
+	}
+}
+
+func TestSQLiteStorePruneDoesNotReturnClipStillReferencedByRetainedEvent(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	defer db.Close()
+
+	archiveStore := NewSQLiteStore(db)
+	if err := archiveStore.InitSchema(context.Background()); err != nil {
+		t.Fatalf("init schema: %v", err)
+	}
+
+	oldSeenAt := time.Date(2026, 5, 1, 10, 0, 0, 0, time.UTC)
+	recentSeenAt := oldSeenAt.Add(48 * time.Hour)
+	items := []dahua.NVRRecording{
+		{
+			Source:      "nvr_event",
+			Channel:     1,
+			StartTime:   "2026-05-01 11:32:48",
+			EndTime:     "2026-05-01 11:33:08",
+			FilePath:    "/mnt/dvr/shared-old.dav",
+			Type:        "Event.smdTypeHuman",
+			VideoStream: "Main",
+			Flags:       []string{"Event", "smdTypeHuman"},
+		},
+		{
+			Source:      "nvr_event",
+			Channel:     1,
+			StartTime:   "2026-05-03 11:32:48",
+			EndTime:     "2026-05-03 11:33:08",
+			FilePath:    "/mnt/dvr/shared-recent.dav",
+			Type:        "Event.smdTypeHuman",
+			VideoStream: "Main",
+			Flags:       []string{"Event", "smdTypeHuman"},
+		},
+	}
+	if err := archiveStore.UpsertArchiveEvents(context.Background(), "west20_nvr", items, recentSeenAt); err != nil {
+		t.Fatalf("upsert archive events: %v", err)
+	}
+
+	oldID, oldKind := archiveRecordID("west20_nvr", items[0])
+	recentID, recentKind := archiveRecordID("west20_nvr", items[1])
+	clipInfo := mediaapi.ClipInfo{
+		ID:       "clip_shared",
+		Channel:  1,
+		Status:   mediaapi.ClipStatusCompleted,
+		FileName: "clip_shared.mp4",
+	}
+	if err := archiveStore.UpsertClipAsset(context.Background(), oldKind, oldID, "west20_nvr", items[0].FilePath, clipInfo); err != nil {
+		t.Fatalf("upsert old clip: %v", err)
+	}
+	if err := archiveStore.UpsertClipAsset(context.Background(), recentKind, recentID, "west20_nvr", items[1].FilePath, clipInfo); err != nil {
+		t.Fatalf("upsert recent clip: %v", err)
+	}
+	if _, err := db.Exec(`UPDATE smd_ivs_events SET last_seen_at = ? WHERE event_id = ?`, oldSeenAt.Format(time.RFC3339Nano), oldID); err != nil {
+		t.Fatalf("age old event: %v", err)
+	}
+	if _, err := db.Exec(`UPDATE smd_ivs_events SET last_seen_at = ? WHERE event_id = ?`, recentSeenAt.Format(time.RFC3339Nano), recentID); err != nil {
+		t.Fatalf("refresh recent event: %v", err)
+	}
+
+	clipIDs, err := archiveStore.PruneOlderThan(context.Background(), oldSeenAt.Add(24*time.Hour))
+	if err != nil {
+		t.Fatalf("prune: %v", err)
+	}
+	if len(clipIDs) != 0 {
+		t.Fatalf("expected shared clip to stay referenced, got pruned ids %+v", clipIDs)
+	}
+
+	var clipCount int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM bridge_mp4_clips WHERE clip_id = 'clip_shared'`).Scan(&clipCount); err != nil {
+		t.Fatalf("query clip count: %v", err)
+	}
+	if clipCount != 1 {
+		t.Fatalf("expected shared clip metadata retained, got %d", clipCount)
+	}
+}
+
 func TestServiceSyncNowIndexesArchiveWindows(t *testing.T) {
 	tempDir := t.TempDir()
 	probes := store.NewProbeStore()

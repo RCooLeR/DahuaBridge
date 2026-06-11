@@ -17,6 +17,7 @@ from .config_options import (
     normalize_language_choice,
 )
 from .const import (
+    CONF_API_TOKEN,
     CONF_BRIDGE_URL,
     CONF_ENABLE_VIDEO_FALLBACKS,
     CONF_LANGUAGE,
@@ -51,7 +52,8 @@ class DahuaBridgeConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             except ValueError:
                 errors["base"] = "invalid_url"
             else:
-                api = DahuaBridgeAPI(async_get_clientsession(self.hass), bridge_url)
+                api_token = str(user_input.get(CONF_API_TOKEN, "")).strip()
+                api = DahuaBridgeAPI(async_get_clientsession(self.hass), bridge_url, api_token)
                 try:
                     await api.async_get_status()
                 except DahuaBridgeAPIError as err:
@@ -98,6 +100,7 @@ class DahuaBridgeConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                         title=host,
                         data={
                             CONF_BRIDGE_URL: bridge_url,
+                            CONF_API_TOKEN: api_token,
                             CONF_SCAN_INTERVAL: int(
                                 user_input.get(
                                     CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL
@@ -134,13 +137,24 @@ class DahuaBridgeOptionsFlow(config_entries.OptionsFlow):
                 requested_bridge_url = normalize_bridge_url(
                     user_input.get(CONF_BRIDGE_URL, bridge_url)
                 )
+                requested_api_token = str(
+                    user_input.get(
+                        CONF_API_TOKEN,
+                        self._config_entry.data.get(CONF_API_TOKEN, ""),
+                    )
+                ).strip()
             except ValueError:
                 errors["base"] = "invalid_url"
             else:
                 bridge_url_changed = requested_bridge_url != bridge_url
-                if bridge_url_changed:
+                api_token_changed = requested_api_token != str(
+                    self._config_entry.data.get(CONF_API_TOKEN, "")
+                ).strip()
+                if bridge_url_changed or api_token_changed:
                     api = DahuaBridgeAPI(
-                        async_get_clientsession(self.hass), requested_bridge_url
+                        async_get_clientsession(self.hass),
+                        requested_bridge_url,
+                        requested_api_token,
                     )
                     try:
                         await api.async_get_status()
@@ -157,6 +171,7 @@ class DahuaBridgeOptionsFlow(config_entries.OptionsFlow):
                             data={
                                 **dict(self._config_entry.data),
                                 CONF_BRIDGE_URL: requested_bridge_url,
+                                CONF_API_TOKEN: requested_api_token,
                             },
                             title=urlsplit(requested_bridge_url).hostname or "DahuaBridge",
                         )

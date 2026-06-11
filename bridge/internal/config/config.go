@@ -34,6 +34,12 @@ type HTTPConfig struct {
 	ListenAddress              string        `yaml:"listen_address"`
 	MetricsPath                string        `yaml:"metrics_path"`
 	HealthPath                 string        `yaml:"health_path"`
+	AuthToken                  string        `yaml:"auth_token"`
+	AuthTokenEnv               string        `yaml:"auth_token_env"`
+	AuthQueryToken             bool          `yaml:"auth_query_token"`
+	AllowedOrigins             []string      `yaml:"allowed_origins"`
+	TrustedProxies             []string      `yaml:"trusted_proxies"`
+	MaxRequestBodyBytes        int64         `yaml:"max_request_body_bytes"`
 	ReadTimeout                time.Duration `yaml:"read_timeout"`
 	WriteTimeout               time.Duration `yaml:"write_timeout"`
 	IdleTimeout                time.Duration `yaml:"idle_timeout"`
@@ -224,6 +230,9 @@ func defaultConfig() Config {
 			ListenAddress:              ":9205",
 			MetricsPath:                "/metrics",
 			HealthPath:                 "/healthz",
+			AuthTokenEnv:               "DAHUABRIDGE_HTTP_AUTH_TOKEN",
+			AuthQueryToken:             true,
+			MaxRequestBodyBytes:        4 << 20,
 			ReadTimeout:                5 * time.Second,
 			WriteTimeout:               60 * time.Second,
 			IdleTimeout:                60 * time.Second,
@@ -277,6 +286,19 @@ func defaultConfig() Config {
 func (c *Config) normalize() error {
 	c.HTTP.MetricsPath = normalizePath(c.HTTP.MetricsPath, "/metrics")
 	c.HTTP.HealthPath = normalizePath(c.HTTP.HealthPath, "/healthz")
+	c.HTTP.AuthToken = strings.TrimSpace(c.HTTP.AuthToken)
+	c.HTTP.AuthTokenEnv = strings.TrimSpace(c.HTTP.AuthTokenEnv)
+	if c.HTTP.AuthTokenEnv == "" {
+		c.HTTP.AuthTokenEnv = "DAHUABRIDGE_HTTP_AUTH_TOKEN"
+	}
+	if c.HTTP.AuthToken == "" {
+		c.HTTP.AuthToken = strings.TrimSpace(os.Getenv(c.HTTP.AuthTokenEnv))
+	}
+	c.HTTP.AllowedOrigins = normalizeStringList(c.HTTP.AllowedOrigins)
+	c.HTTP.TrustedProxies = normalizeStringList(c.HTTP.TrustedProxies)
+	if c.HTTP.MaxRequestBodyBytes <= 0 {
+		c.HTTP.MaxRequestBodyBytes = 4 << 20
+	}
 	if c.HTTP.AdminRateLimitPerMinute <= 0 {
 		c.HTTP.AdminRateLimitPerMinute = 30
 	}
@@ -1101,6 +1123,27 @@ func appendMissingString(values []string, additions ...string) []string {
 		values = append(values, addition)
 	}
 	return values
+}
+
+func normalizeStringList(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	normalized := make([]string, 0, len(values))
+	seen := map[string]struct{}{}
+	for _, value := range values {
+		trimmed := strings.TrimSpace(value)
+		if trimmed == "" {
+			continue
+		}
+		key := strings.ToLower(trimmed)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		normalized = append(normalized, trimmed)
+	}
+	return normalized
 }
 
 func uniqueLowerStrings(values []string) []string {

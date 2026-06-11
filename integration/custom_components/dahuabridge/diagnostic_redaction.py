@@ -2,10 +2,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from .const import CONF_BRIDGE_URL
+from .const import CONF_API_TOKEN, CONF_BRIDGE_URL
 
 REDACTED = "**REDACTED**"
-CONFIG_REDACT_KEYS = {CONF_BRIDGE_URL}
+CONFIG_REDACT_KEYS = {CONF_API_TOKEN, CONF_BRIDGE_URL}
 PAYLOAD_REDACT_KEYS = {
     "answer_url",
     "base_url",

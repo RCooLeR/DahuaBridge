@@ -19,6 +19,23 @@ http:
   write_timeout: 10s
   # Maximum idle keep-alive time for HTTP connections.
   idle_timeout: 60s
+  # Optional API token for bridge HTTP routes. Leave empty to disable bridge-level auth.
+  # Prefer setting DAHUABRIDGE_HTTP_AUTH_TOKEN in Docker instead of storing the token in YAML.
+  auth_token: ""
+  # Environment variable used when auth_token is empty.
+  auth_token_env: DAHUABRIDGE_HTTP_AUTH_TOKEN
+  # Allow browser-facing media/snapshot URLs to authenticate with ?auth_token=... when bridge auth is enabled.
+  # This is useful for Home Assistant camera URLs, which cannot always add custom Authorization headers.
+  auth_query_token: true
+  # Optional CORS origin allowlist. Empty means allow all origins, which is convenient behind Home Assistant.
+  # Use explicit origins when the bridge is exposed outside a trusted reverse proxy.
+  allowed_origins: []
+  # Optional reverse-proxy CIDRs/IPs whose X-Forwarded-For / X-Real-IP headers are trusted for per-client rate limits.
+  # Example for a Docker bridge network:
+  # trusted_proxies: ["172.18.0.0/16"]
+  trusted_proxies: []
+  # Maximum accepted request body size for API/admin requests.
+  max_request_body_bytes: 4194304
   # Rate limit for admin/API actions per client, per minute. Increase for heavy /admin/test-bridge diagnostics.
   admin_rate_limit_per_minute: 300
   # Burst size for admin/API actions before rate limiting kicks in. Raise this if you click many diagnostics quickly.

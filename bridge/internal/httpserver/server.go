@@ -109,14 +109,17 @@ func New(
 	adminLimiter := newPerClientRateLimiter(
 		defaultPositiveInt(cfg.AdminRateLimitPerMinute, 30),
 		defaultPositiveInt(cfg.AdminRateLimitBurst, 10),
+		cfg.TrustedProxies,
 	)
 	snapshotLimiter := newPerClientRateLimiter(
 		defaultPositiveInt(cfg.SnapshotRateLimitPerMinute, 240),
 		defaultPositiveInt(cfg.SnapshotRateLimitBurst, 40),
+		cfg.TrustedProxies,
 	)
 	mediaLimiter := newPerClientRateLimiter(
 		defaultPositiveInt(cfg.MediaRateLimitPerMinute, 60),
 		defaultPositiveInt(cfg.MediaRateLimitBurst, 12),
+		cfg.TrustedProxies,
 	)
 	writeTimeout := cfg.WriteTimeout
 	if writeTimeout <= 0 || writeTimeout < 60*time.Second {
@@ -137,7 +140,10 @@ func New(
 		mediaLimiter,
 	)
 	router := chi.NewRouter()
-	router.Use(corsMiddleware)
+	router.Use(securityHeadersMiddleware)
+	router.Use(corsMiddleware(cfg))
+	router.Use(maxRequestBodyMiddleware(cfg.MaxRequestBodyBytes))
+	router.Use(authMiddleware(cfg))
 	router.Use(debugAccessLogMiddleware(httpLogger))
 	controller.registerRoutes(router)
 
@@ -4395,28 +4401,60 @@ func firstNonEmpty(values ...string) string {
 	return ""
 }
 
-func corsMiddleware(next http.Handler) http.Handler {
+func securityHeadersMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		headers := w.Header()
-		headers.Set("Access-Control-Allow-Origin", "*")
-		headers.Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
-		headers.Set("Access-Control-Expose-Headers", "Content-Length, Content-Type")
-		headers.Add("Vary", "Origin")
-		headers.Add("Vary", "Access-Control-Request-Method")
-		headers.Add("Vary", "Access-Control-Request-Headers")
-
-		requestHeaders := strings.TrimSpace(r.Header.Get("Access-Control-Request-Headers"))
-		if requestHeaders != "" {
-			headers.Set("Access-Control-Allow-Headers", requestHeaders)
-		} else {
-			headers.Set("Access-Control-Allow-Headers", "Accept, Authorization, Content-Type")
-		}
-
-		if r.Method == http.MethodOptions {
-			w.WriteHeader(http.StatusNoContent)
-			return
-		}
-
+		headers.Set("X-Content-Type-Options", "nosniff")
+		headers.Set("Referrer-Policy", "no-referrer")
 		next.ServeHTTP(w, r)
 	})
+}
+
+func corsMiddleware(cfg config.HTTPConfig) func(http.Handler) http.Handler {
+	allowedOrigins := append([]string(nil), cfg.AllowedOrigins...)
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			headers := w.Header()
+			headers.Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
+			headers.Set("Access-Control-Expose-Headers", "Content-Length, Content-Type")
+			headers.Add("Vary", "Origin")
+			headers.Add("Vary", "Access-Control-Request-Method")
+			headers.Add("Vary", "Access-Control-Request-Headers")
+
+			if origin := allowedCORSOrigin(r.Header.Get("Origin"), allowedOrigins); origin != "" {
+				headers.Set("Access-Control-Allow-Origin", origin)
+			}
+
+			requestHeaders := strings.TrimSpace(r.Header.Get("Access-Control-Request-Headers"))
+			if requestHeaders != "" {
+				headers.Set("Access-Control-Allow-Headers", requestHeaders)
+			} else {
+				headers.Set("Access-Control-Allow-Headers", "Accept, Authorization, Content-Type, X-DahuaBridge-Token")
+			}
+
+			if r.Method == http.MethodOptions {
+				w.WriteHeader(http.StatusNoContent)
+				return
+			}
+
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+func allowedCORSOrigin(origin string, allowedOrigins []string) string {
+	origin = strings.TrimSpace(origin)
+	if len(allowedOrigins) == 0 {
+		return "*"
+	}
+	if origin == "" {
+		return ""
+	}
+	for _, allowed := range allowedOrigins {
+		allowed = strings.TrimSpace(allowed)
+		if allowed == "*" || strings.EqualFold(allowed, origin) {
+			return allowed
+		}
+	}
+	return ""
 }

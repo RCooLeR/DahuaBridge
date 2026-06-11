@@ -624,6 +624,112 @@ func TestAPIResponsesIncludeCORSHeaders(t *testing.T) {
 	}
 }
 
+func TestAPICORSCanRestrictAllowedOrigins(t *testing.T) {
+	server := newTestServerWithConfig(config.HTTPConfig{
+		ListenAddress:  ":0",
+		MetricsPath:    "/metrics",
+		HealthPath:     "/healthz",
+		AllowedOrigins: []string{"https://ha.example.com"},
+		AuthQueryToken: true,
+		AuthTokenEnv:   "DAHUABRIDGE_HTTP_AUTH_TOKEN",
+	}, stubSnapshotReader{}, nil, stubActionReader{}, stubEventReader{})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/status", nil)
+	req.Header.Set("Origin", "https://other.example.com")
+	rec := httptest.NewRecorder()
+
+	server.httpServer.Handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != "" {
+		t.Fatalf("unexpected allow origin header %q", got)
+	}
+}
+
+func TestAPIAuthProtectsControlRoutesWhenConfigured(t *testing.T) {
+	unlocked := false
+	server := newTestServerWithConfig(config.HTTPConfig{
+		ListenAddress:  ":0",
+		MetricsPath:    "/metrics",
+		HealthPath:     "/healthz",
+		AuthToken:      "secret-token",
+		AuthQueryToken: true,
+		AuthTokenEnv:   "DAHUABRIDGE_HTTP_AUTH_TOKEN",
+	}, stubSnapshotReader{}, nil, stubActionReader{
+		unlock: func(_ context.Context, _ string, _ int) error {
+			unlocked = true
+			return nil
+		},
+	}, stubEventReader{})
+
+	unauthenticated := httptest.NewRequest(http.MethodPost, "/api/v1/vto/front_vto/locks/0/unlock", nil)
+	unauthenticatedRec := httptest.NewRecorder()
+	server.httpServer.Handler.ServeHTTP(unauthenticatedRec, unauthenticated)
+
+	if unauthenticatedRec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected unauthenticated status 401, got %d: %s", unauthenticatedRec.Code, unauthenticatedRec.Body.String())
+	}
+	if unlocked {
+		t.Fatal("unlock action should not run without auth")
+	}
+
+	authenticated := httptest.NewRequest(http.MethodPost, "/api/v1/vto/front_vto/locks/0/unlock", nil)
+	authenticated.Header.Set("Authorization", "Bearer secret-token")
+	authenticatedRec := httptest.NewRecorder()
+	server.httpServer.Handler.ServeHTTP(authenticatedRec, authenticated)
+
+	if authenticatedRec.Code != http.StatusOK {
+		t.Fatalf("expected authenticated status 200, got %d: %s", authenticatedRec.Code, authenticatedRec.Body.String())
+	}
+	if !unlocked {
+		t.Fatal("unlock action should run with bearer token")
+	}
+}
+
+func TestAPIAuthKeepsStatusAndMetricsOpen(t *testing.T) {
+	server := newTestServerWithConfig(config.HTTPConfig{
+		ListenAddress: ":0",
+		MetricsPath:   "/metrics",
+		HealthPath:    "/healthz",
+		AuthToken:     "secret-token",
+		AuthTokenEnv:  "DAHUABRIDGE_HTTP_AUTH_TOKEN",
+	}, stubSnapshotReader{}, nil, stubActionReader{}, stubEventReader{})
+
+	for _, path := range []string{"/healthz", "/readyz", "/api/v1/status", "/metrics"} {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		rec := httptest.NewRecorder()
+		server.httpServer.Handler.ServeHTTP(rec, req)
+		if rec.Code == http.StatusUnauthorized {
+			t.Fatalf("expected %s to stay unauthenticated", path)
+		}
+	}
+}
+
+func TestAPIAuthAcceptsQueryTokenWhenEnabled(t *testing.T) {
+	server := newTestServerWithConfig(config.HTTPConfig{
+		ListenAddress:  ":0",
+		MetricsPath:    "/metrics",
+		HealthPath:     "/healthz",
+		AuthToken:      "secret-token",
+		AuthQueryToken: true,
+		AuthTokenEnv:   "DAHUABRIDGE_HTTP_AUTH_TOKEN",
+	}, stubSnapshotReader{
+		listStreams: func(bool) []streams.Entry {
+			return nil
+		},
+	}, nil, stubActionReader{}, stubEventReader{})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/streams?auth_token=secret-token", nil)
+	rec := httptest.NewRecorder()
+	server.httpServer.Handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestUnlockVTOLockEndpointRejectsInvalidIndex(t *testing.T) {
 	server := newTestServer(stubActionReader{}, stubEventReader{})
 
@@ -1136,6 +1242,56 @@ func TestProbeDeviceEndpointRateLimited(t *testing.T) {
 	}
 	if rec2.Header().Get("Retry-After") == "" {
 		t.Fatal("expected Retry-After header")
+	}
+}
+
+func TestRateLimiterOnlyTrustsForwardedHeadersFromTrustedProxies(t *testing.T) {
+	server := newTestServerWithConfig(config.HTTPConfig{
+		ListenAddress:           ":0",
+		MetricsPath:             "/metrics",
+		HealthPath:              "/healthz",
+		AdminRateLimitPerMinute: 1,
+		AdminRateLimitBurst:     1,
+		TrustedProxies:          []string{"10.0.0.1"},
+	}, stubSnapshotReader{}, nil, stubActionReader{
+		probe: func(_ context.Context, _ string) (*dahua.ProbeResult, error) {
+			return &dahua.ProbeResult{Root: dahua.Device{ID: "front_vto"}}, nil
+		},
+	}, stubEventReader{})
+
+	first := httptest.NewRequest(http.MethodPost, "/api/v1/devices/front_vto/probe", nil)
+	first.RemoteAddr = "10.0.0.1:1234"
+	first.Header.Set("X-Forwarded-For", "192.168.1.10")
+	firstRec := httptest.NewRecorder()
+	server.httpServer.Handler.ServeHTTP(firstRec, first)
+
+	second := httptest.NewRequest(http.MethodPost, "/api/v1/devices/front_vto/probe", nil)
+	second.RemoteAddr = "10.0.0.1:5678"
+	second.Header.Set("X-Forwarded-For", "192.168.1.11")
+	secondRec := httptest.NewRecorder()
+	server.httpServer.Handler.ServeHTTP(secondRec, second)
+
+	if firstRec.Code != http.StatusOK || secondRec.Code != http.StatusOK {
+		t.Fatalf("expected trusted proxy forwarded clients to be rate limited independently, got %d and %d", firstRec.Code, secondRec.Code)
+	}
+
+	third := httptest.NewRequest(http.MethodPost, "/api/v1/devices/front_vto/probe", nil)
+	third.RemoteAddr = "10.0.0.2:1234"
+	third.Header.Set("X-Forwarded-For", "192.168.1.12")
+	thirdRec := httptest.NewRecorder()
+	server.httpServer.Handler.ServeHTTP(thirdRec, third)
+
+	fourth := httptest.NewRequest(http.MethodPost, "/api/v1/devices/front_vto/probe", nil)
+	fourth.RemoteAddr = "10.0.0.2:5678"
+	fourth.Header.Set("X-Forwarded-For", "192.168.1.13")
+	fourthRec := httptest.NewRecorder()
+	server.httpServer.Handler.ServeHTTP(fourthRec, fourth)
+
+	if thirdRec.Code != http.StatusOK {
+		t.Fatalf("expected untrusted proxy first request 200, got %d: %s", thirdRec.Code, thirdRec.Body.String())
+	}
+	if fourthRec.Code != http.StatusTooManyRequests {
+		t.Fatalf("expected untrusted proxy second request to share remote limit, got %d: %s", fourthRec.Code, fourthRec.Body.String())
 	}
 }
 

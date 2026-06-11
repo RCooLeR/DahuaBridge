@@ -193,6 +193,15 @@ func TestHTTPRateLimitDefaults(t *testing.T) {
 	if cfg.HTTP.WriteTimeout != 60*time.Second {
 		t.Fatalf("unexpected http write timeout default %s", cfg.HTTP.WriteTimeout)
 	}
+	if cfg.HTTP.AuthTokenEnv != "DAHUABRIDGE_HTTP_AUTH_TOKEN" {
+		t.Fatalf("unexpected auth token env default %q", cfg.HTTP.AuthTokenEnv)
+	}
+	if !cfg.HTTP.AuthQueryToken {
+		t.Fatal("expected auth query token support to default on")
+	}
+	if cfg.HTTP.MaxRequestBodyBytes != 4<<20 {
+		t.Fatalf("unexpected max request body default %d", cfg.HTTP.MaxRequestBodyBytes)
+	}
 	if cfg.HTTP.AdminRateLimitPerMinute != 30 || cfg.HTTP.AdminRateLimitBurst != 10 {
 		t.Fatalf("unexpected admin rate limit defaults: %+v", cfg.HTTP)
 	}
@@ -201,6 +210,38 @@ func TestHTTPRateLimitDefaults(t *testing.T) {
 	}
 	if cfg.HTTP.MediaRateLimitPerMinute != 60 || cfg.HTTP.MediaRateLimitBurst != 12 {
 		t.Fatalf("unexpected media rate limit defaults: %+v", cfg.HTTP)
+	}
+}
+
+func TestHTTPAuthTokenCanLoadFromEnvironment(t *testing.T) {
+	t.Setenv("DAHUABRIDGE_HTTP_AUTH_TOKEN_TEST", " env-secret ")
+	cfg := defaultConfig()
+	cfg.HTTP.AuthTokenEnv = "DAHUABRIDGE_HTTP_AUTH_TOKEN_TEST"
+	cfg.HTTP.AuthToken = ""
+
+	if err := cfg.normalize(); err != nil {
+		t.Fatalf("normalize returned error: %v", err)
+	}
+
+	if cfg.HTTP.AuthToken != "env-secret" {
+		t.Fatalf("unexpected auth token %q", cfg.HTTP.AuthToken)
+	}
+}
+
+func TestHTTPListSettingsNormalize(t *testing.T) {
+	cfg := defaultConfig()
+	cfg.HTTP.AllowedOrigins = []string{" https://ha.example.com ", "", "https://ha.example.com"}
+	cfg.HTTP.TrustedProxies = []string{" 172.18.0.0/16 ", "172.18.0.0/16"}
+
+	if err := cfg.normalize(); err != nil {
+		t.Fatalf("normalize returned error: %v", err)
+	}
+
+	if !reflect.DeepEqual(cfg.HTTP.AllowedOrigins, []string{"https://ha.example.com"}) {
+		t.Fatalf("unexpected allowed origins %+v", cfg.HTTP.AllowedOrigins)
+	}
+	if !reflect.DeepEqual(cfg.HTTP.TrustedProxies, []string{"172.18.0.0/16"}) {
+		t.Fatalf("unexpected trusted proxies %+v", cfg.HTTP.TrustedProxies)
 	}
 }
 

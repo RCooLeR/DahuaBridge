@@ -5,6 +5,7 @@ from homeassistant.const import Platform
 DOMAIN = "dahuabridge"
 
 CONF_BRIDGE_URL = "bridge_url"
+CONF_API_TOKEN = "api_token"
 CONF_SCAN_INTERVAL = "scan_interval"
 CONF_PREFERRED_VIDEO_PROFILE = "preferred_video_profile"
 CONF_PREFERRED_VIDEO_SOURCE = "preferred_video_source"

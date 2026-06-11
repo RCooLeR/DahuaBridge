@@ -10,6 +10,20 @@ This file documents the HTTP API implemented by the current bridge code. JSON en
 - `GET /metrics`: Prometheus metrics.
 - `GET /admin`: built-in diagnostic UI.
 
+## Authentication
+
+Bridge-level HTTP auth is optional. When `http.auth_token` or the configured
+`http.auth_token_env` environment variable is set, protected routes accept:
+
+- `Authorization: Bearer <token>`
+- `X-DahuaBridge-Token: <token>`
+- `?auth_token=<token>` or `?token=<token>` when `http.auth_query_token` is true
+
+Health, readiness, status, metrics, CORS preflight, and static admin assets stay
+open so monitors and browser startup can still work. Query tokens are intended
+for Home Assistant camera/media URLs where headers are not available; use them
+only over HTTPS.
+
 ## Devices And Streams
 
 - `GET /api/v1/devices`: current probe result for all configured devices.
