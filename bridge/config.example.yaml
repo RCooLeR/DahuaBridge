@@ -7,8 +7,8 @@ log:
 
 # Top-level HTTP server settings for admin pages, APIs, metrics, snapshots, and bridge-hosted media URLs.
 http:
-  # TCP listen address for the built-in HTTP server. ":9205" means "listen on all interfaces on port 9205".
-  listen_address: ":9205"
+  # TCP listen address for the built-in HTTP server. ":9020" means "listen on all interfaces on port 9020".
+  listen_address: ":9020"
   # URL path for Prometheus-style metrics. Change only if you already use /metrics for something else behind a reverse proxy.
   metrics_path: /metrics
   # URL path for a simple liveness probe. Returns "ok" when the process is alive.
@@ -137,6 +137,8 @@ archive:
   prefetch_smd: true
   # Enable IVS event indexing.
   prefetch_ivs: true
+  # Create automatic MP4 backup clips for indexed SMD/IVS events. Set false for DB-only event counts/search.
+  export_event_mp4: true
   # Wait this long after an event ends before automatic MP4 export starts.
   export_delay: 1h
   # Optional automatic event-video export channel lists. Empty means all channels.
@@ -151,7 +153,7 @@ archive:
 # Top-level Home Assistant integration settings for the native custom integration and bridge-generated URLs.
 home_assistant:
   # Browser- and HA-reachable base URL for this bridge. Must be the URL users and Home Assistant can actually open.
-  public_base_url: http://127.0.0.1:9205
+  public_base_url: http://127.0.0.1:9020
 
 # Optional Imou Open Platform settings for channels mapped with channel_imou_overrides.
 imou:

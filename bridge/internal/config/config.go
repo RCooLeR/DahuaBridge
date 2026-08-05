@@ -91,6 +91,7 @@ type ArchiveConfig struct {
 	MaxParallelJobs    int           `yaml:"max_parallel_jobs"`
 	PrefetchSMD        bool          `yaml:"prefetch_smd"`
 	PrefetchIVS        bool          `yaml:"prefetch_ivs"`
+	ExportEventMP4     *bool         `yaml:"export_event_mp4"`
 	ExportDelay        time.Duration `yaml:"export_delay"`
 	ExportIVS          []int         `yaml:"export_ivs"`
 	ExportSMDPerson    []int         `yaml:"export_smd_person"`
@@ -227,7 +228,7 @@ func defaultConfig() Config {
 			Level: "info",
 		},
 		HTTP: HTTPConfig{
-			ListenAddress:              ":9205",
+			ListenAddress:              ":9020",
 			MetricsPath:                "/metrics",
 			HealthPath:                 "/healthz",
 			AuthTokenEnv:               "DAHUABRIDGE_HTTP_AUTH_TOKEN",
@@ -274,6 +275,7 @@ func defaultConfig() Config {
 			MaxParallelJobs: 2,
 			PrefetchSMD:     true,
 			PrefetchIVS:     true,
+			ExportEventMP4:  ptr.Bool(true),
 			ExportDelay:     time.Hour,
 			Cron:            "5,35 * * * *",
 		},
@@ -424,6 +426,9 @@ func (c *Config) normalize() error {
 	}
 	if c.Archive.MaxParallelJobs <= 0 {
 		c.Archive.MaxParallelJobs = 2
+	}
+	if c.Archive.ExportEventMP4 == nil {
+		c.Archive.ExportEventMP4 = ptr.Bool(true)
 	}
 	if c.Archive.ExportDelay <= 0 {
 		c.Archive.ExportDelay = time.Hour
@@ -643,6 +648,13 @@ func (d DeviceConfig) EnabledValue() bool {
 	}
 
 	return *d.Enabled
+}
+
+func (c ArchiveConfig) ExportEventMP4Enabled() bool {
+	if c.ExportEventMP4 == nil {
+		return true
+	}
+	return *c.ExportEventMP4
 }
 
 func (d DeviceConfig) AllowsChannel(channel int) bool {

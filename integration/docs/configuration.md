@@ -9,7 +9,7 @@ The bridge URL must be reachable by Home Assistant. It must include `http://` or
 Examples:
 
 ```text
-http://bridge-host:9205
+http://bridge-host:9020
 https://ha.example.com/dahuabridge
 ```
 
@@ -20,7 +20,7 @@ For example, if nginx exposes the bridge with:
 ```nginx
 location /dahua-bridge/ {
   rewrite ^/dahua-bridge/(.*) /$1 break;
-  proxy_pass http://bridge:9205;
+  proxy_pass http://bridge:9020;
 }
 ```
 

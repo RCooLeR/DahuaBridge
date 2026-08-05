@@ -36,13 +36,13 @@ function buildCamera(overrides: Partial<CameraViewModel> = {}): CameraViewModel 
     cameraEntityId: "camera.west20_nvr_channel_01_camera",
     online: true,
     streamAvailable: true,
-    bridgeBaseUrl: "http://bridge.local:9205",
+    bridgeBaseUrl: "http://bridge.local:9020",
     eventsUrl: null,
     snapshotUrl: null,
     captureSnapshotUrl: null,
     stream: {
       available: true,
-      source: "http://bridge.local:9205/api/v1/media/hls/west20_nvr_channel_01/quality",
+      source: "http://bridge.local:9020/api/v1/media/hls/west20_nvr_channel_01/quality",
       snapshotUrl: null,
       localIntercomUrl: null,
       onvifStreamUrl: null,
@@ -62,8 +62,8 @@ function buildCamera(overrides: Partial<CameraViewModel> = {}): CameraViewModel 
           key: "quality",
           name: "Quality",
           streamUrl: null,
-          localMjpegUrl: "http://bridge.local:9205/api/v1/media/mjpeg/west20_nvr_channel_01/quality",
-          localHlsUrl: "http://bridge.local:9205/api/v1/media/hls/west20_nvr_channel_01/quality",
+          localMjpegUrl: "http://bridge.local:9020/api/v1/media/mjpeg/west20_nvr_channel_01/quality",
+          localHlsUrl: "http://bridge.local:9020/api/v1/media/hls/west20_nvr_channel_01/quality",
           localDashUrl: null,
           localWebRtcUrl: null,
           subtype: 0,
@@ -76,7 +76,7 @@ function buildCamera(overrides: Partial<CameraViewModel> = {}): CameraViewModel 
           key: "stable",
           name: "Stable",
           streamUrl: null,
-          localMjpegUrl: "http://bridge.local:9205/api/v1/media/mjpeg/west20_nvr_channel_01/stable",
+          localMjpegUrl: "http://bridge.local:9020/api/v1/media/mjpeg/west20_nvr_channel_01/stable",
           localHlsUrl: null,
           localDashUrl: null,
           localWebRtcUrl: null,
@@ -173,7 +173,7 @@ describe("camera media helpers", () => {
         profiles: [
           {
             ...buildCamera().stream.profiles[0]!,
-            localWebRtcUrl: "http://bridge.local:9205/api/v1/media/webrtc/west20_nvr_channel_01/quality",
+            localWebRtcUrl: "http://bridge.local:9020/api/v1/media/webrtc/west20_nvr_channel_01/quality",
           },
           ...buildCamera().stream.profiles.slice(1),
         ],
@@ -198,11 +198,11 @@ describe("camera media helpers", () => {
         profiles: [
           {
             ...buildCamera().stream.profiles[0]!,
-            localWebRtcUrl: "http://bridge.local:9205/api/v1/media/webrtc/west20_nvr_channel_01/quality",
+            localWebRtcUrl: "http://bridge.local:9020/api/v1/media/webrtc/west20_nvr_channel_01/quality",
           },
           {
             ...buildCamera().stream.profiles[1]!,
-            localHlsUrl: "http://bridge.local:9205/api/v1/media/hls/west20_nvr_channel_01/stable",
+            localHlsUrl: "http://bridge.local:9020/api/v1/media/hls/west20_nvr_channel_01/stable",
           },
         ],
       },
@@ -398,14 +398,14 @@ describe("camera media helpers", () => {
           state: "streaming",
           attributes: {
             entity_picture: "/api/camera_proxy/camera.west20_nvr_channel_01_camera",
-            snapshot_url: "http://bridge.local:9205/api/v1/nvr/west20_nvr/channels/1/snapshot",
+            snapshot_url: "http://bridge.local:9020/api/v1/nvr/west20_nvr/channels/1/snapshot",
           },
           last_changed: "",
           last_updated: "",
         },
         null,
       ),
-    ).toBe("http://bridge.local:9205/api/v1/nvr/west20_nvr/channels/1/snapshot");
+    ).toBe("http://bridge.local:9020/api/v1/nvr/west20_nvr/channels/1/snapshot");
   });
 
   it("uses the direct VTO snapshot for previews before the media capture endpoint", () => {
@@ -444,9 +444,9 @@ describe("camera media helpers", () => {
       profiles: {
         quality: {
           name: "Quality",
-          dashUrl: "http://bridge.local:9205/api/v1/media/dash/nvrpb_test/quality/manifest.mpd",
-          hlsUrl: "http://bridge.local:9205/api/v1/media/hls/nvrpb_test/quality/index.m3u8",
-          mjpegUrl: "http://bridge.local:9205/api/v1/media/mjpeg/nvrpb_test?profile=quality",
+          dashUrl: "http://bridge.local:9020/api/v1/media/dash/nvrpb_test/quality/manifest.mpd",
+          hlsUrl: "http://bridge.local:9020/api/v1/media/hls/nvrpb_test/quality/index.m3u8",
+          mjpegUrl: "http://bridge.local:9020/api/v1/media/mjpeg/nvrpb_test?profile=quality",
           webrtcOfferUrl: null,
         },
       },

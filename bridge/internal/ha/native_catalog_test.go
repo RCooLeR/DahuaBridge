@@ -1,6 +1,7 @@
 package ha
 
 import (
+	"encoding/json"
 	"testing"
 
 	"RCooLeR/DahuaBridge/internal/dahua"
@@ -150,9 +151,130 @@ func TestBuildNativeCatalogFlattensIntercomSummaryIntoStateInfo(t *testing.T) {
 }
 
 func TestBuildNativeCatalogIncludesMetaBaseURL(t *testing.T) {
-	catalog := BuildNativeCatalog(nil, nil, " http://bridge.local:9205/ ")
+	catalog := BuildNativeCatalog(nil, nil, " http://bridge.local:9020/ ")
 
-	if catalog.Meta.BaseURL != "http://bridge.local:9205" {
+	if catalog.Meta.BaseURL != "http://bridge.local:9020" {
 		t.Fatalf("expected meta base url to be normalized, got %q", catalog.Meta.BaseURL)
+	}
+}
+
+func TestBuildNativeCatalogJSONContract(t *testing.T) {
+	catalog := BuildNativeCatalog([]*dahua.ProbeResult{
+		{
+			Root: dahua.Device{
+				ID:           "west20_nvr",
+				Name:         "West 20 NVR",
+				Manufacturer: "Dahua",
+				Kind:         dahua.DeviceKindNVR,
+			},
+			Children: []dahua.Device{
+				{
+					ID:           "west20_nvr_channel_01",
+					ParentID:     "west20_nvr",
+					Name:         "Front Gate",
+					Manufacturer: "Dahua",
+					Kind:         dahua.DeviceKindNVRChannel,
+				},
+			},
+			States: map[string]dahua.DeviceState{
+				"west20_nvr": {
+					Available: true,
+					Info: map[string]any{
+						"channel_count": 32,
+					},
+				},
+				"west20_nvr_channel_01": {
+					Available: true,
+					Info: map[string]any{
+						"motion": true,
+					},
+				},
+			},
+		},
+	}, []streams.Entry{
+		{
+			ID:                 "west20_nvr_channel_01",
+			RootDeviceID:       "west20_nvr",
+			SourceDeviceID:     "west20_nvr_channel_01",
+			DeviceKind:         dahua.DeviceKindNVRChannel,
+			Name:               "Front Gate",
+			Channel:            1,
+			SnapshotURL:        "http://bridge.local:9020/api/v1/nvr/west20_nvr/channels/1/snapshot",
+			RecommendedProfile: "quality",
+			Profiles: map[string]streams.Profile{
+				"quality": {
+					Name:      "quality",
+					StreamURL: "rtsp://nvr.example.local/cam/realmonitor?channel=1&subtype=0",
+					Subtype:   0,
+				},
+			},
+		},
+	}, "http://bridge.local:9020")
+	catalog.GeneratedAt = "<generated>"
+
+	body, err := json.MarshalIndent(catalog, "", "  ")
+	if err != nil {
+		t.Fatalf("marshal catalog: %v", err)
+	}
+
+	const expected = `{
+  "generated_at": "\u003cgenerated\u003e",
+  "meta": {
+    "base_url": "http://bridge.local:9020"
+  },
+  "devices": [
+    {
+      "device": {
+        "id": "west20_nvr",
+        "name": "West 20 NVR",
+        "manufacturer": "Dahua",
+        "kind": "nvr"
+      },
+      "state": {
+        "available": true,
+        "info": {
+          "channel_count": 32
+        }
+      }
+    },
+    {
+      "device": {
+        "id": "west20_nvr_channel_01",
+        "parent_id": "west20_nvr",
+        "name": "Front Gate",
+        "manufacturer": "Dahua",
+        "kind": "nvr_channel"
+      },
+      "state": {
+        "available": true,
+        "info": {
+          "motion": true
+        }
+      },
+      "stream": {
+        "id": "west20_nvr_channel_01",
+        "root_device_id": "west20_nvr",
+        "source_device_id": "west20_nvr_channel_01",
+        "device_kind": "nvr_channel",
+        "name": "Front Gate",
+        "channel": 1,
+        "snapshot_url": "http://bridge.local:9020/api/v1/nvr/west20_nvr/channels/1/snapshot",
+        "recommended_profile": "quality",
+        "recommended_ha_integration": "",
+        "onvif_h264_available": false,
+        "profiles": {
+          "quality": {
+            "name": "quality",
+            "stream_url": "rtsp://nvr.example.local/cam/realmonitor?channel=1\u0026subtype=0",
+            "subtype": 0
+          }
+        }
+      }
+    }
+  ]
+}`
+
+	if string(body) != expected {
+		t.Fatalf("native catalog JSON contract changed\nwant:\n%s\n\ngot:\n%s", expected, string(body))
 	}
 }

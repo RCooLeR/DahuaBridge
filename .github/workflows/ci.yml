@@ -30,8 +30,14 @@ jobs:
           go-version-file: bridge/go.mod
           cache-dependency-path: bridge/go.sum
 
+      - name: Vet
+        run: go vet ./...
+
       - name: Test
         run: go test ./...
+
+      - name: Race smoke
+        run: CGO_ENABLED=1 go test -race ./internal/app ./internal/config ./internal/ha ./internal/metrics ./internal/store ./internal/streams
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -49,6 +55,38 @@ jobs:
             VERSION=ci
             COMMIT=${{ github.sha }}
             BUILD_DATE=${{ github.event.head_commit.timestamp || github.run_id }}
+
+      - name: Smoke test container
+        run: |
+          cat > /tmp/dahuabridge-config.yaml <<'YAML'
+          log:
+            level: error
+          http:
+            listen_address: ":9020"
+          state_store:
+            enabled: false
+          devices:
+            ipc:
+              - id: smoke_ipc
+                name: Smoke IPC
+                base_url: http://127.0.0.1:1
+                username: smoke
+                password: smoke
+                request_timeout: 100ms
+                poll_interval: 1h
+          YAML
+          docker run -d --name dahuabridge-ci -p 9020:9020 -v /tmp/dahuabridge-config.yaml:/config/config.yaml:ro dahuabridge:ci
+          trap 'docker logs dahuabridge-ci || true; docker rm -f dahuabridge-ci || true' EXIT
+          for _ in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:9020/healthz; then
+              exit 0
+            fi
+            if [ "$(docker inspect -f '{{.State.Running}}' dahuabridge-ci)" != "true" ]; then
+              exit 1
+            fi
+            sleep 1
+          done
+          exit 1
 
   integration:
     name: Home Assistant Integration Tests

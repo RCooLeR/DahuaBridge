@@ -17,8 +17,8 @@ func TestBuildMediaRecordingsURLUsesRootDeviceAndChannelForNVRChannels(t *testin
 		DeviceKind:   dahua.DeviceKindNVRChannel,
 	}
 
-	got := buildMediaRecordingsURL("http://bridge.local:9205", entry)
-	want := "http://bridge.local:9205/api/v1/media/recordings?channel=1&root_device_id=west20_nvr"
+	got := buildMediaRecordingsURL("http://bridge.local:9020", entry)
+	want := "http://bridge.local:9020/api/v1/media/recordings?channel=1&root_device_id=west20_nvr"
 	if got != want {
 		t.Fatalf("unexpected recordings url %q", got)
 	}

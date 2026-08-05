@@ -106,6 +106,9 @@ func TestArchiveDefaults(t *testing.T) {
 	if cfg.Archive.ExportDelay != time.Hour {
 		t.Fatalf("unexpected default archive export_delay %s", cfg.Archive.ExportDelay)
 	}
+	if !cfg.Archive.ExportEventMP4Enabled() {
+		t.Fatal("expected default archive event MP4 export to be enabled")
+	}
 	if len(cfg.Archive.ExportIVS) != 0 ||
 		len(cfg.Archive.ExportSMDPerson) != 0 ||
 		len(cfg.Archive.ExportSMDTransport) != 0 ||
@@ -123,6 +126,7 @@ func TestArchiveExportChannelSettingsNormalize(t *testing.T) {
 	cfg := defaultConfig()
 	data := []byte(`
 archive:
+  export_event_mp4: false
   export_delay: 30m
   export_ivs: [7, 3, 7, 0]
   export_smd_person: []
@@ -138,6 +142,9 @@ archive:
 
 	if cfg.Archive.ExportDelay != 30*time.Minute {
 		t.Fatalf("unexpected export delay %s", cfg.Archive.ExportDelay)
+	}
+	if cfg.Archive.ExportEventMP4Enabled() {
+		t.Fatal("expected explicit export_event_mp4=false to disable event MP4 export")
 	}
 	if !reflect.DeepEqual(cfg.Archive.ExportIVS, []int{3, 7}) {
 		t.Fatalf("unexpected ivs export channels %+v", cfg.Archive.ExportIVS)
@@ -264,12 +271,12 @@ func TestValidateRequiresStateStorePathWhenEnabled(t *testing.T) {
 
 func TestNormalizeHomeAssistantPublicBaseURL(t *testing.T) {
 	cfg := defaultConfig()
-	cfg.HomeAssistant.PublicBaseURL = " http://bridge.local:9205/ "
+	cfg.HomeAssistant.PublicBaseURL = " http://bridge.local:9020/ "
 
 	if err := cfg.normalize(); err != nil {
 		t.Fatalf("normalize returned error: %v", err)
 	}
-	if cfg.HomeAssistant.PublicBaseURL != "http://bridge.local:9205" {
+	if cfg.HomeAssistant.PublicBaseURL != "http://bridge.local:9020" {
 		t.Fatalf("unexpected normalized public base url %q", cfg.HomeAssistant.PublicBaseURL)
 	}
 }

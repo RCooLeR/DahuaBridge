@@ -84,6 +84,7 @@ Legacy note: `hls_temp_path` is still accepted as an alias for `hls_tmp_dir`, bu
 - `max_parallel_jobs`: archive MP4 asset prefetch concurrency cap.
 - `prefetch_smd`: index SMD events.
 - `prefetch_ivs`: index IVS events.
+- `export_event_mp4`: create automatic MP4 backup clips for SMD/IVS events. Set to `false` to keep DB event counts/search while disabling automatic event MP4 creation.
 - `export_delay`: delay after an SMD/IVS event ends before automatic MP4 export starts. Defaults to `1h`.
 - `export_ivs`: IVS event channels allowed for automatic MP4 export. Empty means all channels.
 - `export_smd_person`: SMD person/human event channels allowed for automatic MP4 export. Empty means all channels.

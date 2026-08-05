@@ -295,11 +295,41 @@ func runEventLoop(
 	driver dahua.Driver,
 	eventSource dahua.EventSource,
 ) {
+	runEventLoopWithRetry(ctx, logger, metricsRegistry, probes, driver, eventSource, eventStreamRetryConfig{
+		InitialDelay: time.Second,
+		MaxDelay:     time.Minute,
+	})
+}
+
+type eventStreamRetryConfig struct {
+	InitialDelay time.Duration
+	MaxDelay     time.Duration
+}
+
+func runEventLoopWithRetry(
+	ctx context.Context,
+	logger zerolog.Logger,
+	metricsRegistry *metrics.Registry,
+	probes *store.ProbeStore,
+	driver dahua.Driver,
+	eventSource dahua.EventSource,
+	retry eventStreamRetryConfig,
+) {
 	log := logger.With().
 		Str("device_id", driver.ID()).
 		Str("device_type", string(driver.Kind())).
 		Str("component", "event_stream").
 		Logger()
+
+	if retry.InitialDelay <= 0 {
+		retry.InitialDelay = time.Second
+	}
+	if retry.MaxDelay <= 0 {
+		retry.MaxDelay = time.Minute
+	}
+	if retry.MaxDelay < retry.InitialDelay {
+		retry.MaxDelay = retry.InitialDelay
+	}
 
 	events := make(chan dahua.Event, 32)
 
@@ -308,16 +338,64 @@ func runEventLoop(
 			select {
 			case <-ctx.Done():
 				return
-			case event := <-events:
+			case event, ok := <-events:
+				if !ok {
+					return
+				}
 				handleEvent(log, metricsRegistry, probes, event)
 			}
 		}
 	}()
 
-	err := eventSource.StreamEvents(ctx, events)
-	if err != nil && !errors.Is(err, context.Canceled) {
-		log.Error().Err(err).Msg("event stream stopped")
+	delay := retry.InitialDelay
+	for {
+		if ctx.Err() != nil {
+			metricsRegistry.SetEventStreamUp(driver.ID(), string(driver.Kind()), false)
+			return
+		}
+
+		started := time.Now()
+		metricsRegistry.SetEventStreamUp(driver.ID(), string(driver.Kind()), true)
+		err := eventSource.StreamEvents(ctx, events)
+		metricsRegistry.SetEventStreamUp(driver.ID(), string(driver.Kind()), false)
+		if ctx.Err() != nil || errors.Is(err, context.Canceled) {
+			return
+		}
+
+		metricsRegistry.ObserveEventStreamRestart(driver.ID(), string(driver.Kind()), err)
+		if err != nil {
+			log.Error().Err(err).Dur("retry_in", delay).Msg("event stream stopped; retrying")
+		} else {
+			log.Warn().Dur("retry_in", delay).Msg("event stream stopped without error; retrying")
+		}
+
+		if time.Since(started) >= time.Minute {
+			delay = retry.InitialDelay
+		}
+		if !sleepContext(ctx, delay) {
+			return
+		}
+		delay = minDuration(delay*2, retry.MaxDelay)
 	}
+}
+
+func sleepContext(ctx context.Context, delay time.Duration) bool {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
+	}
+}
+
+func minDuration(left time.Duration, right time.Duration) time.Duration {
+	if left < right {
+		return left
+	}
+	return right
 }
 
 func handleEvent(

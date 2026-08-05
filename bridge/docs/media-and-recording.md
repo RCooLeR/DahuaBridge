@@ -84,9 +84,12 @@ There are two archive indexing flows:
 - SMD/IVS sync fills `smd_ivs_events` and queues MP4 backup export when enabled
 
 Automatic event MP4 export waits for `archive.export_delay` after the event ends
-before creating the clip. Use `archive.export_ivs`, `archive.export_smd_person`,
-`archive.export_smd_transport`, and `archive.export_smd_animal` to limit automatic
-MP4 creation for noisy event types while still keeping those events in the index.
+before creating the clip. Set `archive.export_event_mp4: false` for DB-only SMD/IVS
+history: event rows, counts, summaries, and search remain available, but automatic
+background MP4 backup creation is skipped. Use `archive.export_ivs`,
+`archive.export_smd_person`, `archive.export_smd_transport`, and
+`archive.export_smd_animal` to limit automatic MP4 creation for noisy event types
+while still keeping those events in the index.
 For example, `export_smd_transport: [1, 3, 7]` keeps Dahua transport/vehicle event
 videos only on channels 1, 3, and 7. Empty channel lists mean all channels.
 

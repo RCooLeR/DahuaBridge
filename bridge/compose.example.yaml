@@ -6,7 +6,7 @@ services:
     container_name: dahuabridge
     restart: unless-stopped
     ports:
-      - "9205:9205"
+      - "9020:9020"
     environment:
       TZ: Europe/Kiev
     volumes:

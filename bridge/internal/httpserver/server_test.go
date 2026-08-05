@@ -1662,7 +1662,7 @@ func TestAdminPageEndpoint(t *testing.T) {
 	}, stubSnapshotReader{
 		adminSettings: func() map[string]any {
 			return map[string]any{
-				"home_assistant": map[string]any{"public_base_url": "http://bridge.local:9205"},
+				"home_assistant": map[string]any{"public_base_url": "http://bridge.local:9020"},
 				"devices": map[string]any{
 					"vto": []map[string]any{{
 						"id":       "front_vto",

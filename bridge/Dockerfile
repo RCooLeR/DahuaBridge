@@ -8,8 +8,7 @@ RUN apk add --no-cache git ca-certificates
 WORKDIR /app
 
 COPY go.mod go.sum ./
-RUN --mount=type=cache,target=/go/pkg/mod \
-    go mod download
+RUN go mod download
 
 COPY . .
 
@@ -17,9 +16,7 @@ ARG VERSION=dev
 ARG COMMIT=unknown
 ARG BUILD_DATE=unknown
 
-RUN --mount=type=cache,target=/go/pkg/mod \
-    --mount=type=cache,target=/root/.cache/go-build \
-    set -eux; \
+RUN set -eux; \
     MODULE="$(go list -m)"; \
     CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
     go build \

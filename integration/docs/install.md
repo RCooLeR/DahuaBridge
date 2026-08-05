@@ -30,7 +30,7 @@ Restart Home Assistant after copying the files.
 Example:
 
 ```text
-http://192.168.1.50:9205
+http://192.168.1.50:9020
 ```
 
 For reverse proxy setups, use the full public bridge path:

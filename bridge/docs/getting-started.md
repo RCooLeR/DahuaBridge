@@ -27,7 +27,8 @@ You need:
 6. Tune media only after the basic catalog works. For lower HLS latency, start
    with `media.input_preset: low_latency`, `hls_segment_time: 1s`, and a small
    `hls_list_size`.
-7. For noisy SMD/IVS cameras, use `archive.export_ivs`,
+7. To keep SMD/IVS counts/search without automatic MP4 backups, set
+   `archive.export_event_mp4: false`. For noisy SMD/IVS cameras, use `archive.export_ivs`,
    `archive.export_smd_person`, `archive.export_smd_transport`, and
    `archive.export_smd_animal` to limit automatic MP4 creation while still
    indexing the events.

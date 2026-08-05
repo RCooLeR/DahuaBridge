@@ -77,7 +77,7 @@ If the bridge returns an internal HTTP URL, the integration rewrites it to the c
 
 ```text
 configured bridge URL: https://ha.example.com/dahuabridge
-bridge catalog URL:    http://127.0.0.1:9205/api/v1/events
+bridge catalog URL:    http://127.0.0.1:9020/api/v1/events
 entity attribute URL:  https://ha.example.com/dahuabridge/api/v1/events
 ```
 

@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -9,10 +10,13 @@ import (
 	"time"
 
 	archiveapi "RCooLeR/DahuaBridge/internal/archive"
+	"RCooLeR/DahuaBridge/internal/buildinfo"
 	"RCooLeR/DahuaBridge/internal/config"
 	"RCooLeR/DahuaBridge/internal/dahua"
 	"RCooLeR/DahuaBridge/internal/media"
+	"RCooLeR/DahuaBridge/internal/metrics"
 	"RCooLeR/DahuaBridge/internal/store"
+	"github.com/rs/zerolog"
 )
 
 type stubRuntimeMedia struct {
@@ -35,6 +39,12 @@ type stubSnapshotProvider struct {
 
 type stubRecordingSearcher struct {
 	find func(context.Context, dahua.NVRRecordingQuery) (dahua.NVRRecordingSearchResult, error)
+}
+
+type streamEventsFunc func(context.Context, chan<- dahua.Event) error
+
+func (f streamEventsFunc) StreamEvents(ctx context.Context, sink chan<- dahua.Event) error {
+	return f(ctx, sink)
 }
 
 type stubRuntimeArchiveReader struct {
@@ -232,6 +242,114 @@ func TestArchiveLiveSearcherBypassesAttachedArchive(t *testing.T) {
 	}
 	if len(result.Items) != 1 {
 		t.Fatalf("expected live NVR item, got %+v", result.Items)
+	}
+}
+
+func TestRunEventLoopRetriesAfterConnectFailure(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	probes := store.NewProbeStore()
+	probes.Set("west20_nvr", &dahua.ProbeResult{
+		Root: dahua.Device{ID: "west20_nvr", Kind: dahua.DeviceKindNVR},
+		Children: []dahua.Device{{
+			ID:       "west20_nvr_channel_01",
+			ParentID: "west20_nvr",
+			Kind:     dahua.DeviceKindNVRChannel,
+			Attributes: map[string]string{
+				"channel_index": "1",
+			},
+		}},
+		States: map[string]dahua.DeviceState{
+			"west20_nvr_channel_01": {Available: true},
+		},
+	})
+
+	attempts := make(chan int, 2)
+	var calls atomic.Int32
+	source := streamEventsFunc(func(ctx context.Context, sink chan<- dahua.Event) error {
+		call := int(calls.Add(1))
+		attempts <- call
+		if call == 1 {
+			return errors.New("connect failed")
+		}
+
+		sink <- dahua.Event{
+			DeviceID:   "west20_nvr",
+			DeviceKind: dahua.DeviceKindNVR,
+			ChildID:    "west20_nvr_channel_01",
+			Code:       "VideoMotion",
+			Action:     dahua.EventActionStart,
+			Channel:    1,
+			OccurredAt: time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC),
+		}
+		waitForStoredState(ctx, probes, "west20_nvr", "west20_nvr_channel_01", "motion", true)
+		cancel()
+		<-ctx.Done()
+		return ctx.Err()
+	})
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		runEventLoopWithRetry(
+			ctx,
+			zerolog.Nop(),
+			metrics.New(buildinfo.Info()),
+			probes,
+			stubDriver{id: "west20_nvr", kind: dahua.DeviceKindNVR},
+			source,
+			eventStreamRetryConfig{InitialDelay: time.Millisecond, MaxDelay: time.Millisecond},
+		)
+	}()
+
+	for want := 1; want <= 2; want++ {
+		select {
+		case got := <-attempts:
+			if got != want {
+				t.Fatalf("stream attempt = %d, want %d", got, want)
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("timed out waiting for stream attempt %d", want)
+		}
+	}
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("event loop did not stop after context cancellation")
+	}
+
+	stored, ok := probes.Get("west20_nvr")
+	if !ok {
+		t.Fatal("expected stored probe result")
+	}
+	info := stored.States["west20_nvr_channel_01"].Info
+	if info["motion"] != true {
+		t.Fatalf("expected retried event stream to update motion state, got %+v", info)
+	}
+}
+
+func waitForStoredState(ctx context.Context, probes *store.ProbeStore, rootID string, targetID string, key string, want any) {
+	ticker := time.NewTicker(time.Millisecond)
+	defer ticker.Stop()
+	timeout := time.NewTimer(time.Second)
+	defer timeout.Stop()
+
+	for {
+		if stored, ok := probes.Get(rootID); ok {
+			if state, ok := stored.States[targetID]; ok && state.Info[key] == want {
+				return
+			}
+		}
+
+		select {
+		case <-ctx.Done():
+			return
+		case <-timeout.C:
+			return
+		case <-ticker.C:
+		}
 	}
 }
 

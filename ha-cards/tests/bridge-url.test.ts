@@ -10,7 +10,7 @@ describe("bridge URL rewriting", () => {
   it("rewrites absolute bridge URLs to the configured browser bridge URL", () => {
     expect(
       rewriteBridgeUrl(
-        "http://127.0.0.1:9205/api/v1/events?limit=25",
+        "http://127.0.0.1:9020/api/v1/events?limit=25",
         "https://ha.example.com/dahuabridge",
       ),
     ).toBe("https://ha.example.com/dahuabridge/api/v1/events?limit=25");

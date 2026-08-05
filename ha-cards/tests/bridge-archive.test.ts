@@ -160,7 +160,7 @@ describe("bridge archive", () => {
     });
 
     await fetchArchiveRecordings(
-      "http://bridge.local:9205/api/v1/nvr/west20_nvr/recordings?channel={channel}&start={start}&end={end}&limit={limit}&event={event}",
+      "http://bridge.local:9020/api/v1/nvr/west20_nvr/recordings?channel={channel}&start={start}&end={end}&limit={limit}&event={event}",
       {
         channel: 1,
         startTime: "2026-05-01T00:00:00Z",
@@ -235,10 +235,10 @@ describe("bridge archive", () => {
             file_path: "/mnt/dvr/2026-05-01/1/10.00.00-10.00.20.dav",
             asset_status: "ready",
             asset_clip_id: "clip_ready",
-            asset_playback_url: "http://bridge.local:9205/api/v1/media/recordings/clip_ready/play",
-            asset_download_url: "http://bridge.local:9205/api/v1/media/recordings/clip_ready/download",
-            asset_self_url: "http://bridge.local:9205/api/v1/media/recordings/clip_ready",
-            asset_stop_url: "http://bridge.local:9205/api/v1/media/recordings/clip_ready/stop",
+            asset_playback_url: "http://bridge.local:9020/api/v1/media/recordings/clip_ready/play",
+            asset_download_url: "http://bridge.local:9020/api/v1/media/recordings/clip_ready/download",
+            asset_self_url: "http://bridge.local:9020/api/v1/media/recordings/clip_ready",
+            asset_stop_url: "http://bridge.local:9020/api/v1/media/recordings/clip_ready/stop",
             rtsp_main_url:
               "rtsp://user:pass@192.0.2.10:554/cam/playback?channel=1&subtype=0&starttime=2026_05_01_10_00_00",
             rtsp_sub_url:
@@ -349,8 +349,8 @@ describe("bridge archive", () => {
             ended_at: "2026-05-01T10:00:04Z",
             start_time: "2026-05-01T20:12:05Z",
             end_time: "2026-05-01T20:12:25Z",
-            playback_url: "http://bridge.local:9205/api/v1/media/recordings/clip_test/play",
-            download_url: "http://bridge.local:9205/api/v1/media/recordings/clip_test/download",
+            playback_url: "http://bridge.local:9020/api/v1/media/recordings/clip_test/play",
+            download_url: "http://bridge.local:9020/api/v1/media/recordings/clip_test/download",
           },
         ],
       }),
@@ -366,7 +366,7 @@ describe("bridge archive", () => {
     });
 
     const result = await fetchBridgeRecordings(
-      "http://bridge.local:9205/api/v1/media/recordings?channel=1&root_device_id=west20_nvr",
+      "http://bridge.local:9020/api/v1/media/recordings?channel=1&root_device_id=west20_nvr",
       {
         startTime: "2026-05-01T00:00:00Z",
         endTime: "2026-05-02T00:00:00Z",
@@ -381,8 +381,8 @@ describe("bridge archive", () => {
       streamId: "nvrpb_clip_test",
       sourceStartTime: "2026-05-01T20:12:05Z",
       sourceEndTime: "2026-05-01T20:12:25Z",
-      playbackUrl: "http://bridge.local:9205/api/v1/media/recordings/clip_test/play",
-      downloadUrl: "http://bridge.local:9205/api/v1/media/recordings/clip_test/download",
+      playbackUrl: "http://bridge.local:9020/api/v1/media/recordings/clip_test/play",
+      downloadUrl: "http://bridge.local:9020/api/v1/media/recordings/clip_test/download",
     });
   });
 

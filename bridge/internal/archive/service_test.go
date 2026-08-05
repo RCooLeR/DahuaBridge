@@ -569,6 +569,79 @@ func TestServicePrefetchPendingEventAssetsUsesDBRows(t *testing.T) {
 	}
 }
 
+func TestServiceSyncEventWindowIndexesEventsWhenMP4ExportDisabled(t *testing.T) {
+	tempDir := t.TempDir()
+	exportEventMP4 := false
+	startTime := time.Now().In(time.Local).Add(-2 * time.Hour)
+	event := dahua.NVRRecording{
+		Source:      "nvr_event",
+		Channel:     1,
+		StartTime:   startTime.Format(archiveTimeLayout),
+		EndTime:     startTime.Add(20 * time.Second).Format(archiveTimeLayout),
+		FilePath:    "/mnt/dvr/db-only-event.dav",
+		Type:        "Event.smdTypeHuman",
+		VideoStream: "Main",
+		Flags:       []string{"Event", "smdTypeHuman"},
+	}
+	service, err := New(config.ArchiveConfig{
+		Enabled:         true,
+		DBPath:          filepath.Join(tempDir, "archive.db"),
+		TempDir:         filepath.Join(tempDir, "tmp"),
+		PrefetchDays:    7,
+		RetainDays:      7,
+		MaxParallelJobs: 1,
+		PrefetchSMD:     true,
+		PrefetchIVS:     true,
+		ExportEventMP4:  &exportEventMP4,
+		Cron:            "5 * * * *",
+	}, nil, stubSearcher{
+		find: func(context.Context, string, dahua.NVRRecordingQuery) (dahua.NVRRecordingSearchResult, error) {
+			return dahua.NVRRecordingSearchResult{Items: []dahua.NVRRecording{event}}, nil
+		},
+	}, store.NewProbeStore(), zerolog.Nop())
+	if err != nil {
+		t.Fatalf("new service: %v", err)
+	}
+	defer service.Close()
+
+	service.clips = stubClipPrefetcher{
+		ensure: func(context.Context, string, dahua.NVRRecording) (mediaapi.ClipInfo, error) {
+			t.Fatal("event MP4 prefetcher must not be called when export_event_mp4=false")
+			return mediaapi.ClipInfo{}, nil
+		},
+	}
+
+	stats, err := service.syncEventWindow(
+		context.Background(),
+		"west20_nvr",
+		1,
+		"human",
+		startTime.Add(-time.Minute),
+		startTime.Add(time.Minute),
+	)
+	if err != nil {
+		t.Fatalf("sync event window: %v", err)
+	}
+	if stats.AcceptedRows != 1 {
+		t.Fatalf("expected one indexed event, got %+v", stats)
+	}
+	if err := service.prefetchPendingEventAssets(context.Background()); err != nil {
+		t.Fatalf("prefetch pending assets: %v", err)
+	}
+
+	var count int
+	var clipID, status string
+	if err := service.db.QueryRow(`SELECT COUNT(*), COALESCE(MAX(mp4_clip_id), ''), COALESCE(MAX(mp4_status), '') FROM smd_ivs_events`).Scan(&count, &clipID, &status); err != nil {
+		t.Fatalf("query indexed events: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("expected one indexed event, got %d", count)
+	}
+	if clipID != "" || status != "" {
+		t.Fatalf("expected no MP4 asset metadata, got clip=%q status=%q", clipID, status)
+	}
+}
+
 func TestServicePrefetchPendingEventAssetsHonorsEventExportChannels(t *testing.T) {
 	tempDir := t.TempDir()
 	service, err := New(config.ArchiveConfig{

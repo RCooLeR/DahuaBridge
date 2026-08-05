@@ -10,18 +10,21 @@ import (
 )
 
 type Registry struct {
-	registry           *prometheus.Registry
-	ProbeTotal         *prometheus.CounterVec
-	ProbeDuration      *prometheus.HistogramVec
-	DahuaRequestTotal  *prometheus.CounterVec
-	DeviceAvailability *prometheus.GaugeVec
-	EventTotal         *prometheus.CounterVec
-	StateStoreTotal    *prometheus.CounterVec
-	MediaWorkers       prometheus.Gauge
-	MediaViewers       *prometheus.GaugeVec
-	MediaFramesTotal   *prometheus.CounterVec
-	MediaFrameDrops    *prometheus.CounterVec
-	MediaStartsTotal   *prometheus.CounterVec
+	registry            *prometheus.Registry
+	ProbeTotal          *prometheus.CounterVec
+	ProbeDuration       *prometheus.HistogramVec
+	DahuaRequestTotal   *prometheus.CounterVec
+	DeviceAvailability  *prometheus.GaugeVec
+	EventTotal          *prometheus.CounterVec
+	EventLastSeen       *prometheus.GaugeVec
+	EventStreamUp       *prometheus.GaugeVec
+	EventStreamRestarts *prometheus.CounterVec
+	StateStoreTotal     *prometheus.CounterVec
+	MediaWorkers        prometheus.Gauge
+	MediaViewers        *prometheus.GaugeVec
+	MediaFramesTotal    *prometheus.CounterVec
+	MediaFrameDrops     *prometheus.CounterVec
+	MediaStartsTotal    *prometheus.CounterVec
 }
 
 func New(info buildinfo.BuildInfo) *Registry {
@@ -58,6 +61,21 @@ func New(info buildinfo.BuildInfo) *Registry {
 		Name: "dahuabridge_event_total",
 		Help: "Total number of normalized Dahua events.",
 	}, []string{"device_id", "device_type", "code", "action", "channel"})
+
+	eventLastSeen := prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "dahuabridge_event_last_seen_timestamp_seconds",
+		Help: "Unix timestamp for the last normalized event received by the bridge.",
+	}, []string{"device_id", "device_type"})
+
+	eventStreamUp := prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "dahuabridge_event_stream_up",
+		Help: "Current event stream connection state, 1 for connected and 0 for disconnected.",
+	}, []string{"device_id", "device_type"})
+
+	eventStreamRestarts := prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "dahuabridge_event_stream_restarts_total",
+		Help: "Total number of event stream restarts after unexpected stream exits.",
+	}, []string{"device_id", "device_type", "status"})
 
 	stateStoreTotal := prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "dahuabridge_state_store_total",
@@ -96,6 +114,9 @@ func New(info buildinfo.BuildInfo) *Registry {
 		dahuaRequestTotal,
 		deviceAvailability,
 		eventTotal,
+		eventLastSeen,
+		eventStreamUp,
+		eventStreamRestarts,
 		stateStoreTotal,
 		mediaWorkers,
 		mediaViewers,
@@ -107,18 +128,21 @@ func New(info buildinfo.BuildInfo) *Registry {
 	)
 
 	return &Registry{
-		registry:           reg,
-		ProbeTotal:         probeTotal,
-		ProbeDuration:      probeDuration,
-		DahuaRequestTotal:  dahuaRequestTotal,
-		DeviceAvailability: deviceAvailability,
-		EventTotal:         eventTotal,
-		StateStoreTotal:    stateStoreTotal,
-		MediaWorkers:       mediaWorkers,
-		MediaViewers:       mediaViewers,
-		MediaFramesTotal:   mediaFramesTotal,
-		MediaFrameDrops:    mediaFrameDrops,
-		MediaStartsTotal:   mediaStartsTotal,
+		registry:            reg,
+		ProbeTotal:          probeTotal,
+		ProbeDuration:       probeDuration,
+		DahuaRequestTotal:   dahuaRequestTotal,
+		DeviceAvailability:  deviceAvailability,
+		EventTotal:          eventTotal,
+		EventLastSeen:       eventLastSeen,
+		EventStreamUp:       eventStreamUp,
+		EventStreamRestarts: eventStreamRestarts,
+		StateStoreTotal:     stateStoreTotal,
+		MediaWorkers:        mediaWorkers,
+		MediaViewers:        mediaViewers,
+		MediaFramesTotal:    mediaFramesTotal,
+		MediaFrameDrops:     mediaFrameDrops,
+		MediaStartsTotal:    mediaStartsTotal,
 	}
 }
 
@@ -142,6 +166,23 @@ func (r *Registry) ObserveDahuaRequest(deviceID string, endpoint string, method 
 
 func (r *Registry) ObserveEvent(deviceID string, deviceType string, code string, action string, channel string) {
 	r.EventTotal.WithLabelValues(deviceID, deviceType, code, action, channel).Inc()
+	r.EventLastSeen.WithLabelValues(deviceID, deviceType).Set(float64(time.Now().Unix()))
+}
+
+func (r *Registry) SetEventStreamUp(deviceID string, deviceType string, up bool) {
+	value := 0.0
+	if up {
+		value = 1
+	}
+	r.EventStreamUp.WithLabelValues(deviceID, deviceType).Set(value)
+}
+
+func (r *Registry) ObserveEventStreamRestart(deviceID string, deviceType string, err error) {
+	status := "closed"
+	if err != nil {
+		status = "error"
+	}
+	r.EventStreamRestarts.WithLabelValues(deviceID, deviceType, status).Inc()
 }
 
 func (r *Registry) ObserveStateStore(operation string, err error) {

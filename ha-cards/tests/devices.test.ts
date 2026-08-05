@@ -52,25 +52,25 @@ describe("discoverBridgeTopology", () => {
             bridge_device_id: "west20_nvr_channel_01",
             bridge_root_device_id: "west20_nvr",
             bridge_device_kind: "nvr_channel",
-            bridge_base_url: "http://bridge.local:9205",
-            bridge_events_url: "http://bridge.local:9205/api/v1/events",
+            bridge_base_url: "http://bridge.local:9020",
+            bridge_events_url: "http://bridge.local:9020/api/v1/events",
             bridge_controls: {
               ptz: {
                 supported: true,
                 pan: true,
                 tilt: true,
-                url: "http://bridge.local:9205/api/v1/nvr/west20_nvr/channels/1/ptz",
+                url: "http://bridge.local:9020/api/v1/nvr/west20_nvr/channels/1/ptz",
               },
               aux: {
                 supported: true,
-                url: "http://bridge.local:9205/api/v1/nvr/west20_nvr/channels/1/aux",
+                url: "http://bridge.local:9020/api/v1/nvr/west20_nvr/channels/1/aux",
                 features: ["warning_light", "siren"],
                 outputs: ["light", "aux"],
               },
               recording: {
                 supported: true,
                 active: true,
-                url: "http://bridge.local:9205/api/v1/nvr/west20_nvr/channels/1/recording",
+                url: "http://bridge.local:9020/api/v1/nvr/west20_nvr/channels/1/recording",
               },
               audio: {
                 supported: true,
@@ -85,7 +85,7 @@ describe("discoverBridgeTopology", () => {
             bridge_features: [
               {
                 key: "recording",
-                url: "http://bridge.local:9205/api/v1/nvr/west20_nvr/channels/1/recording",
+                url: "http://bridge.local:9020/api/v1/nvr/west20_nvr/channels/1/recording",
                 active: true,
               },
               {
@@ -93,7 +93,7 @@ describe("discoverBridgeTopology", () => {
                 label: "White Light",
                 group: "deterrence",
                 kind: "toggle",
-                url: "http://bridge.local:9205/api/v1/nvr/west20_nvr/channels/1/aux",
+                url: "http://bridge.local:9020/api/v1/nvr/west20_nvr/channels/1/aux",
                 supported: true,
                 parameter_key: "output",
                 parameter_value: "light",
@@ -104,7 +104,7 @@ describe("discoverBridgeTopology", () => {
                 label: "Warning Light",
                 group: "deterrence",
                 kind: "action",
-                url: "http://bridge.local:9205/api/v1/nvr/west20_nvr/channels/1/aux",
+                url: "http://bridge.local:9020/api/v1/nvr/west20_nvr/channels/1/aux",
                 supported: true,
                 parameter_key: "output",
                 parameter_value: "warning_light",
@@ -115,7 +115,7 @@ describe("discoverBridgeTopology", () => {
                 label: "Siren",
                 group: "deterrence",
                 kind: "action",
-                url: "http://bridge.local:9205/api/v1/nvr/west20_nvr/channels/1/aux",
+                url: "http://bridge.local:9020/api/v1/nvr/west20_nvr/channels/1/aux",
                 supported: true,
                 parameter_key: "output",
                 parameter_value: "siren",
@@ -123,25 +123,25 @@ describe("discoverBridgeTopology", () => {
               },
               {
                 key: "archive_smd_ivs",
-                url: "http://bridge.local:9205/api/v1/nvr/west20_nvr/smd-ivs",
+                url: "http://bridge.local:9020/api/v1/nvr/west20_nvr/smd-ivs",
                 supported: true,
               },
               {
                 key: "archive_recording_chunks",
-                url: "http://bridge.local:9205/api/v1/nvr/west20_nvr/recording-chunks",
+                url: "http://bridge.local:9020/api/v1/nvr/west20_nvr/recording-chunks",
                 supported: true,
               },
             ],
             stream_source:
-              "http://bridge.local:9205/api/v1/media/hls/west20_nvr_channel_01/quality",
+              "http://bridge.local:9020/api/v1/media/hls/west20_nvr_channel_01/quality",
             bridge_profiles: {
               quality: {
                 name: "quality",
                 stream_url: "rtsp://bridge.local/quality",
                 local_hls_url:
-                  "http://bridge.local:9205/api/v1/media/hls/west20_nvr_channel_01/quality",
+                  "http://bridge.local:9020/api/v1/media/hls/west20_nvr_channel_01/quality",
                 local_mjpeg_url:
-                  "http://bridge.local:9205/api/v1/media/mjpeg/west20_nvr_channel_01/quality",
+                  "http://bridge.local:9020/api/v1/media/mjpeg/west20_nvr_channel_01/quality",
                 subtype: 0,
                 frame_rate: 25,
                 source_width: 2560,
@@ -350,8 +350,8 @@ describe("discoverBridgeTopology", () => {
             bridge_device_id: "driveway_ipc",
             bridge_root_device_id: "driveway_ipc",
             bridge_device_kind: "ipc",
-            bridge_base_url: "http://bridge.local:9205",
-            stream_source: "http://bridge.local:9205/api/v1/ipc/driveway_ipc/stream",
+            bridge_base_url: "http://bridge.local:9020",
+            stream_source: "http://bridge.local:9020/api/v1/ipc/driveway_ipc/stream",
           },
           last_changed: now,
           last_updated: now,
@@ -371,24 +371,24 @@ describe("discoverBridgeTopology", () => {
             bridge_device_id: "front_vto",
             bridge_root_device_id: "front_vto",
             bridge_device_kind: "vto",
-            bridge_base_url: "http://bridge.local:9205",
-            bridge_events_url: "http://bridge.local:9205/api/v1/events",
-            stream_source: "http://bridge.local:9205/api/v1/media/hls/front_vto/quality",
+            bridge_base_url: "http://bridge.local:9020",
+            bridge_events_url: "http://bridge.local:9020/api/v1/events",
+            stream_source: "http://bridge.local:9020/api/v1/media/hls/front_vto/quality",
             bridge_local_intercom_url:
-              "http://bridge.local:9205/api/v1/media/intercom/front_vto/quality",
+              "http://bridge.local:9020/api/v1/media/intercom/front_vto/quality",
             bridge_intercom: {
-              answer_url: "http://bridge.local:9205/api/v1/vto/front_vto/call/answer",
-              hangup_url: "http://bridge.local:9205/api/v1/vto/front_vto/call/hangup",
+              answer_url: "http://bridge.local:9020/api/v1/vto/front_vto/call/answer",
+              hangup_url: "http://bridge.local:9020/api/v1/vto/front_vto/call/hangup",
               lock_urls: [
-                "http://bridge.local:9205/api/v1/vto/front_vto/locks/0/unlock",
+                "http://bridge.local:9020/api/v1/vto/front_vto/locks/0/unlock",
               ],
-              recording_url: "http://bridge.local:9205/api/v1/vto/front_vto/recording",
+              recording_url: "http://bridge.local:9020/api/v1/vto/front_vto/recording",
               bridge_session_reset_url:
-                "http://bridge.local:9205/api/v1/vto/front_vto/intercom/reset",
+                "http://bridge.local:9020/api/v1/vto/front_vto/intercom/reset",
               external_uplink_enable_url:
-                "http://bridge.local:9205/api/v1/vto/front_vto/intercom/uplink/enable",
+                "http://bridge.local:9020/api/v1/vto/front_vto/intercom/uplink/enable",
               external_uplink_disable_url:
-                "http://bridge.local:9205/api/v1/vto/front_vto/intercom/uplink/disable",
+                "http://bridge.local:9020/api/v1/vto/front_vto/intercom/uplink/disable",
               supports_hangup: true,
               supports_unlock: true,
               supports_bridge_session_reset: true,

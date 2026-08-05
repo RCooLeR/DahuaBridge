@@ -35,7 +35,7 @@ describe("buildPanelModel", () => {
             bridge_device_id: "west20_nvr_channel_01",
             bridge_root_device_id: "west20_nvr",
             bridge_device_kind: "nvr_channel",
-            stream_source: "http://bridge.local:9205/api/v1/media/hls/west20_nvr_channel_01/quality",
+            stream_source: "http://bridge.local:9020/api/v1/media/hls/west20_nvr_channel_01/quality",
           },
           last_changed: now,
           last_updated: now,
@@ -65,7 +65,7 @@ describe("buildPanelModel", () => {
     const model = buildPanelModel(hass, config, { kind: "overview" });
 
     expect(model.cameras).toHaveLength(1);
-    expect(model.cameras[0]?.bridgeBaseUrl).toBe("http://bridge.local:9205");
+    expect(model.cameras[0]?.bridgeBaseUrl).toBe("http://bridge.local:9020");
     expect(model.headerMetrics[0]?.value).toBe("1/1");
   });
 
@@ -82,7 +82,7 @@ describe("buildPanelModel", () => {
             bridge_root_device_id: "west20_nvr",
             bridge_device_kind: "nvr_channel",
             bridge_integration_language: "uk",
-            stream_source: "http://bridge.local:9205/api/v1/media/hls/west20_nvr_channel_01/quality",
+            stream_source: "http://bridge.local:9020/api/v1/media/hls/west20_nvr_channel_01/quality",
           },
           last_changed: now,
           last_updated: now,
@@ -122,7 +122,7 @@ describe("buildPanelModel", () => {
             bridge_device_id: "west20_nvr_channel_01",
             bridge_root_device_id: "west20_nvr",
             bridge_device_kind: "nvr_channel",
-            stream_source: "http://bridge.local:9205/api/v1/media/hls/west20_nvr_channel_01/quality",
+            stream_source: "http://bridge.local:9020/api/v1/media/hls/west20_nvr_channel_01/quality",
           },
           last_changed: now,
           last_updated: now,
@@ -177,9 +177,9 @@ describe("buildPanelModel", () => {
           state: "recording",
           attributes: {
             friendly_name: "Entry Gate Live",
-            snapshot_url: "http://bridge.local:9205/api/v1/nvr/west20_nvr/channels/1/snapshot",
+            snapshot_url: "http://bridge.local:9020/api/v1/nvr/west20_nvr/channels/1/snapshot",
             stream_source:
-              "http://bridge.local:9205/api/v1/media/hls/west20_nvr_channel_01/main.m3u8",
+              "http://bridge.local:9020/api/v1/media/hls/west20_nvr_channel_01/main.m3u8",
           },
           last_changed: now,
           last_updated: now,
@@ -220,7 +220,7 @@ describe("buildPanelModel", () => {
             bridge_root_device_id: "west20_nvr",
             bridge_device_kind: "nvr_channel",
             bridge_device_name: "Bridge Sensor Label",
-            stream_source: "http://bridge.local:9205/api/v1/media/hls/west20_nvr_channel_01/quality",
+            stream_source: "http://bridge.local:9020/api/v1/media/hls/west20_nvr_channel_01/quality",
           },
           last_changed: now,
           last_updated: now,
@@ -282,35 +282,35 @@ describe("buildPanelModel", () => {
             bridge_device_id: "west20_nvr_channel_01",
             bridge_root_device_id: "west20_nvr",
             bridge_device_kind: "nvr_channel",
-            bridge_base_url: "http://bridge.local:9205",
-            bridge_events_url: "http://bridge.local:9205/api/v1/events",
-            stream_source: "http://bridge.local:9205/api/v1/media/hls/west20_nvr_channel_01/quality",
+            bridge_base_url: "http://bridge.local:9020",
+            bridge_events_url: "http://bridge.local:9020/api/v1/events",
+            stream_source: "http://bridge.local:9020/api/v1/media/hls/west20_nvr_channel_01/quality",
             bridge_capture: {
               snapshot_url:
-                "http://bridge.local:9205/api/v1/media/snapshot/west20_nvr_channel_01",
+                "http://bridge.local:9020/api/v1/media/snapshot/west20_nvr_channel_01",
               active: true,
               start_recording_url:
-                "http://bridge.local:9205/api/v1/media/streams/west20_nvr_channel_01/recordings",
+                "http://bridge.local:9020/api/v1/media/streams/west20_nvr_channel_01/recordings",
               stop_recording_url:
-                "http://bridge.local:9205/api/v1/media/recordings/clip_active/stop",
+                "http://bridge.local:9020/api/v1/media/recordings/clip_active/stop",
               recordings_url:
-                "http://bridge.local:9205/api/v1/media/streams/west20_nvr_channel_01/recordings",
+                "http://bridge.local:9020/api/v1/media/streams/west20_nvr_channel_01/recordings",
             },
             bridge_controls: {
               ptz: {
                 supported: true,
                 pan: true,
                 tilt: true,
-                url: "http://bridge.local:9205/api/v1/nvr/west20_nvr/channels/1/ptz",
+                url: "http://bridge.local:9020/api/v1/nvr/west20_nvr/channels/1/ptz",
               },
               aux: {
                 supported: true,
-                url: "http://bridge.local:9205/api/v1/nvr/west20_nvr/channels/1/aux",
+                url: "http://bridge.local:9020/api/v1/nvr/west20_nvr/channels/1/aux",
               },
               recording: {
                 supported: true,
                 active: true,
-                url: "http://bridge.local:9205/api/v1/nvr/west20_nvr/channels/1/recording",
+                url: "http://bridge.local:9020/api/v1/nvr/west20_nvr/channels/1/recording",
               },
             },
             bridge_features: [
@@ -319,7 +319,7 @@ describe("buildPanelModel", () => {
                 label: "Warning Light",
                 group: "deterrence",
                 kind: "action",
-                url: "http://bridge.local:9205/api/v1/nvr/west20_nvr/channels/1/aux",
+                url: "http://bridge.local:9020/api/v1/nvr/west20_nvr/channels/1/aux",
                 supported: true,
                 parameter_key: "output",
                 parameter_value: "warning_light",
@@ -327,7 +327,7 @@ describe("buildPanelModel", () => {
               },
               {
                 key: "ptz",
-                url: "http://bridge.local:9205/api/v1/nvr/west20_nvr/channels/1/ptz",
+                url: "http://bridge.local:9020/api/v1/nvr/west20_nvr/channels/1/ptz",
               },
             ],
           },
@@ -342,16 +342,16 @@ describe("buildPanelModel", () => {
             bridge_device_id: "front_vto",
             bridge_root_device_id: "front_vto",
             bridge_device_kind: "vto",
-            bridge_base_url: "http://bridge.local:9205",
-            bridge_events_url: "http://bridge.local:9205/api/v1/events",
-            stream_source: "http://bridge.local:9205/api/v1/media/hls/front_vto/quality",
+            bridge_base_url: "http://bridge.local:9020",
+            bridge_events_url: "http://bridge.local:9020/api/v1/events",
+            stream_source: "http://bridge.local:9020/api/v1/media/hls/front_vto/quality",
             bridge_intercom: {
-              answer_url: "http://bridge.local:9205/api/v1/vto/front_vto/call/answer",
-              hangup_url: "http://bridge.local:9205/api/v1/vto/front_vto/call/hangup",
+              answer_url: "http://bridge.local:9020/api/v1/vto/front_vto/call/answer",
+              hangup_url: "http://bridge.local:9020/api/v1/vto/front_vto/call/hangup",
               lock_urls: [
-                "http://bridge.local:9205/api/v1/vto/front_vto/locks/0/unlock",
+                "http://bridge.local:9020/api/v1/vto/front_vto/locks/0/unlock",
               ],
-              recording_url: "http://bridge.local:9205/api/v1/vto/front_vto/recording",
+              recording_url: "http://bridge.local:9020/api/v1/vto/front_vto/recording",
             },
           },
           last_changed: now,
@@ -454,31 +454,31 @@ describe("buildPanelModel", () => {
     expect(model.cameras[0]?.supportsPtz).toBe(true);
     expect(model.cameras[0]?.roomLabel).toBe("Entrance");
     expect(model.cameras[0]?.ptzUrl).toBe(
-      "http://bridge.local:9205/api/v1/nvr/west20_nvr/channels/1/ptz",
+      "http://bridge.local:9020/api/v1/nvr/west20_nvr/channels/1/ptz",
     );
     expect(model.cameras[0]?.eventsUrl).toBe(
-      "http://bridge.local:9205/api/v1/events",
+      "http://bridge.local:9020/api/v1/events",
     );
     expect(model.cameras[0]?.recordingActive).toBe(true);
     expect(model.cameras[0]?.supportsRecording).toBe(true);
     expect(model.cameras[0]?.bridgeRecordingActive).toBe(true);
     expect(model.cameras[0]?.captureSnapshotUrl).toBe(
-      "http://bridge.local:9205/api/v1/media/snapshot/west20_nvr_channel_01",
+      "http://bridge.local:9020/api/v1/media/snapshot/west20_nvr_channel_01",
     );
     expect(model.cameras[0]?.recordingStartUrl).toBe(
-      "http://bridge.local:9205/api/v1/media/streams/west20_nvr_channel_01/recordings",
+      "http://bridge.local:9020/api/v1/media/streams/west20_nvr_channel_01/recordings",
     );
     expect(model.cameras[0]?.recordingStopUrl).toBe(
-      "http://bridge.local:9205/api/v1/media/recordings/clip_active/stop",
+      "http://bridge.local:9020/api/v1/media/recordings/clip_active/stop",
     );
     expect(model.cameras[0]?.recordingsUrl).toBe(
-      "http://bridge.local:9205/api/v1/media/recordings?stream_id=west20_nvr_channel_01",
+      "http://bridge.local:9020/api/v1/media/recordings?stream_id=west20_nvr_channel_01",
     );
     expect(model.cameras[0]?.recording).toMatchObject({
       supported: true,
       active: true,
       mode: null,
-      url: "http://bridge.local:9205/api/v1/nvr/west20_nvr/channels/1/recording",
+      url: "http://bridge.local:9020/api/v1/nvr/west20_nvr/channels/1/recording",
     });
     expect(model.cameras[0]).toMatchObject({
       nvrConfigWritable: true,
@@ -488,7 +488,7 @@ describe("buildPanelModel", () => {
       directIPCModel: "DH-IPC-HFW2849S-S-IL",
     });
     expect(model.cameras[0]?.stream.source).toBe(
-      "http://bridge.local:9205/api/v1/media/hls/west20_nvr_channel_01/quality",
+      "http://bridge.local:9020/api/v1/media/hls/west20_nvr_channel_01/quality",
     );
     expect(model.cameras[0]?.aux?.targets).toEqual(
       expect.arrayContaining([
@@ -502,13 +502,13 @@ describe("buildPanelModel", () => {
     );
     expect(model.nvrs[0]?.label).toBe("West20 NVR");
     expect(model.vto?.answerActionUrl).toBe(
-      "http://bridge.local:9205/api/v1/vto/front_vto/call/answer",
+      "http://bridge.local:9020/api/v1/vto/front_vto/call/answer",
     );
     expect(model.vto?.eventsUrl).toBe(
-      "http://bridge.local:9205/api/v1/events",
+      "http://bridge.local:9020/api/v1/events",
     );
     expect(model.vto?.unlockActionUrl).toBe(
-      "http://bridge.local:9205/api/v1/vto/front_vto/locks/0/unlock",
+      "http://bridge.local:9020/api/v1/vto/front_vto/locks/0/unlock",
     );
   });
 
@@ -524,9 +524,9 @@ describe("buildPanelModel", () => {
             bridge_device_id: "front_vto",
             bridge_root_device_id: "front_vto",
             bridge_device_kind: "vto",
-            bridge_base_url: "http://bridge.local:9205",
-            bridge_events_url: "http://bridge.local:9205/api/v1/events",
-            stream_source: "http://bridge.local:9205/api/v1/media/hls/front_vto/quality",
+            bridge_base_url: "http://bridge.local:9020",
+            bridge_events_url: "http://bridge.local:9020/api/v1/events",
+            stream_source: "http://bridge.local:9020/api/v1/media/hls/front_vto/quality",
           },
           last_changed: now,
           last_updated: now,
@@ -539,9 +539,9 @@ describe("buildPanelModel", () => {
             bridge_device_id: "gate_vto",
             bridge_root_device_id: "gate_vto",
             bridge_device_kind: "vto",
-            bridge_base_url: "http://bridge.local:9205",
-            bridge_events_url: "http://bridge.local:9205/api/v1/events",
-            stream_source: "http://bridge.local:9205/api/v1/media/hls/gate_vto/quality",
+            bridge_base_url: "http://bridge.local:9020",
+            bridge_events_url: "http://bridge.local:9020/api/v1/events",
+            stream_source: "http://bridge.local:9020/api/v1/media/hls/gate_vto/quality",
           },
           last_changed: now,
           last_updated: now,
@@ -599,25 +599,25 @@ describe("buildPanelModel", () => {
             bridge_device_id: "west20_nvr_channel_01",
             bridge_root_device_id: "west20_nvr",
             bridge_device_kind: "nvr_channel",
-            bridge_base_url: "http://127.0.0.1:9205",
-            bridge_events_url: "http://127.0.0.1:9205/api/v1/events",
-            snapshot_url: "http://127.0.0.1:9205/api/v1/nvr/west20_nvr/channels/1/snapshot",
+            bridge_base_url: "http://127.0.0.1:9020",
+            bridge_events_url: "http://127.0.0.1:9020/api/v1/events",
+            snapshot_url: "http://127.0.0.1:9020/api/v1/nvr/west20_nvr/channels/1/snapshot",
             bridge_capture: {
               snapshot_url:
-                "http://127.0.0.1:9205/api/v1/media/snapshot/west20_nvr_channel_01",
+                "http://127.0.0.1:9020/api/v1/media/snapshot/west20_nvr_channel_01",
               start_recording_url:
-                "http://127.0.0.1:9205/api/v1/media/streams/west20_nvr_channel_01/recordings",
+                "http://127.0.0.1:9020/api/v1/media/streams/west20_nvr_channel_01/recordings",
               stop_recording_url:
-                "http://127.0.0.1:9205/api/v1/media/recordings/clip123/stop",
+                "http://127.0.0.1:9020/api/v1/media/recordings/clip123/stop",
             },
             bridge_controls: {
               ptz: {
                 supported: true,
-                url: "http://127.0.0.1:9205/api/v1/nvr/west20_nvr/channels/1/ptz",
+                url: "http://127.0.0.1:9020/api/v1/nvr/west20_nvr/channels/1/ptz",
               },
               aux: {
                 supported: true,
-                url: "http://127.0.0.1:9205/api/v1/nvr/west20_nvr/channels/1/aux",
+                url: "http://127.0.0.1:9020/api/v1/nvr/west20_nvr/channels/1/aux",
               },
             },
             bridge_features: [
@@ -626,14 +626,14 @@ describe("buildPanelModel", () => {
                 label: "Warning Light",
                 group: "deterrence",
                 kind: "action",
-                url: "http://127.0.0.1:9205/api/v1/nvr/west20_nvr/channels/1/aux",
+                url: "http://127.0.0.1:9020/api/v1/nvr/west20_nvr/channels/1/aux",
                 supported: true,
                 parameter_key: "output",
                 parameter_value: "warning_light",
                 actions: ["pulse"],
               },
             ],
-            stream_source: "http://127.0.0.1:9205/api/v1/media/hls/west20_nvr_channel_01/quality",
+            stream_source: "http://127.0.0.1:9020/api/v1/media/hls/west20_nvr_channel_01/quality",
           },
           last_changed: now,
           last_updated: now,
@@ -646,13 +646,13 @@ describe("buildPanelModel", () => {
             bridge_device_id: "front_vto",
             bridge_root_device_id: "front_vto",
             bridge_device_kind: "vto",
-            bridge_base_url: "http://127.0.0.1:9205",
-            bridge_events_url: "http://127.0.0.1:9205/api/v1/events",
-            snapshot_url: "http://127.0.0.1:9205/api/v1/vto/front_vto/snapshot",
+            bridge_base_url: "http://127.0.0.1:9020",
+            bridge_events_url: "http://127.0.0.1:9020/api/v1/events",
+            snapshot_url: "http://127.0.0.1:9020/api/v1/vto/front_vto/snapshot",
             bridge_intercom: {
-              answer_url: "http://127.0.0.1:9205/api/v1/vto/front_vto/call/answer",
+              answer_url: "http://127.0.0.1:9020/api/v1/vto/front_vto/call/answer",
             },
-            stream_source: "http://127.0.0.1:9205/api/v1/media/hls/front_vto/quality",
+            stream_source: "http://127.0.0.1:9020/api/v1/media/hls/front_vto/quality",
           },
           last_changed: now,
           last_updated: now,
@@ -736,7 +736,7 @@ describe("buildPanelModel", () => {
             bridge_device_id: "driveway_ipc",
             bridge_root_device_id: "driveway_ipc",
             bridge_device_kind: "ipc",
-            stream_source: "http://bridge.local:9205/api/v1/ipc/driveway_ipc/stream",
+            stream_source: "http://bridge.local:9020/api/v1/ipc/driveway_ipc/stream",
           },
           last_changed: now,
           last_updated: now,
@@ -789,7 +789,7 @@ describe("buildPanelModel", () => {
             bridge_device_id: "driveway_ipc",
             bridge_root_device_id: "driveway_ipc",
             bridge_device_kind: "ipc",
-            stream_source: "http://bridge.local:9205/api/v1/ipc/driveway_ipc/stream",
+            stream_source: "http://bridge.local:9020/api/v1/ipc/driveway_ipc/stream",
           },
           last_changed: now,
           last_updated: now,
@@ -851,7 +851,7 @@ describe("buildPanelModel", () => {
             bridge_device_id: "west20_nvr_channel_01",
             bridge_root_device_id: "west20_nvr",
             bridge_device_kind: "nvr_channel",
-            stream_source: "http://bridge.local:9205/api/v1/media/hls/west20_nvr_channel_01/quality",
+            stream_source: "http://bridge.local:9020/api/v1/media/hls/west20_nvr_channel_01/quality",
           },
           last_changed: now,
           last_updated: now,
@@ -919,13 +919,13 @@ describe("buildPanelModel", () => {
             bridge_device_id: "front_vto",
             bridge_root_device_id: "front_vto",
             bridge_device_kind: "vto",
-            bridge_base_url: "http://bridge.local:9205",
-            bridge_events_url: "http://bridge.local:9205/api/v1/events",
-            stream_source: "http://bridge.local:9205/api/v1/media/hls/front_vto/quality",
+            bridge_base_url: "http://bridge.local:9020",
+            bridge_events_url: "http://bridge.local:9020/api/v1/events",
+            stream_source: "http://bridge.local:9020/api/v1/media/hls/front_vto/quality",
             bridge_intercom: {
-              answer_url: "http://bridge.local:9205/api/v1/vto/front_vto/call/answer",
-              hangup_url: "http://bridge.local:9205/api/v1/vto/front_vto/call/hangup",
-              lock_urls: ["http://bridge.local:9205/api/v1/vto/front_vto/locks/0/unlock"],
+              answer_url: "http://bridge.local:9020/api/v1/vto/front_vto/call/answer",
+              hangup_url: "http://bridge.local:9020/api/v1/vto/front_vto/call/hangup",
+              lock_urls: ["http://bridge.local:9020/api/v1/vto/front_vto/locks/0/unlock"],
               bridge_session_active: true,
               bridge_session_count: 1,
               external_uplink_enabled: true,
@@ -1162,7 +1162,7 @@ describe("buildPanelModel", () => {
             bridge_device_id: "west20_nvr_channel_01",
             bridge_root_device_id: "west20_nvr",
             bridge_device_kind: "nvr_channel",
-            stream_source: "http://bridge.local:9205/api/v1/media/hls/west20_nvr_channel_01/quality",
+            stream_source: "http://bridge.local:9020/api/v1/media/hls/west20_nvr_channel_01/quality",
           },
           last_changed: now,
           last_updated: now,
@@ -1175,7 +1175,7 @@ describe("buildPanelModel", () => {
             bridge_device_id: "east20_nvr_channel_02",
             bridge_root_device_id: "east20_nvr",
             bridge_device_kind: "nvr_channel",
-            stream_source: "http://bridge.local:9205/api/v1/media/hls/east20_nvr_channel_02/quality",
+            stream_source: "http://bridge.local:9020/api/v1/media/hls/east20_nvr_channel_02/quality",
           },
           last_changed: now,
           last_updated: now,
@@ -1278,11 +1278,11 @@ describe("buildPanelModel", () => {
             bridge_device_id: "west20_nvr_channel_01",
             bridge_root_device_id: "west20_nvr",
             bridge_device_kind: "nvr_channel",
-            stream_source: "http://bridge.local:9205/api/v1/media/hls/west20_nvr_channel_01/quality",
+            stream_source: "http://bridge.local:9020/api/v1/media/hls/west20_nvr_channel_01/quality",
             bridge_archive_smd_ivs_url_template:
-              "http://bridge.local:9205/api/v1/nvr/west20_nvr/smd-ivs?channel={channel}&start={start}&end={end}&limit={limit}&event={event}",
+              "http://bridge.local:9020/api/v1/nvr/west20_nvr/smd-ivs?channel={channel}&start={start}&end={end}&limit={limit}&event={event}",
             bridge_archive_recording_chunks_url_template:
-              "http://bridge.local:9205/api/v1/nvr/west20_nvr/recording-chunks?channel={channel}&start={start}&end={end}&limit={limit}",
+              "http://bridge.local:9020/api/v1/nvr/west20_nvr/recording-chunks?channel={channel}&start={start}&end={end}&limit={limit}",
           },
           last_changed: now,
           last_updated: now,
@@ -1306,8 +1306,8 @@ describe("buildPanelModel", () => {
 
     expect(model.cameras[0]?.archive).toMatchObject({
       supported: true,
-      smdIvsUrl: "http://bridge.local:9205/api/v1/nvr/west20_nvr/smd-ivs",
-      chunksUrl: "http://bridge.local:9205/api/v1/nvr/west20_nvr/recording-chunks",
+      smdIvsUrl: "http://bridge.local:9020/api/v1/nvr/west20_nvr/smd-ivs",
+      chunksUrl: "http://bridge.local:9020/api/v1/nvr/west20_nvr/recording-chunks",
       channel: 1,
       defaultLimit: 100,
     });
@@ -1325,7 +1325,7 @@ describe("buildPanelModel", () => {
             bridge_device_id: "west20_nvr_channel_01",
             bridge_root_device_id: "west20_nvr",
             bridge_device_kind: "nvr_channel",
-            stream_source: "http://bridge.local:9205/api/v1/media/hls/west20_nvr_channel_01/quality",
+            stream_source: "http://bridge.local:9020/api/v1/media/hls/west20_nvr_channel_01/quality",
           },
           last_changed: now,
           last_updated: now,

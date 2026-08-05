@@ -221,6 +221,7 @@ func (s *Service) Start(ctx context.Context) error {
 		Int("max_parallel_jobs", s.cfg.MaxParallelJobs).
 		Bool("prefetch_smd", s.cfg.PrefetchSMD).
 		Bool("prefetch_ivs", s.cfg.PrefetchIVS).
+		Bool("export_event_mp4", s.cfg.ExportEventMP4Enabled()).
 		Dur("export_delay", s.cfg.ExportDelay).
 		Str("cron", s.cfg.Cron).
 		Msg("archive service configured")
@@ -627,6 +628,7 @@ func (s *Service) SyncSMDIVSNow(ctx context.Context) error {
 		Int("max_parallel_jobs", s.cfg.MaxParallelJobs).
 		Bool("prefetch_smd", s.cfg.PrefetchSMD).
 		Bool("prefetch_ivs", s.cfg.PrefetchIVS).
+		Bool("export_event_mp4", s.cfg.ExportEventMP4Enabled()).
 		Dur("export_delay", s.cfg.ExportDelay).
 		Str("db_path", s.cfg.DBPath).
 		Msg("archive smd_ivs sync started")
@@ -1008,6 +1010,9 @@ func (s *Service) prefetchEventAssets(ctx context.Context, deviceID string, item
 	if s == nil || s.store == nil || s.clips == nil || len(items) == 0 {
 		return nil
 	}
+	if !s.cfg.ExportEventMP4Enabled() {
+		return nil
+	}
 
 	pending := make([]dahua.NVRRecording, 0, len(items))
 	for _, item := range items {
@@ -1064,6 +1069,9 @@ func (s *Service) prefetchEventAssets(ctx context.Context, deviceID string, item
 
 func (s *Service) prefetchPendingEventAssets(ctx context.Context) error {
 	if s == nil || s.store == nil || s.clips == nil {
+		return nil
+	}
+	if !s.cfg.ExportEventMP4Enabled() {
 		return nil
 	}
 	if err := s.refreshActiveClipAssets(ctx); err != nil {

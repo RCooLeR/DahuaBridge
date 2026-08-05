@@ -530,6 +530,7 @@ func (r *runtimeServices) AdminSettings() map[string]any {
 			"max_parallel_jobs":    cfg.Archive.MaxParallelJobs,
 			"prefetch_smd":         cfg.Archive.PrefetchSMD,
 			"prefetch_ivs":         cfg.Archive.PrefetchIVS,
+			"export_event_mp4":     cfg.Archive.ExportEventMP4Enabled(),
 			"export_delay":         cfg.Archive.ExportDelay.String(),
 			"export_ivs":           append([]int(nil), cfg.Archive.ExportIVS...),
 			"export_smd_person":    append([]int(nil), cfg.Archive.ExportSMDPerson...),

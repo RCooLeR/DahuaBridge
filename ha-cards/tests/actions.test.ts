@@ -33,8 +33,8 @@ function buildCamera(overrides: Partial<CameraViewModel> = {}): CameraViewModel 
     cameraEntityId: "camera.west20_nvr_channel_01_camera",
     online: true,
     streamAvailable: true,
-    bridgeBaseUrl: "http://bridge.local:9205",
-    eventsUrl: "http://bridge.local:9205/api/v1/events",
+    bridgeBaseUrl: "http://bridge.local:9020",
+    eventsUrl: "http://bridge.local:9020/api/v1/events",
     snapshotUrl: null,
     captureSnapshotUrl: null,
     stream: {
@@ -66,7 +66,7 @@ function buildCamera(overrides: Partial<CameraViewModel> = {}): CameraViewModel 
     supportsRecording: false,
     recordingActive: false,
     bridgeRecordingActive: false,
-    ptzUrl: "http://bridge.local:9205/api/v1/nvr/west20_nvr/channels/1/ptz",
+    ptzUrl: "http://bridge.local:9020/api/v1/nvr/west20_nvr/channels/1/ptz",
     aux: null,
     auxUrl: null,
     archive: null,
@@ -143,14 +143,14 @@ describe("SurveillancePanelActions", () => {
     const camera = buildCamera({
       aux: {
         supported: true,
-        url: "http://bridge.local:9205/api/v1/nvr/west20_nvr/channels/1/aux",
+        url: "http://bridge.local:9020/api/v1/nvr/west20_nvr/channels/1/aux",
         outputs: ["wiper"],
         features: ["wiper"],
         targets: [
           {
             key: "wiper",
             label: "Wiper",
-            url: "http://bridge.local:9205/api/v1/nvr/west20_nvr/channels/1/aux",
+            url: "http://bridge.local:9020/api/v1/nvr/west20_nvr/channels/1/aux",
             parameterKey: "output",
             parameterValue: "wiper",
             outputKey: "wiper",
@@ -167,7 +167,7 @@ describe("SurveillancePanelActions", () => {
     await actions.triggerAuxAction(camera, "wiper", false);
 
     expect(actionMocks.postBridgeRequest).toHaveBeenCalledWith(
-      "http://bridge.local:9205/api/v1/nvr/west20_nvr/channels/1/aux",
+      "http://bridge.local:9020/api/v1/nvr/west20_nvr/channels/1/aux",
       {
         body: {
           output: "wiper",
@@ -186,14 +186,14 @@ describe("SurveillancePanelActions", () => {
     const camera = buildCamera({
       aux: {
         supported: true,
-        url: "http://bridge.local:9205/api/v1/nvr/west20_nvr/channels/1/aux",
+        url: "http://bridge.local:9020/api/v1/nvr/west20_nvr/channels/1/aux",
         outputs: ["warning_light"],
         features: ["warning_light"],
         targets: [
           {
             key: "warning_light",
             label: "Warning Light",
-            url: "http://bridge.local:9205/api/v1/nvr/west20_nvr/channels/1/aux",
+            url: "http://bridge.local:9020/api/v1/nvr/west20_nvr/channels/1/aux",
             parameterKey: "output",
             parameterValue: "warning_light",
             outputKey: "warning_light",
@@ -212,7 +212,7 @@ describe("SurveillancePanelActions", () => {
 
     expect(actionMocks.postBridgeRequest).toHaveBeenNthCalledWith(
       1,
-      "http://bridge.local:9205/api/v1/nvr/west20_nvr/channels/1/aux",
+      "http://bridge.local:9020/api/v1/nvr/west20_nvr/channels/1/aux",
       {
         body: {
           output: "warning_light",
@@ -222,7 +222,7 @@ describe("SurveillancePanelActions", () => {
     );
     expect(actionMocks.postBridgeRequest).toHaveBeenNthCalledWith(
       2,
-      "http://bridge.local:9205/api/v1/nvr/west20_nvr/channels/1/aux",
+      "http://bridge.local:9020/api/v1/nvr/west20_nvr/channels/1/aux",
       {
         body: {
           output: "warning_light",
@@ -238,14 +238,14 @@ describe("SurveillancePanelActions", () => {
     const camera = buildCamera({
       aux: {
         supported: true,
-        url: "http://bridge.local:9205/api/v1/nvr/west20_nvr/channels/1/aux",
+        url: "http://bridge.local:9020/api/v1/nvr/west20_nvr/channels/1/aux",
         outputs: ["warning_light"],
         features: ["warning_light"],
         targets: [
           {
             key: "warning_light",
             label: "Warning Light",
-            url: "http://bridge.local:9205/api/v1/nvr/west20_nvr/channels/1/aux",
+            url: "http://bridge.local:9020/api/v1/nvr/west20_nvr/channels/1/aux",
             parameterKey: "output",
             parameterValue: "warning_light",
             outputKey: "warning_light",
@@ -264,7 +264,7 @@ describe("SurveillancePanelActions", () => {
 
     expect(actionMocks.postBridgeRequest).toHaveBeenNthCalledWith(
       1,
-      "http://bridge.local:9205/api/v1/nvr/west20_nvr/channels/1/aux",
+      "http://bridge.local:9020/api/v1/nvr/west20_nvr/channels/1/aux",
       {
         body: {
           output: "warning_light",
@@ -274,7 +274,7 @@ describe("SurveillancePanelActions", () => {
     );
     expect(actionMocks.postBridgeRequest).toHaveBeenNthCalledWith(
       2,
-      "http://bridge.local:9205/api/v1/nvr/west20_nvr/channels/1/aux",
+      "http://bridge.local:9020/api/v1/nvr/west20_nvr/channels/1/aux",
       {
         body: {
           output: "warning_light",
@@ -290,14 +290,14 @@ describe("SurveillancePanelActions", () => {
     const camera = buildCamera({
       aux: {
         supported: true,
-        url: "http://bridge.local:9205/api/v1/nvr/west20_nvr/channels/1/aux",
+        url: "http://bridge.local:9020/api/v1/nvr/west20_nvr/channels/1/aux",
         outputs: ["light"],
         features: ["light"],
         targets: [
           {
             key: "light",
             label: "White Light",
-            url: "http://bridge.local:9205/api/v1/nvr/west20_nvr/channels/1/aux",
+            url: "http://bridge.local:9020/api/v1/nvr/west20_nvr/channels/1/aux",
             parameterKey: "output",
             parameterValue: "light",
             outputKey: "light",
@@ -316,7 +316,7 @@ describe("SurveillancePanelActions", () => {
 
     expect(actionMocks.postBridgeRequest).toHaveBeenNthCalledWith(
       1,
-      "http://bridge.local:9205/api/v1/nvr/west20_nvr/channels/1/aux",
+      "http://bridge.local:9020/api/v1/nvr/west20_nvr/channels/1/aux",
       {
         body: {
           output: "light",
@@ -326,7 +326,7 @@ describe("SurveillancePanelActions", () => {
     );
     expect(actionMocks.postBridgeRequest).toHaveBeenNthCalledWith(
       2,
-      "http://bridge.local:9205/api/v1/nvr/west20_nvr/channels/1/aux",
+      "http://bridge.local:9020/api/v1/nvr/west20_nvr/channels/1/aux",
       {
         body: {
           output: "light",
@@ -347,7 +347,7 @@ describe("SurveillancePanelActions", () => {
     await actions.triggerAuxAction(camera, "siren", false);
 
     expect(actionMocks.postBridgeRequest).toHaveBeenCalledWith(
-      "http://bridge.local:9205/api/v1/nvr/west20_nvr/channels/1/aux",
+      "http://bridge.local:9020/api/v1/nvr/west20_nvr/channels/1/aux",
       {
         body: {
           output: "siren",
@@ -377,7 +377,7 @@ describe("SurveillancePanelActions", () => {
     await entityActions.triggerVtoButtonAction(
       "vto:unlock",
       "button.front_station_unlock",
-      "http://bridge.local:9205/api/v1/vto/front_vto/locks/0/unlock",
+      "http://bridge.local:9020/api/v1/vto/front_vto/locks/0/unlock",
     );
 
     expect(actionMocks.pressButton).toHaveBeenCalledWith(
@@ -396,11 +396,11 @@ describe("SurveillancePanelActions", () => {
     await fallbackActions.triggerVtoButtonAction(
       "vto:unlock",
       "button.front_station_unlock",
-      "http://bridge.local:9205/api/v1/vto/front_vto/locks/0/unlock",
+      "http://bridge.local:9020/api/v1/vto/front_vto/locks/0/unlock",
     );
 
     expect(actionMocks.postBridgeRequest).toHaveBeenCalledWith(
-      "http://bridge.local:9205/api/v1/vto/front_vto/locks/0/unlock",
+      "http://bridge.local:9020/api/v1/vto/front_vto/locks/0/unlock",
     );
   });
 
@@ -433,11 +433,11 @@ describe("SurveillancePanelActions", () => {
     const camera = buildCamera({
       supportsRecording: true,
       recordingStartUrl:
-        "http://bridge.local:9205/api/v1/media/streams/west20_nvr_channel_01/recordings",
+        "http://bridge.local:9020/api/v1/media/streams/west20_nvr_channel_01/recordings",
       recordingStopUrl:
-        "http://bridge.local:9205/api/v1/media/recordings/clip_active/stop",
+        "http://bridge.local:9020/api/v1/media/recordings/clip_active/stop",
       recordingsUrl:
-        "http://bridge.local:9205/api/v1/media/recordings?stream_id=west20_nvr_channel_01",
+        "http://bridge.local:9020/api/v1/media/recordings?stream_id=west20_nvr_channel_01",
     });
 
     await actions.triggerRecordingAction(camera, "start");
@@ -445,14 +445,14 @@ describe("SurveillancePanelActions", () => {
 
     expect(actionMocks.postBridgeRequest).toHaveBeenNthCalledWith(
       1,
-      "http://bridge.local:9205/api/v1/media/streams/west20_nvr_channel_01/recordings",
+      "http://bridge.local:9020/api/v1/media/streams/west20_nvr_channel_01/recordings",
     );
     expect(actionMocks.postBridgeRequest).toHaveBeenNthCalledWith(
       2,
-      "http://bridge.local:9205/api/v1/media/recordings/clip_active/stop",
+      "http://bridge.local:9020/api/v1/media/recordings/clip_active/stop",
     );
     expect(actionMocks.readBridgeJson).toHaveBeenCalledWith(
-      "http://bridge.local:9205/api/v1/media/recordings?stream_id=west20_nvr_channel_01",
+      "http://bridge.local:9020/api/v1/media/recordings?stream_id=west20_nvr_channel_01",
     );
   });
 
@@ -464,7 +464,7 @@ describe("SurveillancePanelActions", () => {
         },
         {
           status: "recording",
-          stop_url: "http://bridge.local:9205/api/v1/media/recordings/clip_live/stop",
+          stop_url: "http://bridge.local:9020/api/v1/media/recordings/clip_live/stop",
         },
       ],
     } as { items: Array<{ status: string; stop_url?: string }> });
@@ -474,15 +474,15 @@ describe("SurveillancePanelActions", () => {
     const camera = buildCamera({
       supportsRecording: true,
       recordingStopUrl:
-        "http://bridge.local:9205/api/v1/media/recordings/clip_stale/stop",
+        "http://bridge.local:9020/api/v1/media/recordings/clip_stale/stop",
       recordingsUrl:
-        "http://bridge.local:9205/api/v1/media/recordings?stream_id=west20_nvr_channel_01",
+        "http://bridge.local:9020/api/v1/media/recordings?stream_id=west20_nvr_channel_01",
     });
 
     await actions.triggerRecordingAction(camera, "stop");
 
     expect(actionMocks.postBridgeRequest).toHaveBeenCalledWith(
-      "http://bridge.local:9205/api/v1/media/recordings/clip_live/stop",
+      "http://bridge.local:9020/api/v1/media/recordings/clip_live/stop",
     );
   });
 
@@ -495,7 +495,7 @@ describe("SurveillancePanelActions", () => {
     const camera = buildCamera({
       supportsRecording: true,
       recordingStartUrl:
-        "http://bridge.local:9205/api/v1/media/streams/west20_nvr_channel_01/recordings",
+        "http://bridge.local:9020/api/v1/media/streams/west20_nvr_channel_01/recordings",
     });
 
     const first = actions.triggerRecordingAction(camera, "start");
