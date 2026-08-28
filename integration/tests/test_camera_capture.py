@@ -140,6 +140,33 @@ class CameraCaptureTests(unittest.IsolatedAsyncioTestCase):
             "https://public.example/bridge/api/v1/events",
         )
 
+    def test_bridge_api_removes_advertised_prefix_for_direct_connection(self) -> None:
+        api = DahuaBridgeAPI(object(), "http://bridge.local:9020")
+        self.assertEqual(
+            api.bridge_resource_url(
+                "https://public.example/dahua-bridge/api/v1/media/mjpeg/cam1?profile=stable"
+            ),
+            "http://bridge.local:9020/api/v1/media/mjpeg/cam1?profile=stable",
+        )
+
+    def test_bridge_api_replaces_advertised_prefix_with_configured_prefix(self) -> None:
+        api = DahuaBridgeAPI(object(), "https://internal.example/bridge")
+        self.assertEqual(
+            api.bridge_resource_url(
+                "https://public.example/dahua-bridge/api/v1/media/mjpeg/cam1?profile=stable"
+            ),
+            "https://internal.example/bridge/api/v1/media/mjpeg/cam1?profile=stable",
+        )
+
+    def test_bridge_api_rebases_root_relative_advertised_prefix(self) -> None:
+        api = DahuaBridgeAPI(object(), "http://bridge.local:9020")
+        self.assertEqual(
+            api.bridge_resource_url(
+                "/dahua-bridge/api/v1/media/mjpeg/cam1?profile=stable"
+            ),
+            "http://bridge.local:9020/api/v1/media/mjpeg/cam1?profile=stable",
+        )
+
     def test_bridge_api_appends_query_token_to_browser_urls(self) -> None:
         api = DahuaBridgeAPI(object(), "https://public.example/bridge", "secret-token")
 
@@ -173,6 +200,10 @@ class CameraCaptureTests(unittest.IsolatedAsyncioTestCase):
         await api.async_get_status()
 
         self.assertEqual(len(session.requests), 1)
+        self.assertEqual(
+            session.requests[0]["url"],
+            "https://public.example/bridge/api/v1/status",
+        )
         self.assertEqual(
             session.requests[0]["headers"],
             {"Authorization": "Bearer secret-token"},

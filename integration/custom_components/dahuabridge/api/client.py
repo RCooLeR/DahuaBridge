@@ -10,7 +10,12 @@ from aiohttp import ClientError, ClientSession
 
 from ..const import CATALOG_PATH, STATUS_PATH
 from .errors import DahuaBridgeAPIError
-from .urls import apply_base_path, is_absolute_target, normalize_bridge_url
+from .urls import (
+    apply_base_path,
+    canonical_bridge_api_path,
+    is_absolute_target,
+    normalize_bridge_url,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -30,7 +35,7 @@ class DahuaBridgeAPI:
 
     def bridge_resource_url(self, target: str) -> str:
         parsed_target = urlsplit(target)
-        if parsed_target.scheme not in {"http", "https"}:
+        if parsed_target.scheme and parsed_target.scheme not in {"http", "https"}:
             return self._with_query_token(self._absolute_url(target))
 
         parsed_base = urlsplit(self._base_url)
@@ -39,7 +44,10 @@ class DahuaBridgeAPI:
                 (
                     parsed_base.scheme,
                     parsed_base.netloc,
-                    apply_base_path(parsed_base.path, parsed_target.path),
+                    apply_base_path(
+                        parsed_base.path,
+                        canonical_bridge_api_path(parsed_target.path),
+                    ),
                     parsed_target.query,
                     parsed_target.fragment,
                 )
