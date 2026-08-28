@@ -149,11 +149,12 @@ func New(
 
 	return &Server{
 		httpServer: &http.Server{
-			Addr:         cfg.ListenAddress,
-			Handler:      router,
-			ReadTimeout:  cfg.ReadTimeout,
-			WriteTimeout: writeTimeout,
-			IdleTimeout:  cfg.IdleTimeout,
+			Addr:                cfg.ListenAddress,
+			Handler:             router,
+			ReadTimeout:         cfg.ReadTimeout,
+			WriteTimeout:        writeTimeout,
+			IdleTimeout:         cfg.IdleTimeout,
+			MaxHeaderValueCount: 100,
 		},
 		logger: httpLogger,
 	}

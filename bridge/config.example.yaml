@@ -195,7 +195,7 @@ devices:
       # Manufacturer string shown in UI/device registry.
       manufacturer: Dahua
       # Model string shown in UI/device registry.
-      model: Example Device
+      model: Example NVR
       # Base HTTP/HTTPS URL used to reach the device CGI/API endpoints.
       base_url: http://nvr.example.local
       # Primary device login username.
@@ -337,7 +337,7 @@ devices:
       # Manufacturer string shown in UI/device registry.
       manufacturer: Dahua
       # Model string shown in UI/device registry.
-      model: Example Device
+      model: Example VTO
       # Base HTTP/HTTPS URL used to reach the VTO.
       base_url: http://vto.example.local
       # Primary device login username.

@@ -56,6 +56,7 @@ def install() -> None:
     camera = types.ModuleType("homeassistant.components.camera")
     camera.Camera = Camera
     camera.CameraEntityFeature = CameraEntityFeature
+    camera.DOMAIN = "camera"
     sys.modules["homeassistant.components.camera"] = camera
 
     class HomeAssistantView:
@@ -101,10 +102,15 @@ def install() -> None:
     sys.modules["homeassistant.const"] = ha_const
 
     class ConfigEntry:
+        @classmethod
+        def __class_getitem__(cls, item):
+            return cls
+
         def __init__(self, data=None, options=None, title="DahuaBridge") -> None:
             self.data = data or {}
             self.options = options or {}
             self.title = title
+            self.runtime_data = None
 
     config_entries = types.ModuleType("homeassistant.config_entries")
     config_entries.ConfigEntry = ConfigEntry
@@ -138,7 +144,16 @@ def install() -> None:
     config_validation = types.ModuleType("homeassistant.helpers.config_validation")
     config_validation.string = str
     config_validation.positive_int = int
+    config_validation.config_entry_only_config_schema = lambda domain: {domain: {}}
     sys.modules["homeassistant.helpers.config_validation"] = config_validation
+
+    service = types.ModuleType("homeassistant.helpers.service")
+    service.async_register_platform_entity_service = lambda *args, **kwargs: None
+    sys.modules["homeassistant.helpers.service"] = service
+
+    helpers_typing = types.ModuleType("homeassistant.helpers.typing")
+    helpers_typing.ConfigType = dict
+    sys.modules["homeassistant.helpers.typing"] = helpers_typing
 
     class DeviceInfo(dict):
         pass
@@ -165,6 +180,7 @@ def install() -> None:
             return cls
 
         def __init__(self, *args, **kwargs) -> None:
+            self.hass = args[0] if args else kwargs.get("hass")
             self.data = None
             self.last_update_success = True
 

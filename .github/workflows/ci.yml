@@ -10,10 +10,14 @@ name: CI
 permissions:
   contents: read
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   bridge:
     name: Bridge Go Tests
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
 
     defaults:
@@ -22,13 +26,18 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: bridge/go.mod
           cache-dependency-path: bridge/go.sum
+
+      - name: Verify modules
+        run: go mod verify
 
       - name: Vet
         run: go vet ./...
@@ -40,21 +49,36 @@ jobs:
         run: CGO_ENABLED=1 go test -race ./internal/app ./internal/config ./internal/ha ./internal/metrics ./internal/store ./internal/streams
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+
+      - name: Check Dockerfile
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: ./bridge
+          file: ./bridge/Dockerfile
+          call: check
+          pull: true
+
+      - name: Read build date
+        id: build-metadata
+        run: echo "build-date=$(git show -s --format=%cI HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: Build container
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           context: ./bridge
           file: ./bridge/Dockerfile
           platforms: linux/amd64
           push: false
           load: true
+          pull: true
           tags: dahuabridge:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
           build-args: |
             VERSION=ci
             COMMIT=${{ github.sha }}
-            BUILD_DATE=${{ github.event.head_commit.timestamp || github.run_id }}
+            BUILD_DATE=${{ steps.build-metadata.outputs.build-date }}
 
       - name: Smoke test container
         run: |
@@ -75,7 +99,13 @@ jobs:
                 request_timeout: 100ms
                 poll_interval: 1h
           YAML
-          docker run -d --name dahuabridge-ci -p 9020:9020 -v /tmp/dahuabridge-config.yaml:/config/config.yaml:ro dahuabridge:ci
+          docker run -d --name dahuabridge-ci --init --read-only \
+            --tmpfs /tmp:rw,noexec,nosuid,size=64m,mode=1777 \
+            --cap-drop ALL --cap-add SETGID --cap-add SETUID \
+            --security-opt no-new-privileges \
+            -p 127.0.0.1:9020:9020 \
+            -v /tmp/dahuabridge-config.yaml:/config/config.yaml:ro \
+            dahuabridge:ci
           trap 'docker logs dahuabridge-ci || true; docker rm -f dahuabridge-ci || true' EXIT
           for _ in $(seq 1 30); do
             if curl -fsS http://127.0.0.1:9020/healthz; then
@@ -90,17 +120,33 @@ jobs:
 
   integration:
     name: Home Assistant Integration Tests
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Stage integration for hassfest
+        run: cp -a integration/custom_components custom_components
+
+      - name: Validate with hassfest
+        uses: home-assistant/actions/hassfest@a7c616ce81ccda50150bf1595786c71b1883fabb # master 2026-08-28
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          python-version: "3.13"
+          python-version: "3.14"
+          check-latest: true
+
+      - name: Validate integration metadata
+        run: |
+          python -m json.tool integration/custom_components/dahuabridge/manifest.json >/dev/null
+          for translation in integration/custom_components/dahuabridge/translations/*.json; do
+            python -m json.tool "$translation" >/dev/null
+          done
 
       - name: Compile integration
         run: python -m compileall integration/custom_components/dahuabridge
@@ -110,7 +156,7 @@ jobs:
 
   ha-cards:
     name: HA Cards Checks
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
 
     defaults:
@@ -119,12 +165,15 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Set up Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: "22"
+          node-version: "24"
+          check-latest: true
           cache: npm
           cache-dependency-path: ha-cards/package-lock.json
 

@@ -685,9 +685,8 @@ func anyIntSlice(values map[string]any, key string) []int {
 		}
 		return items
 	case string:
-		parts := strings.Split(typed, ",")
-		items := make([]int, 0, len(parts))
-		for _, part := range parts {
+		items := make([]int, 0, strings.Count(typed, ",")+1)
+		for part := range strings.SplitSeq(typed, ",") {
 			parsed, err := strconv.Atoi(strings.TrimSpace(part))
 			if err == nil {
 				items = append(items, parsed)

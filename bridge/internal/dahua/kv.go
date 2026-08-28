@@ -5,7 +5,7 @@ import "strings"
 func ParseKeyValueBody(body string) map[string]string {
 	result := make(map[string]string)
 
-	for _, line := range strings.Split(body, "\n") {
+	for line := range strings.SplitSeq(body, "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
 			continue

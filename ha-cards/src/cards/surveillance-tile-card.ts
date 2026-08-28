@@ -20,7 +20,12 @@ import {
   type CameraViewModel,
   type VtoViewModel,
 } from "../domain/model";
-import type { SurveillancePanelCardConfig } from "../types/card-config";
+import {
+  browserBridgeUrlSchema,
+  parseCardConfigSchema,
+  vtoCardConfigSchema,
+  type SurveillancePanelCardConfig,
+} from "../types/card-config";
 import type {
   HomeAssistant,
   LovelaceCard,
@@ -54,21 +59,12 @@ import { openExternalUrl } from "../utils/browser";
 import { logCardInfo, redactUrlForLog } from "../utils/logging";
 import { createLocalizer, resolvePanelLanguage, type Localizer } from "../localization";
 
-const vtoSchema = z
-  .object({
-    device_id: z.string().min(1).optional(),
-    label: z.string().min(1).optional(),
-    lock_button_entity: z.string().min(1).optional(),
-    auto_record_entity: z.string().min(1).optional(),
-  })
-  .optional();
-
 const configSchema = z.object({
   type: z.literal("custom:dahuabridge-surveillance-tile"),
-  device_id: z.string().min(1),
-  title: z.string().min(1).optional(),
-  browser_bridge_url: z.string().min(1).optional(),
-  vto: vtoSchema,
+  device_id: z.string().trim().min(1),
+  title: z.string().trim().min(1).optional(),
+  browser_bridge_url: browserBridgeUrlSchema.optional(),
+  vto: vtoCardConfigSchema,
 });
 
 type CompactCardConfig = z.infer<typeof configSchema> & LovelaceCardConfig;
@@ -272,7 +268,7 @@ export class DahuaBridgeSurveillanceTileCard
   });
 
   setConfig(config: LovelaceCardConfig): void {
-    this._config = configSchema.parse(config);
+    this._config = parseCardConfigSchema(configSchema, config);
     this._busyActions = new Set();
     this._errorMessage = "";
     this._cameraAudioMuted = true;

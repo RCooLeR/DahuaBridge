@@ -556,7 +556,7 @@ func parseSoftwareVersion(body string) (string, string) {
 	version := ""
 	build := ""
 
-	for _, part := range strings.Split(line, ",") {
+	for part := range strings.SplitSeq(line, ",") {
 		part = strings.TrimSpace(part)
 		switch {
 		case strings.HasPrefix(part, "version="):
@@ -999,8 +999,7 @@ func (d *Driver) supportsVideoTalkPhoneMethod(ctx context.Context, objectID int6
 		if err == nil {
 			return true
 		}
-		var rpcErr *rpcError
-		if errors.As(err, &rpcErr) && rpcErr != nil && rpcErr.Code == 268894210 {
+		if rpcErr, ok := errors.AsType[*rpcError](err); ok && rpcErr != nil && rpcErr.Code == 268894210 {
 			continue
 		}
 	}

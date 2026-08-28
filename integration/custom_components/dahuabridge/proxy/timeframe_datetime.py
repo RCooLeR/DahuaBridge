@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Mapping
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from homeassistant.core import HomeAssistant
@@ -47,7 +47,7 @@ def datetime_for_compare(hass: HomeAssistant, value: datetime) -> datetime:
 def bridge_playback_datetime(value: datetime) -> str:
     if value.tzinfo is None:
         return value.strftime("%Y-%m-%d %H:%M:%S")
-    return value.astimezone(timezone.utc).isoformat()
+    return value.astimezone(UTC).isoformat()
 
 
 def local_time_zone(hass: HomeAssistant) -> Any:

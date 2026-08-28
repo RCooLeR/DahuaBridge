@@ -36,13 +36,15 @@ interface SurveillancePanelRuntimeHost {
 }
 
 export class SurveillancePanelRuntime {
+    private readonly host: SurveillancePanelRuntimeHost;
     private eventPollHandle?: number;
     private eventAbort?: AbortController;
     private registryRefreshInFlight: Promise<void> | null = null;
     private registryRefreshCompleted = false;
     private registryRefreshStartedAt = 0;
 
-    constructor(private readonly host: SurveillancePanelRuntimeHost) {
+    constructor(host: SurveillancePanelRuntimeHost) {
+        this.host = host;
     }
 
     connected(): void {

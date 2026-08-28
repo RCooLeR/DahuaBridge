@@ -1,5 +1,6 @@
 import type {TemplateResult} from "lit";
 import {html, nothing} from "lit";
+import {repeat} from "lit/directives/repeat.js";
 
 import type {CameraViewModel} from "../domain/model";
 import type {Localizer} from "../localization";
@@ -85,13 +86,17 @@ export function renderArchiveSeekPanel({
                         }}
                 />
                 <datalist id="archive-seek-30min-grid">
-                    ${seekModel.ticks.map(
+                    ${repeat(
+                            seekModel.ticks,
+                            (second) => second,
                             (second) => html`<option value=${String(second)}></option>`,
                     )}
                 </datalist>
             </div>
             <div class="archive-seek-grid-labels" aria-hidden="true">
-                ${seekModel.labels.map(
+                ${repeat(
+                        seekModel.labels,
+                        (label) => label.hour,
                         (label) => html`
                             <span
                                     class="archive-seek-grid-label"

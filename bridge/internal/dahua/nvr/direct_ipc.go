@@ -420,19 +420,23 @@ func directIPCLightingSchemeQuery(values map[string]string, targetMode string) u
 
 func parseDirectIPCLightProfileKey(key string) (directIPCLightProfile, bool) {
 	trimmed := strings.TrimPrefix(strings.TrimSuffix(strings.TrimSpace(key), ".LightType"), "table.Lighting_V2[")
-	parts := strings.Split(trimmed, "][")
-	if len(parts) != 3 {
+	channelText, remainder, ok := strings.Cut(trimmed, "][")
+	if !ok {
 		return directIPCLightProfile{}, false
 	}
-	channel, err := strconv.Atoi(strings.TrimSuffix(parts[0], "]"))
+	profileModeText, indexText, ok := strings.Cut(remainder, "][")
+	if !ok || strings.Contains(indexText, "][") {
+		return directIPCLightProfile{}, false
+	}
+	channel, err := strconv.Atoi(strings.TrimSuffix(channelText, "]"))
 	if err != nil {
 		return directIPCLightProfile{}, false
 	}
-	profileMode, err := strconv.Atoi(strings.TrimSuffix(parts[1], "]"))
+	profileMode, err := strconv.Atoi(strings.TrimSuffix(profileModeText, "]"))
 	if err != nil {
 		return directIPCLightProfile{}, false
 	}
-	index, err := strconv.Atoi(strings.TrimSuffix(parts[2], "]"))
+	index, err := strconv.Atoi(strings.TrimSuffix(indexText, "]"))
 	if err != nil {
 		return directIPCLightProfile{}, false
 	}

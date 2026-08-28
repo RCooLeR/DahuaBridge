@@ -2,9 +2,8 @@ from __future__ import annotations
 
 import logging
 from datetime import timedelta
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
@@ -22,6 +21,9 @@ from .const import (
 )
 from .localization import resolve_language
 
+if TYPE_CHECKING:
+    from . import DahuaBridgeConfigEntry
+
 _LOGGER = logging.getLogger(__name__)
 
 
@@ -30,18 +32,19 @@ class DahuaBridgeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self,
         hass: HomeAssistant,
         api: DahuaBridgeAPI,
-        config_entry: ConfigEntry,
+        config_entry: DahuaBridgeConfigEntry,
         scan_interval: int,
     ) -> None:
         super().__init__(
             hass,
             logger=_LOGGER,
             name="DahuaBridge catalog",
+            config_entry=config_entry,
             update_interval=timedelta(seconds=scan_interval),
+            always_update=False,
         )
         self.api = api
         self.config_entry = config_entry
-        self._hass = hass
 
     @property
     def preferred_video_profile(self) -> str:
@@ -69,7 +72,7 @@ class DahuaBridgeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     @property
     def integration_language(self) -> str:
-        hass_language = getattr(getattr(self._hass, "config", None), "language", None)
+        hass_language = getattr(getattr(self.hass, "config", None), "language", None)
         return resolve_language(
             self.config_entry.options.get(CONF_LANGUAGE, DEFAULT_LANGUAGE),
             hass_language,

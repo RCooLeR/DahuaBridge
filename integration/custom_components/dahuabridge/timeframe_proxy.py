@@ -11,7 +11,6 @@ from homeassistant.components.http import KEY_AUTHENTICATED, HomeAssistantView
 from homeassistant.core import HomeAssistant
 
 from .api import DahuaBridgeAPIError
-from .const import DOMAIN
 from .proxy import (
     bridge_playback_datetime,
     datetime_for_compare,
@@ -27,18 +26,12 @@ from .proxy import (
 
 _LOGGER = logging.getLogger(__name__)
 
-_REGISTERED_KEY = "_timeframe_proxy_registered"
 _DEFAULT_DURATION = timedelta(minutes=30)
 _MAX_DURATION = timedelta(hours=6)
 
 
 def async_register_timeframe_proxy_view(hass: HomeAssistant) -> None:
-    domain_data = hass.data.setdefault(DOMAIN, {})
-    if domain_data.get(_REGISTERED_KEY):
-        return
-
     hass.http.register_view(DahuaBridgeTimeframeProxyView())
-    domain_data[_REGISTERED_KEY] = True
 
 
 class DahuaBridgeTimeframeProxyView(HomeAssistantView):

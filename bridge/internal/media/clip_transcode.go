@@ -2,8 +2,6 @@ package media
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -12,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"uuid"
 
 	"RCooLeR/DahuaBridge/internal/config"
 	"RCooLeR/DahuaBridge/internal/streams"
@@ -492,9 +491,5 @@ func buildPrefixedClipFFmpegArgs(cfg config.MediaConfig, profile streams.Profile
 }
 
 func newClipID() string {
-	buffer := make([]byte, 8)
-	if _, err := rand.Read(buffer); err != nil {
-		return "clip_" + strconv.FormatInt(time.Now().UnixNano(), 10)
-	}
-	return "clip_" + hex.EncodeToString(buffer)
+	return "clip_" + uuid.NewV7().String()
 }

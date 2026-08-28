@@ -118,9 +118,9 @@ func (l *perClientRateLimiter) clientIP(r *http.Request) string {
 	remoteIP := remoteAddressIP(r)
 	if remoteIPTrusted(remoteIP, l.trustedProxies) {
 		if forwarded := strings.TrimSpace(r.Header.Get("X-Forwarded-For")); forwarded != "" {
-			parts := strings.Split(forwarded, ",")
-			if len(parts) > 0 && strings.TrimSpace(parts[0]) != "" {
-				return strings.TrimSpace(parts[0])
+			first, _, _ := strings.Cut(forwarded, ",")
+			if first = strings.TrimSpace(first); first != "" {
+				return first
 			}
 		}
 		if realIP := strings.TrimSpace(r.Header.Get("X-Real-IP")); realIP != "" {

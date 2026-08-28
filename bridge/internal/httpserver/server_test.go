@@ -1359,6 +1359,9 @@ func TestServerClampsWriteTimeoutForLongAdminActions(t *testing.T) {
 	if server.httpServer.WriteTimeout != 60*time.Second {
 		t.Fatalf("unexpected write timeout %s", server.httpServer.WriteTimeout)
 	}
+	if server.httpServer.MaxHeaderValueCount != 100 {
+		t.Fatalf("unexpected max header value count %d", server.httpServer.MaxHeaderValueCount)
+	}
 }
 
 type writeDeadlineRecorder struct {
@@ -3507,7 +3510,7 @@ func TestNVRRecordingExportEndpointUsesPlaybackRTSPForEvents(t *testing.T) {
 				},
 				streams.Profile{
 					Name:                     "quality",
-					StreamURL:                "rtsp://example-user:example-password@192.0.2.10:554/cam/playback?channel=5&subtype=0&starttime=2026_04_29_00_00_00&endtime=2026_04_29_00_00_20",
+					StreamURL:                "rtsp://user:pass@192.0.2.10:554/cam/playback?channel=5&subtype=0&starttime=2026_04_29_00_00_00&endtime=2026_04_29_00_00_20",
 					RTSPTransport:            "tcp",
 					VideoCodec:               "H.264",
 					AudioCodec:               "AAC",

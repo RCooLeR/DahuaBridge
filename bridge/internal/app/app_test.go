@@ -514,7 +514,7 @@ func TestRuntimeServicesListStreamsIncludesIntercomRuntimeStatus(t *testing.T) {
 		ID:       "front_vto",
 		BaseURL:  "http://vto.example.local",
 		Username: "admin",
-		Password: "secret",
+		Password: "example-password",
 	})
 	services.AttachMedia(stubRuntimeMedia{
 		status: map[string]media.IntercomStatus{
@@ -910,8 +910,8 @@ func TestRuntimeServicesCreateNVRPlaybackSessionResolvesPlaybackStream(t *testin
 	services.RegisterNVR("west20_nvr", nil, nil, config.DeviceConfig{
 		ID:               "west20_nvr",
 		BaseURL:          "http://192.0.2.10",
-		Username:         "assistant",
-		Password:         "secret",
+		Username:         "example-user",
+		Password:         "example-password",
 		ChannelAllowlist: []int{1},
 	})
 
@@ -947,7 +947,7 @@ func TestRuntimeServicesCreateNVRPlaybackSessionResolvesPlaybackStream(t *testin
 	if !strings.Contains(profile.StreamURL, "subtype=0") {
 		t.Fatalf("expected main subtype in playback stream url, got %q", profile.StreamURL)
 	}
-	if !strings.Contains(profile.StreamURL, "assistant:secret@") {
+	if !strings.Contains(profile.StreamURL, "example-user:example-password@") {
 		t.Fatalf("expected credentialed playback stream url, got %q", profile.StreamURL)
 	}
 	if _, ok := session.Profiles["default"]; ok {
@@ -987,8 +987,8 @@ func TestBuildPlaybackRTSPURLPreservesDahuaQueryOrderAndCredentials(t *testing.T
 	actual := buildPlaybackRTSPURL(
 		config.DeviceConfig{
 			BaseURL:  "http://192.0.2.10",
-			Username: "assistant",
-			Password: "secret",
+			Username: "example-user",
+			Password: "example-password",
 		},
 		5,
 		0,

@@ -15,7 +15,6 @@ Reference pages:
 
 - [Features](features.md)
 - [Device And Stream Model](device-and-stream-model.md)
-- [Dahua API Notes](dahua-api.md)
 - [Archive Event Extraction](archive-event-extraction.md)
 
 ## Operational Model

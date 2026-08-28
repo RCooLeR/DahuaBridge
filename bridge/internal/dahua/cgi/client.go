@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/md5"
-	"crypto/rand"
 	"encoding/hex"
 	"fmt"
 	"io"
@@ -14,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"uuid"
 
 	"RCooLeR/DahuaBridge/internal/config"
 	"RCooLeR/DahuaBridge/internal/dahua"
@@ -346,7 +346,7 @@ func (c *Client) authorizationHeader(req *http.Request) string {
 
 	qop := pickQOP(c.challenge["qop"])
 	uri := req.URL.RequestURI()
-	cnonce := randomHex(16)
+	cnonce := randomNonceHex()
 	nc := fmt.Sprintf("%08x", c.nonceSeq)
 
 	ha1 := md5Hex(fmt.Sprintf("%s:%s:%s", c.username, realm, c.password))
@@ -418,7 +418,7 @@ func parseDigestChallenge(header string) map[string]string {
 
 	header = strings.TrimSpace(header[len("Digest "):])
 	result := make(map[string]string)
-	for _, part := range strings.Split(header, ",") {
+	for part := range strings.SplitSeq(header, ",") {
 		key, value, ok := strings.Cut(strings.TrimSpace(part), "=")
 		if !ok {
 			continue
@@ -430,7 +430,7 @@ func parseDigestChallenge(header string) map[string]string {
 }
 
 func pickQOP(value string) string {
-	for _, part := range strings.Split(value, ",") {
+	for part := range strings.SplitSeq(value, ",") {
 		qop := strings.TrimSpace(part)
 		if qop == "auth" {
 			return qop
@@ -440,13 +440,9 @@ func pickQOP(value string) string {
 	return strings.TrimSpace(value)
 }
 
-func randomHex(size int) string {
-	buf := make([]byte, size)
-	if _, err := rand.Read(buf); err != nil {
-		return "0000000000000000"
-	}
-
-	return hex.EncodeToString(buf)
+func randomNonceHex() string {
+	nonce := uuid.NewV4()
+	return hex.EncodeToString(nonce[:])
 }
 
 func md5Hex(value string) string {

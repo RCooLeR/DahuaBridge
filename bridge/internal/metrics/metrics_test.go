@@ -26,6 +26,8 @@ func TestEventStreamMetricsAreExposed(t *testing.T) {
 		`dahuabridge_event_stream_up{device_id="west20_nvr",device_type="nvr"} 1`,
 		`dahuabridge_event_stream_restarts_total{device_id="west20_nvr",device_type="nvr",status="error"} 1`,
 		`dahuabridge_event_last_seen_timestamp_seconds{device_id="west20_nvr",device_type="nvr"}`,
+		`promhttp_metric_handler_errors_total{cause="encoding"} 0`,
+		`promhttp_metric_handler_errors_total{cause="gathering"} 0`,
 	} {
 		if !strings.Contains(body, metric) {
 			t.Fatalf("expected metrics output to contain %q\n%s", metric, body)

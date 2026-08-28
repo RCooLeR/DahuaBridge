@@ -3,8 +3,26 @@ package media
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"uuid"
 )
+
+func TestNewClipIDUsesUUIDv7(t *testing.T) {
+	first := newClipID()
+	second := newClipID()
+	if first == second {
+		t.Fatalf("newClipID returned duplicate IDs %q", first)
+	}
+
+	parsed, err := uuid.Parse(strings.TrimPrefix(first, "clip_"))
+	if err != nil {
+		t.Fatalf("newClipID returned invalid UUID: %v", err)
+	}
+	if parsed[6]&0xf0 != 0x70 || parsed[8]&0xc0 != 0x80 {
+		t.Fatalf("newClipID UUID = %q, want RFC 9562 version 7", parsed)
+	}
+}
 
 func TestClipOutputSizeBytesReturnsFileSize(t *testing.T) {
 	dir := t.TempDir()

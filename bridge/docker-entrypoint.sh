@@ -1,9 +1,10 @@
 #!/bin/sh
 set -eu
 
-ensure_device_group() {
+supplementary_gids="$(id -G dahuabridge 2>/dev/null | tr ' ' ',')"
+
+add_device_gid() {
     device_path="$1"
-    group_name="$2"
 
     if [ ! -e "$device_path" ]; then
         return 0
@@ -14,20 +15,23 @@ ensure_device_group() {
         return 0
     fi
 
-    existing_group="$(getent group "$gid" | cut -d: -f1 || true)"
-    if [ -n "$existing_group" ]; then
-        usermod -a -G "$existing_group" dahuabridge >/dev/null 2>&1 || true
-        return 0
-    fi
-
-    groupadd --gid "$gid" "$group_name" >/dev/null 2>&1 || true
-    usermod -a -G "$group_name" dahuabridge >/dev/null 2>&1 || true
+    case ",$supplementary_gids," in
+        *",$gid,"*) ;;
+        *) supplementary_gids="$supplementary_gids,$gid" ;;
+    esac
 }
 
 if [ "$(id -u)" = "0" ]; then
-    ensure_device_group /dev/dri/renderD128 render
-    ensure_device_group /dev/dri/card0 video
-    exec gosu dahuabridge /app/dahuabridge "$@"
+    for device_path in /dev/dri/renderD* /dev/dri/card*; do
+        add_device_gid "$device_path"
+    done
+
+    exec setpriv \
+        --reuid=dahuabridge \
+        --regid=dahuabridge \
+        --groups="$supplementary_gids" \
+        --no-new-privs \
+        /app/dahuabridge "$@"
 fi
 
 exec /app/dahuabridge "$@"

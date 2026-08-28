@@ -6,12 +6,17 @@
     "moduleResolution": "Bundler",
     "strict": true,
     "noEmit": true,
+    "erasableSyntaxOnly": true,
+    "isolatedModules": true,
+    "noFallthroughCasesInSwitch": true,
+    "noImplicitReturns": true,
+    "noUncheckedSideEffectImports": true,
+    "verbatimModuleSyntax": true,
     "allowJs": false,
-    "esModuleInterop": true,
     "forceConsistentCasingInFileNames": true,
     "skipLibCheck": true,
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
-    "types": ["node", "vitest/globals"]
+    "types": ["node"]
   },
   "include": ["src/**/*.ts", "tests/**/*.ts", "vite.config.ts"]
 }

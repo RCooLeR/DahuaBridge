@@ -81,8 +81,8 @@ type Service struct {
 	store   *SQLiteStore
 	trigger chan syncRequest
 
-	chunkRunning  int32
-	smdIVSRunning int32
+	chunkRunning  atomic.Int32
+	smdIVSRunning atomic.Int32
 	started       bool
 	mu            sync.Mutex
 }
@@ -151,7 +151,12 @@ func New(cfg config.ArchiveConfig, devices []config.DeviceConfig, searcher Searc
 }
 
 func openArchiveSQLiteDB(ctx context.Context, dbPath string) (*sql.DB, error) {
-	db, err := sql.Open("sqlite", dbPath)
+	// DSN pragmas are applied to every physical connection the pool opens.
+	// Defensive mode prevents ordinary SQL from deliberately corrupting the
+	// database file. Disabling double-quoted strings also turns misspelled
+	// identifiers into errors instead of silently treating them as literals.
+	dsn := dbPath + "?_defensive=1&_dqs=0&_error_rc=1&_busy_timeout=5000&_journal_mode=WAL&_synchronous=NORMAL&_foreign_keys=1"
+	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, err
 	}
@@ -165,18 +170,6 @@ func openArchiveSQLiteDB(ctx context.Context, dbPath string) (*sql.DB, error) {
 }
 
 func configureArchiveSQLiteDB(ctx context.Context, db *sql.DB) error {
-	statements := []string{
-		`PRAGMA busy_timeout = 5000`,
-		`PRAGMA journal_mode = WAL`,
-		`PRAGMA synchronous = NORMAL`,
-		`PRAGMA foreign_keys = ON`,
-	}
-	for _, statement := range statements {
-		if _, err := db.ExecContext(ctx, statement); err != nil {
-			return err
-		}
-	}
-
 	rows, err := db.QueryContext(ctx, `PRAGMA quick_check`)
 	if err != nil {
 		return err
@@ -283,11 +276,11 @@ func (s *Service) SyncNow(ctx context.Context) error {
 	if s == nil {
 		return nil
 	}
-	if !atomic.CompareAndSwapInt32(&s.chunkRunning, 0, 1) {
+	if !s.chunkRunning.CompareAndSwap(0, 1) {
 		s.logger.Debug().Msg("archive recording chunk sync already running")
 		return nil
 	}
-	defer atomic.StoreInt32(&s.chunkRunning, 0)
+	defer s.chunkRunning.Store(0)
 
 	startedAt := time.Now().UTC()
 	s.logger.Info().
@@ -611,11 +604,11 @@ func (s *Service) SyncSMDIVSNow(ctx context.Context) error {
 	if s == nil {
 		return nil
 	}
-	if !atomic.CompareAndSwapInt32(&s.smdIVSRunning, 0, 1) {
+	if !s.smdIVSRunning.CompareAndSwap(0, 1) {
 		s.logger.Debug().Msg("archive smd_ivs sync already running")
 		return nil
 	}
-	defer atomic.StoreInt32(&s.smdIVSRunning, 0)
+	defer s.smdIVSRunning.Store(0)
 
 	if !s.cfg.PrefetchSMD && !s.cfg.PrefetchIVS {
 		return nil

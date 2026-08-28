@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"context"
 	"crypto/md5"
-	"crypto/rand"
 	"crypto/tls"
 	"encoding/hex"
 	"fmt"
@@ -15,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"uuid"
 
 	"RCooLeR/DahuaBridge/internal/config"
 	dahuatransport "RCooLeR/DahuaBridge/internal/dahua/transport"
@@ -224,13 +224,22 @@ func (c *Checker) describe(ctx context.Context, streamURL string, authHeader str
 }
 
 func parseStatusCode(statusLine string) (int, error) {
-	fields := strings.Fields(strings.TrimSpace(statusLine))
-	if len(fields) < 2 {
-		return 0, fmt.Errorf("invalid rtsp status line %q", strings.TrimSpace(statusLine))
+	trimmed := strings.TrimSpace(statusLine)
+	statusCodeText := ""
+	fieldIndex := 0
+	for field := range strings.FieldsSeq(trimmed) {
+		if fieldIndex == 1 {
+			statusCodeText = field
+			break
+		}
+		fieldIndex++
 	}
-	statusCode, err := strconv.Atoi(fields[1])
+	if statusCodeText == "" {
+		return 0, fmt.Errorf("invalid rtsp status line %q", trimmed)
+	}
+	statusCode, err := strconv.Atoi(statusCodeText)
 	if err != nil {
-		return 0, fmt.Errorf("invalid rtsp status line %q: %w", strings.TrimSpace(statusLine), err)
+		return 0, fmt.Errorf("invalid rtsp status line %q: %w", trimmed, err)
 	}
 	return statusCode, nil
 }
@@ -243,7 +252,7 @@ func parseDigestChallenge(header string) map[string]string {
 
 	header = strings.TrimSpace(header[len("Digest "):])
 	result := make(map[string]string)
-	for _, part := range strings.Split(header, ",") {
+	for part := range strings.SplitSeq(header, ",") {
 		key, value, ok := strings.Cut(strings.TrimSpace(part), "=")
 		if !ok {
 			continue
@@ -263,7 +272,7 @@ func authorizationHeader(username string, password string, method string, reques
 	}
 
 	qop := pickQOP(challenge["qop"])
-	cnonce := randomHex(16)
+	cnonce := randomNonceHex()
 	nc := fmt.Sprintf("%08x", nonceSeq)
 
 	ha1 := md5Hex(fmt.Sprintf("%s:%s:%s", username, realm, password))
@@ -298,7 +307,7 @@ func authorizationHeader(username string, password string, method string, reques
 }
 
 func pickQOP(value string) string {
-	for _, part := range strings.Split(value, ",") {
+	for part := range strings.SplitSeq(value, ",") {
 		qop := strings.TrimSpace(part)
 		if qop == "auth" {
 			return qop
@@ -307,12 +316,9 @@ func pickQOP(value string) string {
 	return strings.TrimSpace(value)
 }
 
-func randomHex(size int) string {
-	buf := make([]byte, size)
-	if _, err := rand.Read(buf); err != nil {
-		return "0000000000000000"
-	}
-	return hex.EncodeToString(buf)
+func randomNonceHex() string {
+	nonce := uuid.NewV4()
+	return hex.EncodeToString(nonce[:])
 }
 
 func md5Hex(value string) string {

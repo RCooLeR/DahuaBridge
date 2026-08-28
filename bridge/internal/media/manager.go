@@ -692,8 +692,8 @@ func conditionalCodec(enabled bool, codec string) string {
 
 func detectWorkerChannel(streamID string, sourceURL string) int {
 	streamID = strings.TrimSpace(streamID)
-	if marker := strings.LastIndex(streamID, "_channel_"); marker >= 0 {
-		channel, err := strconv.Atoi(strings.TrimLeft(streamID[marker+len("_channel_"):], "0"))
+	if _, channelText, ok := strings.CutLast(streamID, "_channel_"); ok {
+		channel, err := strconv.Atoi(strings.TrimLeft(channelText, "0"))
 		if err == nil && channel > 0 {
 			return channel
 		}

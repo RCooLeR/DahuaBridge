@@ -5,15 +5,12 @@ from functools import partial
 from inspect import isawaitable
 from typing import Any
 
-import voluptuous as vol
 from homeassistant.components.camera import Camera, CameraEntityFeature
-from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
-from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers import entity_platform
 
+from . import DahuaBridgeConfigEntry
 from .api import DahuaBridgeAPIError
 from .camera_support import (
     async_placeholder_logo_bytes,
@@ -28,7 +25,6 @@ from .catalog import (
     stream_for_record,
     stream_source_for_record_with_preferences,
 )
-from .const import DOMAIN
 from .discovery import CatalogEntityCandidate, setup_catalog_entity_discovery
 from .entity import DahuaBridgeEntity
 from .localization import localized_label
@@ -37,36 +33,12 @@ _LOGGER = logging.getLogger(__name__)
 
 
 async def async_setup_entry(
-    hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback
+    hass: HomeAssistant,
+    entry: DahuaBridgeConfigEntry,
+    async_add_entities: AddEntitiesCallback,
 ) -> None:
-    coordinator = hass.data[DOMAIN][entry.entry_id]
+    coordinator = entry.runtime_data
     seen: set[str] = set()
-    platform = entity_platform.async_get_current_platform()
-    platform.async_register_entity_service(
-        "start_recording",
-        {
-            vol.Optional("profile"): cv.string,
-            vol.Optional("duration_seconds"): cv.positive_int,
-        },
-        "async_start_recording",
-    )
-    platform.async_register_entity_service(
-        "stop_recording",
-        {},
-        "async_stop_recording",
-    )
-    platform.async_register_entity_service(
-        "set_native_playback_source",
-        {
-            vol.Required("stream_source"): cv.string,
-        },
-        "async_set_native_playback_source",
-    )
-    platform.async_register_entity_service(
-        "clear_native_playback_source",
-        {},
-        "async_clear_native_playback_source",
-    )
 
     def collect_camera_entities(record: dict[str, Any]):
         if not stream_for_record(record):

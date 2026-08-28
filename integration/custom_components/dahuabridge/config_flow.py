@@ -7,6 +7,7 @@ from homeassistant import config_entries
 from homeassistant.core import callback
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
+from . import DahuaBridgeConfigEntry
 from .api import DahuaBridgeAPI, DahuaBridgeAPIError, normalize_bridge_url
 from .config_options import (
     VIDEO_PROFILE_OPTIONS,
@@ -40,7 +41,7 @@ class DahuaBridgeConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
     @staticmethod
     @callback
-    def async_get_options_flow(config_entry: config_entries.ConfigEntry):
+    def async_get_options_flow(config_entry: DahuaBridgeConfigEntry):
         return DahuaBridgeOptionsFlow(config_entry)
 
     async def async_step_user(self, user_input: dict | None = None):
@@ -125,7 +126,7 @@ class DahuaBridgeConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
 
 class DahuaBridgeOptionsFlow(config_entries.OptionsFlow):
-    def __init__(self, config_entry: config_entries.ConfigEntry) -> None:
+    def __init__(self, config_entry: DahuaBridgeConfigEntry) -> None:
         self._config_entry = config_entry
 
     async def async_step_init(self, user_input: dict | None = None):

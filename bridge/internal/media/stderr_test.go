@@ -17,7 +17,7 @@ func TestTailBufferKeepsOnlyNewestBytes(t *testing.T) {
 
 func TestTailBufferRedactsFFmpegCredentials(t *testing.T) {
 	buffer := newTailBuffer(512)
-	_, _ = buffer.Write([]byte("rtsp://assistant:secret@192.0.2.10/live?auth_token=abc failed"))
+	_, _ = buffer.Write([]byte("rtsp://user:pass@192.0.2.10/live?auth_token=abc failed"))
 
 	got := buffer.String()
 	if got != "rtsp://[redacted]@192.0.2.10/live?auth_token=[redacted] failed" {

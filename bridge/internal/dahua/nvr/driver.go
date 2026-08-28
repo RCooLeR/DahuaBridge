@@ -1440,8 +1440,8 @@ func parseInlineLoadFilePart(part []byte) (string, []byte) {
 }
 
 func contentTypeFromHeaderBlock(headerBlock []byte) string {
-	lines := strings.Split(strings.ReplaceAll(string(headerBlock), "\r\n", "\n"), "\n")
-	for _, line := range lines {
+	lines := strings.SplitSeq(strings.ReplaceAll(string(headerBlock), "\r\n", "\n"), "\n")
+	for line := range lines {
 		key, value, ok := strings.Cut(line, ":")
 		if !ok {
 			continue
@@ -1636,7 +1636,7 @@ func parseSoftwareVersion(body string) (string, string) {
 	version := ""
 	build := ""
 
-	for _, part := range strings.Split(line, ",") {
+	for part := range strings.SplitSeq(line, ",") {
 		part = strings.TrimSpace(part)
 		switch {
 		case strings.HasPrefix(part, "version="):
@@ -2109,20 +2109,19 @@ func escapeRecordingFilePath(filePath string) string {
 	if filePath == "" {
 		return ""
 	}
-	segments := strings.Split(filePath, "/")
-	for index, segment := range segments {
-		if index == 0 && segment == "" {
-			continue
+	var escaped strings.Builder
+	escaped.Grow(len(filePath))
+	first := true
+	for segment := range strings.SplitSeq(filePath, "/") {
+		if !first {
+			escaped.WriteByte('/')
 		}
+		first = false
 		escapedSegment := url.PathEscape(segment)
 		escapedSegment = strings.ReplaceAll(escapedSegment, "@", "%40")
-		segments[index] = escapedSegment
+		escaped.WriteString(escapedSegment)
 	}
-	escaped := strings.Join(segments, "/")
-	if strings.HasPrefix(filePath, "/") && !strings.HasPrefix(escaped, "/") {
-		return "/" + escaped
-	}
-	return escaped
+	return escaped.String()
 }
 
 func formatRecordingRPCTime(value time.Time) string {

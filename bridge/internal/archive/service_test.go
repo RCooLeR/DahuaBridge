@@ -107,6 +107,38 @@ func TestOpenArchiveSQLiteDBAppliesOperationalPragmas(t *testing.T) {
 	}
 	defer db.Close()
 
+	assertArchiveSQLiteOperationalPragmas(t, db)
+
+	// Drop the idle physical connection so the next query proves that DSN
+	// settings are applied to replacement connections as well.
+	db.SetMaxIdleConns(0)
+	assertArchiveSQLiteOperationalPragmas(t, db)
+	db.SetMaxIdleConns(1)
+
+	var schemaVersion int
+	if err := db.QueryRowContext(context.Background(), `PRAGMA schema_version`).Scan(&schemaVersion); err != nil {
+		t.Fatalf("query schema_version: %v", err)
+	}
+	if _, err := db.ExecContext(context.Background(), `PRAGMA schema_version = 424242`); err != nil {
+		t.Fatalf("attempt protected schema_version update: %v", err)
+	}
+	var protectedSchemaVersion int
+	if err := db.QueryRowContext(context.Background(), `PRAGMA schema_version`).Scan(&protectedSchemaVersion); err != nil {
+		t.Fatalf("query protected schema_version: %v", err)
+	}
+	if protectedSchemaVersion != schemaVersion {
+		t.Fatalf("schema_version changed under defensive mode: got %d, want %d", protectedSchemaVersion, schemaVersion)
+	}
+
+	var quotedIdentifier string
+	if err := db.QueryRowContext(context.Background(), `SELECT "missing_identifier"`).Scan(&quotedIdentifier); err == nil {
+		t.Fatal("double-quoted missing identifier unexpectedly treated as a string literal")
+	}
+}
+
+func assertArchiveSQLiteOperationalPragmas(t *testing.T, db *sql.DB) {
+	t.Helper()
+
 	var busyTimeout int
 	if err := db.QueryRowContext(context.Background(), `PRAGMA busy_timeout`).Scan(&busyTimeout); err != nil {
 		t.Fatalf("query busy_timeout: %v", err)
@@ -129,6 +161,14 @@ func TestOpenArchiveSQLiteDBAppliesOperationalPragmas(t *testing.T) {
 	}
 	if foreignKeys != 1 {
 		t.Fatalf("foreign_keys = %d, want 1", foreignKeys)
+	}
+
+	var synchronous int
+	if err := db.QueryRowContext(context.Background(), `PRAGMA synchronous`).Scan(&synchronous); err != nil {
+		t.Fatalf("query synchronous: %v", err)
+	}
+	if synchronous != 1 {
+		t.Fatalf("synchronous = %d, want 1 (normal)", synchronous)
 	}
 }
 

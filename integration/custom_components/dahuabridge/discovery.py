@@ -4,24 +4,24 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from typing import Any
 
-from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
+from . import DahuaBridgeConfigEntry
 from .catalog import catalog_records
 
 EntityFactory = Callable[[], Any]
 EntityCollector = Callable[[dict[str, Any]], Iterable["CatalogEntityCandidate"]]
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class CatalogEntityCandidate:
     key: str
     create_entity: EntityFactory
 
 
 def setup_catalog_entity_discovery(
-    entry: ConfigEntry,
+    entry: DahuaBridgeConfigEntry,
     coordinator: Any,
     seen: set[str],
     async_add_entities: AddEntitiesCallback,

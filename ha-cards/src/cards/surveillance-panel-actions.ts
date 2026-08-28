@@ -23,7 +23,11 @@ interface SurveillancePanelActionHost {
 }
 
 export class SurveillancePanelActions {
-  constructor(private readonly host: SurveillancePanelActionHost) {}
+  private readonly host: SurveillancePanelActionHost;
+
+  constructor(host: SurveillancePanelActionHost) {
+    this.host = host;
+  }
 
   isBusy(key: string): boolean {
     return this.host.getBusyActions().has(key);

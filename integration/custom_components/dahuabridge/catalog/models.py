@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from typing import Any
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class ButtonSpec:
     key: str
     name: str
@@ -12,7 +12,7 @@ class ButtonSpec:
     icon: str
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class SwitchSpec:
     key: str
     name: str

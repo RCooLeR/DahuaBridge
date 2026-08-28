@@ -8,6 +8,7 @@ import (
 	"net"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"RCooLeR/DahuaBridge/internal/config"
@@ -20,13 +21,13 @@ type testResolver struct{}
 
 func (testResolver) GetStream(streamID string, profileName string, includeCredentials bool) (streams.Entry, streams.Profile, bool) {
 	return streams.Entry{
-			ID: streamID,
-		}, streams.Profile{
-			Name:        profileName,
-			StreamURL:   "rtsp://example.local/stream",
-			FrameRate:   5,
-			Recommended: true,
-		}, true
+		ID: streamID,
+	}, streams.Profile{
+		Name:        profileName,
+		StreamURL:   "rtsp://example.local/stream",
+		FrameRate:   5,
+		Recommended: true,
+	}, true
 }
 
 func TestExtractFramesPublishesJPEG(t *testing.T) {
@@ -341,47 +342,57 @@ func TestStopWhenIdleCancelsWorker(t *testing.T) {
 }
 
 func TestStopWhenIdleIgnoresStaleIdleWindow(t *testing.T) {
-	manager := New(config.MediaConfig{
-		Enabled:        true,
-		StartTimeout:   time.Second,
-		IdleTimeout:    40 * time.Millisecond,
-		MaxWorkers:     2,
-		FrameRate:      5,
-		JPEGQuality:    7,
-		Threads:        1,
-		ScaleWidth:     960,
-		HLSSegmentTime: 2 * time.Second,
-		HLSListSize:    6,
-	}, testResolver{}, zerolog.Nop(), nil)
+	synctest.Test(t, func(t *testing.T) {
+		manager := New(config.MediaConfig{
+			Enabled:        true,
+			StartTimeout:   time.Second,
+			IdleTimeout:    40 * time.Millisecond,
+			MaxWorkers:     2,
+			FrameRate:      5,
+			JPEGQuality:    7,
+			Threads:        1,
+			ScaleWidth:     960,
+			HLSSegmentTime: 2 * time.Second,
+			HLSListSize:    6,
+		}, testResolver{}, zerolog.Nop(), nil)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
 
-	w := &worker{
-		key:            "test:stable",
-		streamID:       "test",
-		profileName:    "stable",
-		parent:         manager,
-		ctx:            ctx,
-		cancel:         cancel,
-		subscribers:    map[chan []byte]struct{}{},
-		idleGeneration: 1,
-		ready:          make(chan struct{}),
-		startErr:       make(chan error, 1),
-	}
+		w := &worker{
+			key:            "test:stable",
+			streamID:       "test",
+			profileName:    "stable",
+			parent:         manager,
+			ctx:            ctx,
+			cancel:         cancel,
+			subscribers:    map[chan []byte]struct{}{},
+			idleGeneration: 1,
+			ready:          make(chan struct{}),
+			startErr:       make(chan error, 1),
+		}
 
-	go w.stopWhenIdle(1)
+		go w.stopWhenIdle(1)
 
-	time.Sleep(10 * time.Millisecond)
-	w.mu.Lock()
-	w.idleGeneration = 2
-	w.subscribers[make(chan []byte)] = struct{}{}
-	w.mu.Unlock()
+		synctest.Sleep(10 * time.Millisecond)
+		w.mu.Lock()
+		w.idleGeneration = 2
+		w.subscribers[make(chan []byte)] = struct{}{}
+		w.mu.Unlock()
 
-	select {
-	case <-w.ctx.Done():
-		t.Fatal("expected stale idle timer not to cancel active worker")
-	case <-time.After(80 * time.Millisecond):
+		synctest.Sleep(80 * time.Millisecond)
+		if err := w.ctx.Err(); err != nil {
+			t.Fatalf("expected stale idle timer not to cancel active worker: %v", err)
+		}
+	})
+}
+
+func TestNormalizeSDPForPionCanonicalizesLines(t *testing.T) {
+	input := "v=0 \n\n" +
+		"m=video 9 UDP/TLS/RTP/SAVPF 96\t\r\n"
+	want := "v=0\r\nm=video 9 UDP/TLS/RTP/SAVPF 96\r\n"
+	if got := normalizeSDPForPion(input); got != want {
+		t.Fatalf("normalizeSDPForPion() = %q, want %q", got, want)
 	}
 }
 

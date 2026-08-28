@@ -15,6 +15,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"uuid"
 
 	"RCooLeR/DahuaBridge/internal/config"
 	dahuatransport "RCooLeR/DahuaBridge/internal/dahua/transport"
@@ -341,7 +342,8 @@ func (c *Client) getSnapshotURI(ctx context.Context, mediaServiceURL string, tok
 func (c *Client) soapCall(ctx context.Context, endpoint string, body string) ([]byte, error) {
 	_, _, _, username, password, client := c.currentState()
 	created := time.Now().UTC().Format(time.RFC3339Nano)
-	nonceBytes := []byte(strconv.FormatInt(time.Now().UnixNano(), 10))
+	nonce := uuid.NewV4()
+	nonceBytes := nonce[:]
 	nonceEncoded := base64.StdEncoding.EncodeToString(nonceBytes)
 	passwordDigest := wssePasswordDigest(nonceBytes, created, password)
 

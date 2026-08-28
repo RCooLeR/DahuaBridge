@@ -9,13 +9,15 @@ import (
 	"RCooLeR/DahuaBridge/internal/app"
 	"RCooLeR/DahuaBridge/internal/buildinfo"
 	"RCooLeR/DahuaBridge/internal/config"
-	"github.com/urfave/cli/v2"
+	"github.com/urfave/cli/v3"
 )
 
 func main() {
-	cliApp := &cli.App{
-		Name:  "dahuabridge",
-		Usage: "Bridge Dahua NVR/VTO/IPC devices into Home Assistant and local HTTP APIs",
+	info := buildinfo.Info()
+	cliApp := &cli.Command{
+		Name:    "dahuabridge",
+		Usage:   "Bridge Dahua NVR/VTO/IPC devices into Home Assistant and local HTTP APIs",
+		Version: info.Version,
 		Flags: []cli.Flag{
 			&cli.StringFlag{
 				Name:    "config",
@@ -24,20 +26,20 @@ func main() {
 				Value:   defaultConfigPath(),
 			},
 		},
-		Action: func(c *cli.Context) error {
+		Action: func(ctx context.Context, c *cli.Command) error {
 			cfg, err := config.Load(c.String("config"))
 			if err != nil {
 				return err
 			}
 
-			ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+			ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 			defer stop()
 
-			return app.Run(ctx, cfg, buildinfo.Info())
+			return app.Run(ctx, cfg, info)
 		},
 	}
 
-	if err := cliApp.Run(os.Args); err != nil {
+	if err := cliApp.Run(context.Background(), os.Args); err != nil {
 		os.Stderr.WriteString(err.Error() + "\n")
 		os.Exit(1)
 	}

@@ -2,6 +2,7 @@ package onvif
 
 import (
 	"context"
+	"encoding/base64"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -10,9 +11,76 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"uuid"
 
 	"RCooLeR/DahuaBridge/internal/config"
 )
+
+func TestSOAPCallUsesRandomUUIDNonce(t *testing.T) {
+	var requestBodies []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatalf("read SOAP request: %v", err)
+		}
+		requestBodies = append(requestBodies, string(body))
+		_, _ = io.WriteString(w, "ok")
+	}))
+	defer server.Close()
+
+	client := &Client{username: "operator", password: "secret", http: server.Client()}
+	for range 2 {
+		if _, err := client.soapCall(context.Background(), server.URL, `<test/>`); err != nil {
+			t.Fatalf("soapCall returned error: %v", err)
+		}
+	}
+	if len(requestBodies) != 2 {
+		t.Fatalf("SOAP request count = %d, want 2", len(requestBodies))
+	}
+
+	var previousNonce string
+	for index, body := range requestBodies {
+		nonceText := soapElementText(t, body, "<wsse:Nonce ", "</wsse:Nonce>")
+		nonceBytes, err := base64.StdEncoding.DecodeString(nonceText)
+		if err != nil {
+			t.Fatalf("decode request %d nonce: %v", index, err)
+		}
+		if len(nonceBytes) != len(uuid.UUID{}) {
+			t.Fatalf("request %d nonce length = %d, want 16", index, len(nonceBytes))
+		}
+		if nonceBytes[6]&0xf0 != 0x40 || nonceBytes[8]&0xc0 != 0x80 {
+			t.Fatalf("request %d nonce is not an RFC 9562 version 4 UUID", index)
+		}
+		if nonceText == previousNonce {
+			t.Fatalf("request %d reused nonce %q", index, nonceText)
+		}
+		previousNonce = nonceText
+
+		created := soapElementText(t, body, "<wsu:Created>", "</wsu:Created>")
+		digest := soapElementText(t, body, "<wsse:Password ", "</wsse:Password>")
+		if want := wssePasswordDigest(nonceBytes, created, "secret"); digest != want {
+			t.Fatalf("request %d password digest = %q, want %q", index, digest, want)
+		}
+	}
+}
+
+func soapElementText(t *testing.T, document string, startTag string, endTag string) string {
+	t.Helper()
+	start := strings.Index(document, startTag)
+	if start < 0 {
+		t.Fatalf("missing element start %q", startTag)
+	}
+	openEnd := strings.Index(document[start:], ">")
+	if openEnd < 0 {
+		t.Fatalf("unterminated element start %q", startTag)
+	}
+	start += openEnd + 1
+	end := strings.Index(document[start:], endTag)
+	if end < 0 {
+		t.Fatalf("missing element end %q", endTag)
+	}
+	return document[start : start+end]
+}
 
 func TestDiscoverIntegration(t *testing.T) {
 	server, counts := newTestONVIFServer(t, onvifServerOptions{

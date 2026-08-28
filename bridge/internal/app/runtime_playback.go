@@ -2,14 +2,13 @@ package app
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"fmt"
 	"net"
 	"net/url"
 	"strconv"
 	"strings"
 	"time"
+	"uuid"
 
 	"RCooLeR/DahuaBridge/internal/config"
 	"RCooLeR/DahuaBridge/internal/dahua"
@@ -427,20 +426,19 @@ func escapePlaybackRecordingFilePath(filePath string) string {
 	if filePath == "" {
 		return ""
 	}
-	segments := strings.Split(filePath, "/")
-	for index, segment := range segments {
-		if index == 0 && segment == "" {
-			continue
+	var escaped strings.Builder
+	escaped.Grow(len(filePath))
+	first := true
+	for segment := range strings.SplitSeq(filePath, "/") {
+		if !first {
+			escaped.WriteByte('/')
 		}
+		first = false
 		escapedSegment := url.PathEscape(segment)
 		escapedSegment = strings.ReplaceAll(escapedSegment, "@", "%40")
-		segments[index] = escapedSegment
+		escaped.WriteString(escapedSegment)
 	}
-	escaped := strings.Join(segments, "/")
-	if strings.HasPrefix(filePath, "/") && !strings.HasPrefix(escaped, "/") {
-		return "/" + escaped
-	}
-	return escaped
+	return escaped.String()
 }
 
 func playbackSnapshotURL(publicBaseURL string, deviceID string, channel int) string {
@@ -498,11 +496,7 @@ func playbackWebRTCOfferURL(publicBaseURL string, streamID string, profile strin
 }
 
 func newPlaybackSessionID() string {
-	buffer := make([]byte, 8)
-	if _, err := rand.Read(buffer); err != nil {
-		return fmt.Sprintf("nvrpb_%d", time.Now().UnixNano())
-	}
-	return "nvrpb_" + hex.EncodeToString(buffer)
+	return "nvrpb_" + uuid.NewV7().String()
 }
 
 func parseResolutionForPlayback(value string) (int, int, bool) {

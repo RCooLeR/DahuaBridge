@@ -466,7 +466,7 @@ func TestDriverFindRecordingsUsesRPCMediaFileFind(t *testing.T) {
 	cfg := config.DeviceConfig{
 		ID:               "west20_nvr",
 		BaseURL:          server.URL,
-		Username:         "assistant",
+		Username:         "example-user",
 		Password:         "secret",
 		ChannelAllowlist: []int{1},
 		RequestTimeout:   5 * time.Second,
@@ -568,7 +568,7 @@ func TestDriverFindRecordingsEventFilterUsesRPCEventLog(t *testing.T) {
 	cfg := config.DeviceConfig{
 		ID:               "west20_nvr",
 		BaseURL:          server.URL,
-		Username:         "assistant",
+		Username:         "example-user",
 		Password:         "secret",
 		ChannelAllowlist: []int{1},
 		RequestTimeout:   5 * time.Second,
@@ -665,7 +665,7 @@ func TestDriverFindRecordingsEventOnlyUsesSMDFinder(t *testing.T) {
 	cfg := config.DeviceConfig{
 		ID:               "west20_nvr",
 		BaseURL:          server.URL,
-		Username:         "assistant",
+		Username:         "example-user",
 		Password:         "secret",
 		ChannelAllowlist: []int{1},
 		RequestTimeout:   5 * time.Second,
@@ -760,7 +760,7 @@ func TestDriverFindRecordingsEventFilterFallsBackToSMDFinder(t *testing.T) {
 	cfg := config.DeviceConfig{
 		ID:               "west20_nvr",
 		BaseURL:          server.URL,
-		Username:         "assistant",
+		Username:         "example-user",
 		Password:         "secret",
 		ChannelAllowlist: []int{1},
 		RequestTimeout:   5 * time.Second,
@@ -838,7 +838,7 @@ func TestDriverFindRecordingsEventFilterUsesEventFlagAndDropsTimingResults(t *te
 	cfg := config.DeviceConfig{
 		ID:               "west20_nvr",
 		BaseURL:          server.URL,
-		Username:         "assistant",
+		Username:         "example-user",
 		Password:         "secret",
 		ChannelAllowlist: []int{1},
 		RequestTimeout:   5 * time.Second,
@@ -895,7 +895,7 @@ func TestDriverFindRecordingsCGIUsesLocalWallClock(t *testing.T) {
 	cfg := config.DeviceConfig{
 		ID:               "west20_nvr",
 		BaseURL:          server.URL,
-		Username:         "assistant",
+		Username:         "example-user",
 		Password:         "secret",
 		ChannelAllowlist: []int{1},
 		RequestTimeout:   5 * time.Second,

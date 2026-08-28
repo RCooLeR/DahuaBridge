@@ -49,6 +49,18 @@ card-side MP4 delete controls are not used by the HA cards.
 - [Architecture](docs/architecture.md)
 - [Removed report](removed-report.md)
 
+## Development
+
+The workspace requires Node.js `^22.12.0 || >=24.0.0` and pins npm
+11.19.1 for reproducible lockfile updates.
+
+```shell
+npm ci
+npm run check
+```
+
+`check` runs the TypeScript typecheck, Vitest suite, and production build.
+
 ## Related Workspaces
 
 - root docs: [../docs/README.md](../docs/README.md)

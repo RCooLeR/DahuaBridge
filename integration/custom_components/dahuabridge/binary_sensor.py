@@ -4,11 +4,11 @@ from functools import partial
 from typing import Any
 
 from homeassistant.components.binary_sensor import BinarySensorEntity
-from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
+from . import DahuaBridgeConfigEntry
 from .catalog import (
     available_for_record,
     binary_device_class_for_field,
@@ -19,16 +19,17 @@ from .catalog import (
     name_for_field,
     value_for_field,
 )
-from .const import DOMAIN
 from .discovery import CatalogEntityCandidate, setup_catalog_entity_discovery
 from .entity import DahuaBridgeEntity
 from .localization import localized_label
 
 
 async def async_setup_entry(
-    hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback
+    hass: HomeAssistant,
+    entry: DahuaBridgeConfigEntry,
+    async_add_entities: AddEntitiesCallback,
 ) -> None:
-    coordinator = hass.data[DOMAIN][entry.entry_id]
+    coordinator = entry.runtime_data
     seen: set[str] = set()
     language = getattr(coordinator, "integration_language", "en")
 

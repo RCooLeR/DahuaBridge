@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"uuid"
 
 	"RCooLeR/DahuaBridge/internal/config"
 	"RCooLeR/DahuaBridge/internal/streams"
@@ -62,7 +63,7 @@ func (m *Manager) WebRTCAnswer(ctx context.Context, streamID string, profileName
 		return WebRTCSessionDescription{}, err
 	}
 
-	key := fmt.Sprintf("%s:%s:webrtc:%d", entry.ID, resolvedProfileName, time.Now().UnixNano())
+	key := entry.ID + ":" + resolvedProfileName + ":webrtc:" + uuid.NewV7().String()
 	sessionCtx, cancel := context.WithCancel(context.Background())
 	session := &webrtcSession{
 		key:         key,
@@ -885,22 +886,26 @@ func normalizeSDPForPion(raw string) string {
 	sdp = strings.ReplaceAll(sdp, "\r\n", "\n")
 	sdp = strings.ReplaceAll(sdp, "\r", "\n")
 
-	lines := strings.Split(sdp, "\n")
-	clean := make([]string, 0, len(lines))
-	for _, line := range lines {
+	var normalized strings.Builder
+	normalized.Grow(len(sdp) + 2)
+	for line := range strings.SplitSeq(sdp, "\n") {
 		line = strings.TrimRight(line, " \t")
 		if line == "" {
 			continue
 		}
-		clean = append(clean, line)
+		if normalized.Len() > 0 {
+			normalized.WriteString("\r\n")
+		}
+		normalized.WriteString(line)
 	}
-	if len(clean) == 0 {
+	if normalized.Len() == 0 {
 		return ""
 	}
 
 	// Keep SDP in canonical CRLF form and explicitly terminate the final line.
 	// This avoids Pion parser failures like "failed to unmarshal SDP: EOF".
-	return strings.Join(clean, "\r\n") + "\r\n"
+	normalized.WriteString("\r\n")
+	return normalized.String()
 }
 
 func toPionICEServers(input []WebRTCICEServer) []webrtc.ICEServer {

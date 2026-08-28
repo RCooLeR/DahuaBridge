@@ -1,24 +1,25 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from urllib.parse import quote
 
 from homeassistant.core import HomeAssistant
 
 from ..const import DOMAIN
 
+if TYPE_CHECKING:
+    from ..coordinator import DahuaBridgeCoordinator
+
 
 def resolve_coordinator(
     hass: HomeAssistant, attrs: Mapping[str, Any]
-) -> Any | None:
-    domain_data = hass.data.get(DOMAIN, {})
+) -> DahuaBridgeCoordinator | None:
     bridge_base_url = str(attrs.get("bridge_base_url", "")).strip().rstrip("/")
     fallback = None
-    for value in domain_data.values():
-        api = getattr(value, "api", None)
-        if api is None:
-            continue
+    for entry in hass.config_entries.async_loaded_entries(DOMAIN):
+        value = entry.runtime_data
+        api = value.api
         if fallback is None:
             fallback = value
         if bridge_base_url and str(api.base_url).rstrip("/") == bridge_base_url:

@@ -193,7 +193,7 @@ func TestAudioCapabilitiesHideReadOnlyNVRMuteControl(t *testing.T) {
 	cfg := config.DeviceConfig{
 		ID:               "west20_nvr",
 		BaseURL:          server.URL,
-		Username:         "assistant",
+		Username:         "example-user",
 		Password:         "secret",
 		ChannelAllowlist: []int{5},
 		RequestTimeout:   5 * time.Second,
@@ -249,7 +249,7 @@ func TestAudioCapabilitiesHideNVRMuteWhenEncodeWriteDenied(t *testing.T) {
 	cfg := config.DeviceConfig{
 		ID:                "west20_nvr",
 		BaseURL:           server.URL,
-		Username:          "assistant",
+		Username:          "example-user",
 		Password:          "secret",
 		ChannelAllowlist:  []int{5},
 		AllowConfigWrites: true,
@@ -287,7 +287,7 @@ func TestRecordingCapabilitiesHideReadOnlyNVRWrites(t *testing.T) {
 	cfg := config.DeviceConfig{
 		ID:               "west20_nvr",
 		BaseURL:          server.URL,
-		Username:         "assistant",
+		Username:         "example-user",
 		Password:         "secret",
 		ChannelAllowlist: []int{5},
 		RequestTimeout:   5 * time.Second,
@@ -328,7 +328,7 @@ func TestDriverPTZSendsExpectedQueries(t *testing.T) {
 	cfg := config.DeviceConfig{
 		ID:               "west20_nvr",
 		BaseURL:          server.URL,
-		Username:         "assistant",
+		Username:         "example-user",
 		Password:         "secret",
 		ChannelAllowlist: []int{5},
 		RequestTimeout:   5 * time.Second,
@@ -379,7 +379,7 @@ func TestDriverAuxSendsExpectedQueries(t *testing.T) {
 	cfg := config.DeviceConfig{
 		ID:                "west20_nvr",
 		BaseURL:           server.URL,
-		Username:          "assistant",
+		Username:          "example-user",
 		Password:          "secret",
 		ChannelAllowlist:  []int{11},
 		AllowConfigWrites: true,
@@ -485,7 +485,7 @@ func TestDriverAuxLightUsesRPCModeSwitch(t *testing.T) {
 	cfg := config.DeviceConfig{
 		ID:                "west20_nvr",
 		BaseURL:           server.URL,
-		Username:          "assistant",
+		Username:          "example-user",
 		Password:          "secret",
 		ChannelAllowlist:  []int{11},
 		AllowConfigWrites: true,
@@ -613,7 +613,7 @@ func TestDriverRecordingSendsExpectedQueries(t *testing.T) {
 	cfg := config.DeviceConfig{
 		ID:                "west20_nvr",
 		BaseURL:           server.URL,
-		Username:          "assistant",
+		Username:          "example-user",
 		Password:          "secret",
 		ChannelAllowlist:  []int{5},
 		AllowConfigWrites: true,
@@ -661,7 +661,7 @@ func TestDriverRecordingFallsBackToTablePrefixedQueries(t *testing.T) {
 	cfg := config.DeviceConfig{
 		ID:                "west20_nvr",
 		BaseURL:           server.URL,
-		Username:          "assistant",
+		Username:          "example-user",
 		Password:          "secret",
 		ChannelAllowlist:  []int{5},
 		AllowConfigWrites: true,
@@ -805,7 +805,7 @@ func TestChannelControlCapabilitiesUsesConfiguredAuxOverride(t *testing.T) {
 	cfg := config.DeviceConfig{
 		ID:               "west20_nvr",
 		BaseURL:          server.URL,
-		Username:         "assistant",
+		Username:         "example-user",
 		Password:         "secret",
 		ChannelAllowlist: []int{8},
 		ChannelAuxControlOverrides: []config.ChannelAuxControlOverride{
@@ -853,7 +853,7 @@ func TestChannelControlCapabilitiesDoesNotInferAuxFromBlindProbe(t *testing.T) {
 	cfg := config.DeviceConfig{
 		ID:               "west20_nvr",
 		BaseURL:          server.URL,
-		Username:         "assistant",
+		Username:         "example-user",
 		Password:         "secret",
 		ChannelAllowlist: []int{8},
 		RequestTimeout:   5 * time.Second,
@@ -880,7 +880,7 @@ func TestPTZCapabilitiesClassifiesBadRequestAsUnsupported(t *testing.T) {
 	cfg := config.DeviceConfig{
 		ID:             "west20_nvr",
 		BaseURL:        server.URL,
-		Username:       "assistant",
+		Username:       "example-user",
 		Password:       "secret",
 		RequestTimeout: 5 * time.Second,
 	}
@@ -945,7 +945,7 @@ func TestChannelControlCapabilitiesIncludesRemoteSpeakPlayback(t *testing.T) {
 	cfg := config.DeviceConfig{
 		ID:               "west20_nvr",
 		BaseURL:          server.URL,
-		Username:         "assistant",
+		Username:         "example-user",
 		Password:         "secret",
 		ChannelAllowlist: []int{7},
 		RequestTimeout:   5 * time.Second,

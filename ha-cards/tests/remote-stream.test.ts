@@ -1,6 +1,8 @@
+import Hls from "hls.js";
 import { describe, expect, it } from "vitest";
 
 import {
+  isHlsPlaylistStalled,
   resolveHlsPlaybackMode,
   resolveSourceFailureAction,
   resolveSourceFailureTransition,
@@ -38,6 +40,11 @@ describe("remote stream hls playback mode", () => {
         nativeHlsSupported: false,
       }),
     ).toBe("unsupported");
+  });
+
+  it("recognizes hls.js's bounded unchanged-playlist failure", () => {
+    expect(isHlsPlaylistStalled(Hls.ErrorDetails.PLAYLIST_UNCHANGED_ERROR)).toBe(true);
+    expect(isHlsPlaylistStalled(Hls.ErrorDetails.LEVEL_LOAD_ERROR)).toBe(false);
   });
 
   it("advances to the next source before scheduling a retry", () => {

@@ -12,8 +12,16 @@ dahua-pdf/
 .env
 .env.*
 !.env.example
+claude-review/
 *.local.yaml
 *.local.yml
+*.pem
+*.key
+*.p12
+*.pfx
+credentials*.json
+secrets*.yaml
+secrets*.yml
 bridge/bin/
 bridge/dist/
 bridge/var/

@@ -1,4 +1,5 @@
 import Hls from "hls.js";
+import type { MediaPlayerClass } from "dashjs";
 import { css, html, LitElement, type PropertyValues, type TemplateResult } from "lit";
 import { createRef, ref } from "lit/directives/ref.js";
 
@@ -20,6 +21,9 @@ const REMOTE_STREAM_LOG_SCOPE = "remote_streams";
 const MAX_SOURCE_FAILURE_RETRIES = 3;
 const MAX_HLS_NETWORK_RECOVERY_ATTEMPTS = 2;
 const HLS_RETRY_CONFIG = {
+  // Bound stalled appends and playlists so the card can advance to its next source.
+  appendTimeout: STARTUP_GRACE_TIMEOUT_MS,
+  liveMaxUnchangedPlaylistRefresh: 4,
   manifestLoadingMaxRetry: 6,
   manifestLoadingRetryDelay: 1_000,
   manifestLoadingMaxRetryTimeout: 16_000,
@@ -45,14 +49,6 @@ export interface RemoteStreamDescriptor {
 
 export interface RemoteStreamAudioHost extends HTMLElement {
   syncAudioState(muted: boolean, volume?: number): void;
-}
-
-interface DashPlayerLike {
-  initialize(view: HTMLVideoElement, source: string, autoPlay: boolean): void;
-  updateSettings?(settings: Record<string, unknown>): void;
-  on?(event: string, listener: (...args: unknown[]) => void): void;
-  off?(event: string, listener: (...args: unknown[]) => void): void;
-  reset(): void;
 }
 
 const DASH_EVENT_STREAM_INITIALIZED = "streamInitialized";
@@ -152,7 +148,7 @@ class DahuaBridgeRemoteStreamElement extends LitElement {
   private _attachedSourceKey = "";
   private _videoListenersCleanup: (() => void) | null = null;
   private _hls: Hls | null = null;
-  private _dash: DashPlayerLike | null = null;
+  private _dash: MediaPlayerClass | null = null;
   private _hlsMediaRecoveryAttempts = 0;
   private _hlsNetworkRecoveryAttempts = 0;
   private _startupTimer: number | null = null;
@@ -500,6 +496,10 @@ class DahuaBridgeRemoteStreamElement extends LitElement {
           reason: data.reason,
           response_code: data.response?.code,
         });
+        if (isHlsPlaylistStalled(data.details)) {
+          this.advanceToNextSource("hls playlist stalled");
+          return;
+        }
         if (!data.fatal) {
           return;
         }
@@ -559,11 +559,7 @@ class DahuaBridgeRemoteStreamElement extends LitElement {
       return;
     }
 
-    const dashModule = (await import("dashjs")) as unknown as {
-      MediaPlayer?: () => {
-        create: () => DashPlayerLike;
-      };
-    };
+    const dashModule = await import("dashjs");
     const playerFactory = dashModule.MediaPlayer;
     if (!playerFactory) {
       this.advanceToNextSource("dash.js unavailable");
@@ -613,9 +609,12 @@ class DahuaBridgeRemoteStreamElement extends LitElement {
           logLevel: 0,
         },
         streaming: {
-          scheduleWhilePaused: false,
-          fastSwitchEnabled: false,
-          lowLatencyEnabled: false,
+          buffer: {
+            fastSwitchEnabled: false,
+          },
+          scheduling: {
+            scheduleWhilePaused: false,
+          },
         },
       });
       this.updateRemoteStreamLogState("attaching", {
@@ -1081,6 +1080,10 @@ export function resolveHlsPlaybackMode(capabilities: {
     return "native";
   }
   return "unsupported";
+}
+
+export function isHlsPlaylistStalled(details: string): boolean {
+  return details === Hls.ErrorDetails.PLAYLIST_UNCHANGED_ERROR;
 }
 
 function getVideoElementDiagnostics(video: HTMLVideoElement): {

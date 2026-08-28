@@ -147,7 +147,7 @@ func New(info buildinfo.BuildInfo) *Registry {
 }
 
 func (r *Registry) Handler() http.Handler {
-	return promhttp.HandlerFor(r.registry, promhttp.HandlerOpts{})
+	return promhttp.HandlerFor(r.registry, promhttp.HandlerOpts{Registry: r.registry})
 }
 
 func (r *Registry) ObserveProbe(deviceID string, deviceType string, started time.Time, err error) {

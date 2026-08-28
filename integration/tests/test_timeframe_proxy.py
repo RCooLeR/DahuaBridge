@@ -18,6 +18,7 @@ from custom_components.dahuabridge.proxy.timeframe_datetime import (  # noqa: E4
 )
 from custom_components.dahuabridge.proxy.timeframe_playback import (  # noqa: E402
     playback_sessions_url,
+    resolve_coordinator,
     select_mjpeg_url,
     select_mjpeg_urls,
 )
@@ -33,14 +34,27 @@ class FakeConfig:
     time_zone = "Europe/Kiev"
 
 
+class FakeConfigEntries:
+    def __init__(self, coordinators=()) -> None:
+        self._entries = [
+            type("FakeEntry", (), {"runtime_data": coordinator})()
+            for coordinator in coordinators
+        ]
+
+    def async_loaded_entries(self, domain: str):
+        return self._entries
+
+
 class FakeHass:
     config = FakeConfig()
 
+    def __init__(self, coordinators=()) -> None:
+        self.config_entries = FakeConfigEntries(coordinators)
+
 
 class FakeAPI:
-    base_url = "https://ha.example.com/dahua-bridge"
-
-    def __init__(self) -> None:
+    def __init__(self, base_url="https://ha.example.com/dahua-bridge") -> None:
+        self.base_url = base_url
         self.bytes_requests: list[str] = []
 
     def bridge_resource_url(self, target: str) -> str:
@@ -65,8 +79,8 @@ class FakeAPI:
 
 
 class FakeCoordinator:
-    def __init__(self) -> None:
-        self.api = FakeAPI()
+    def __init__(self, base_url="https://ha.example.com/dahua-bridge") -> None:
+        self.api = FakeAPI(base_url)
 
 
 class FakeRequest(dict):
@@ -146,6 +160,24 @@ class TimeframeProxyTests(unittest.TestCase):
             ),
             "https://ha.example.com/dahua-bridge/api/v1/nvr/west20_nvr/playback/sessions",
         )
+
+    def test_resolve_coordinator_uses_loaded_config_entry_runtime_data(self) -> None:
+        first = FakeCoordinator("https://bridge-one.example.com")
+        second = FakeCoordinator("https://bridge-two.example.com")
+
+        self.assertIs(
+            resolve_coordinator(
+                FakeHass((first, second)),
+                {"bridge_base_url": "https://bridge-two.example.com/"},
+            ),
+            second,
+        )
+
+    def test_resolve_coordinator_falls_back_to_first_loaded_entry(self) -> None:
+        first = FakeCoordinator("https://bridge-one.example.com")
+        second = FakeCoordinator("https://bridge-two.example.com")
+
+        self.assertIs(resolve_coordinator(FakeHass((first, second)), {}), first)
 
     def test_bridge_resource_url_preserves_media_query_order(self) -> None:
         api = DahuaBridgeAPI(object(), "https://ha.example.com/dahua-bridge")

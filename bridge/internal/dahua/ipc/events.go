@@ -148,7 +148,7 @@ func (d *Driver) parseEventStream(ctx context.Context, resp *http.Response, sink
 }
 
 func parseBoundary(contentType string) string {
-	for _, part := range strings.Split(contentType, ";") {
+	for part := range strings.SplitSeq(contentType, ";") {
 		part = strings.TrimSpace(part)
 		if !strings.HasPrefix(strings.ToLower(part), "boundary=") {
 			continue
@@ -161,7 +161,7 @@ func parseBoundary(contentType string) string {
 func parseEventPayload(payload string) map[string]string {
 	result := make(map[string]string)
 	if strings.Contains(payload, ";") {
-		for _, part := range strings.Split(payload, ";") {
+		for part := range strings.SplitSeq(payload, ";") {
 			key, value, ok := strings.Cut(strings.TrimSpace(part), "=")
 			if !ok {
 				continue
@@ -173,7 +173,7 @@ func parseEventPayload(payload string) map[string]string {
 		}
 	}
 
-	for _, line := range strings.Split(payload, "\n") {
+	for line := range strings.SplitSeq(payload, "\n") {
 		key, value, ok := strings.Cut(strings.TrimSpace(line), "=")
 		if !ok {
 			continue

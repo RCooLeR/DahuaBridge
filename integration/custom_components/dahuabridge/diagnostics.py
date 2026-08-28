@@ -3,17 +3,16 @@ from __future__ import annotations
 from typing import Any
 
 from homeassistant.components.diagnostics import async_redact_data
-from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 
-from .const import DOMAIN
+from . import DahuaBridgeConfigEntry
 from .diagnostic_redaction import CONFIG_REDACT_KEYS, REDACTED, redact_payload
 
 
 async def async_get_config_entry_diagnostics(
-    hass: HomeAssistant, entry: ConfigEntry
+    hass: HomeAssistant, entry: DahuaBridgeConfigEntry
 ) -> dict[str, Any]:
-    coordinator = hass.data[DOMAIN][entry.entry_id]
+    coordinator = entry.runtime_data
     status: dict[str, Any] | None = None
     status_error: str | None = None
 

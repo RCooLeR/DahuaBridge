@@ -4,20 +4,21 @@ from functools import partial
 from typing import Any
 
 from homeassistant.components.button import ButtonEntity
-from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
+from . import DahuaBridgeConfigEntry
 from .catalog import button_specs_for_record, device_id_for_record
-from .const import DOMAIN
 from .discovery import CatalogEntityCandidate, setup_catalog_entity_discovery
 from .entity import DahuaBridgeEntity
 
 
 async def async_setup_entry(
-    hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback
+    hass: HomeAssistant,
+    entry: DahuaBridgeConfigEntry,
+    async_add_entities: AddEntitiesCallback,
 ) -> None:
-    coordinator = hass.data[DOMAIN][entry.entry_id]
+    coordinator = entry.runtime_data
     seen: set[str] = set()
     language = getattr(coordinator, "integration_language", "en")
 

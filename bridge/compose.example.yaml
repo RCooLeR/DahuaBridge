@@ -1,19 +1,41 @@
+name: dahuabridge
+
 services:
   dahuabridge:
     build:
       context: .
       dockerfile: Dockerfile
+      pull: true
     container_name: dahuabridge
+    init: true
     restart: unless-stopped
+    stop_grace_period: 30s
+    read_only: true
+    cap_drop:
+      - ALL
+    cap_add:
+      - SETGID
+      - SETUID
+    security_opt:
+      - no-new-privileges:true
     ports:
       - "9020:9020"
     environment:
-      TZ: Europe/Kiev
+      TZ: ${TZ:-Europe/Kyiv}
     volumes:
-      - ./config.yaml:/config/config.yaml:ro
-      - ./data:/data
+      - type: bind
+        source: ./config.yaml
+        target: /config/config.yaml
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ./data
+        target: /data
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m,mode=1777
     # Optional if you want Intel iGPU acceleration through QSV/VAAPI.
-    # The entrypoint will detect the /dev/dri device GIDs and add the
-    # dahuabridge user to those groups before dropping privileges.
+    # The entrypoint passes every /dev/dri device GID to the unprivileged
+    # dahuabridge process without modifying the read-only root filesystem.
     # devices:
     #   - /dev/dri:/dev/dri

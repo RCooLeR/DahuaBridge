@@ -67,6 +67,7 @@ export function resolveIntercomOfferUrl(stream: Pick<CameraStreamViewModel, "loc
 }
 
 export class BridgeIntercomSessionController {
+  private readonly options: BridgeIntercomSessionOptions;
   private readonly fetchImpl: typeof fetch;
   private readonly createPeerConnection: (configuration?: RTCConfiguration) => RTCPeerConnection;
   private readonly getUserMedia: ((constraints: MediaStreamConstraints) => Promise<MediaStream>) | null;
@@ -81,7 +82,8 @@ export class BridgeIntercomSessionController {
   private connectionVersion = 0;
   private snapshot: BridgeIntercomSnapshot = INITIAL_SNAPSHOT;
 
-  constructor(private readonly options: BridgeIntercomSessionOptions) {
+  constructor(options: BridgeIntercomSessionOptions) {
+    this.options = options;
     this.fetchImpl = options.fetchImpl ?? fetch;
     this.createPeerConnection =
       options.createPeerConnection ??

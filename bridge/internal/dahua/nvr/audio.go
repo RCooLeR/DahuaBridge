@@ -141,13 +141,13 @@ func extractAudioFormats(values []remoteSpeakFormat) []string {
 }
 
 func isAuthorityDeniedRPCError(err error) bool {
-	var rpcErr *dahuarpc.Error
-	return errors.As(err, &rpcErr) && rpcErr != nil && rpcErr.Code == rpcAuthorityDeniedCode
+	rpcErr, ok := errors.AsType[*dahuarpc.Error](err)
+	return ok && rpcErr != nil && rpcErr.Code == rpcAuthorityDeniedCode
 }
 
 func isUnknownRPCError(err error) bool {
-	var rpcErr *dahuarpc.Error
-	return errors.As(err, &rpcErr) && rpcErr != nil && rpcErr.Code == 268959743
+	rpcErr, ok := errors.AsType[*dahuarpc.Error](err)
+	return ok && rpcErr != nil && rpcErr.Code == 268959743
 }
 
 func (d *Driver) channelAudioStreamState(ctx context.Context, channel int) (bool, bool, string) {

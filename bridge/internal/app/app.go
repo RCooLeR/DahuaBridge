@@ -45,11 +45,9 @@ func Run(ctx context.Context, cfg config.Config, info buildinfo.BuildInfo) error
 
 	var persistenceWG sync.WaitGroup
 	if cfg.StateStore.Enabled {
-		persistenceWG.Add(1)
-		go func() {
-			defer persistenceWG.Done()
+		persistenceWG.Go(func() {
 			runStateStoreLoop(ctx, cfg, logger, metricsRegistry, probeStore, imouClient)
-		}()
+		})
 	}
 
 	drivers := buildDrivers(cfg, logger, metricsRegistry, services, imouClient)
@@ -81,18 +79,14 @@ func Run(ctx context.Context, cfg config.Config, info buildinfo.BuildInfo) error
 
 	var wg sync.WaitGroup
 	for _, driver := range drivers {
-		wg.Add(1)
-		go func(driver dahua.Driver) {
-			defer wg.Done()
+		wg.Go(func() {
 			runProbeLoop(ctx, logger, metricsRegistry, probeStore, driver)
-		}(driver)
+		})
 
 		if eventSource, ok := driver.(dahua.EventSource); ok {
-			wg.Add(1)
-			go func(driver dahua.Driver, eventSource dahua.EventSource) {
-				defer wg.Done()
+			wg.Go(func() {
 				runEventLoop(ctx, logger, metricsRegistry, probeStore, driver, eventSource)
-			}(driver, eventSource)
+			})
 		}
 	}
 
@@ -332,11 +326,13 @@ func runEventLoopWithRetry(
 	}
 
 	events := make(chan dahua.Event, 32)
+	eventConsumerCtx, stopEventConsumer := context.WithCancel(ctx)
 
-	go func() {
+	var eventConsumerWG sync.WaitGroup
+	eventConsumerWG.Go(func() {
 		for {
 			select {
-			case <-ctx.Done():
+			case <-eventConsumerCtx.Done():
 				return
 			case event, ok := <-events:
 				if !ok {
@@ -345,6 +341,10 @@ func runEventLoopWithRetry(
 				handleEvent(log, metricsRegistry, probes, event)
 			}
 		}
+	})
+	defer func() {
+		stopEventConsumer()
+		eventConsumerWG.Wait()
 	}()
 
 	delay := retry.InitialDelay
