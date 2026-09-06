@@ -85,6 +85,13 @@ type Service struct {
 	smdIVSRunning atomic.Int32
 	started       bool
 	mu            sync.Mutex
+	ctx           context.Context
+	cancel        context.CancelFunc
+	wg            sync.WaitGroup
+	closed        bool
+	closeDone     chan struct{}
+	closeErr      error
+	stopParent    func() bool
 }
 
 type smdIVSSyncStats struct {
@@ -135,6 +142,7 @@ func New(cfg config.ArchiveConfig, devices []config.DeviceConfig, searcher Searc
 		return nil, fmt.Errorf("init archive sqlite schema: %w", err)
 	}
 
+	serviceCtx, cancel := context.WithCancel(context.Background())
 	return &Service{
 		cfg:      cfg,
 		devices:  append([]config.DeviceConfig(nil), devices...),
@@ -147,6 +155,7 @@ func New(cfg config.ArchiveConfig, devices []config.DeviceConfig, searcher Searc
 		db:       db,
 		store:    store,
 		trigger:  make(chan syncRequest, 4),
+		ctx:      serviceCtx, cancel: cancel, closeDone: make(chan struct{}),
 	}, nil
 }
 
@@ -194,6 +203,9 @@ func (s *Service) Start(ctx context.Context) error {
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.closed {
+		return errors.New("archive service is closed")
+	}
 	if s.started {
 		return nil
 	}
@@ -221,35 +233,43 @@ func (s *Service) Start(ctx context.Context) error {
 	s.cron.Start()
 	s.started = true
 
-	go s.runLoop(ctx)
-	go s.smdIVSLoop(ctx)
+	s.stopParent = context.AfterFunc(ctx, s.cancel)
+	s.wg.Go(func() { s.runLoop(s.ctx) })
+	s.wg.Go(func() { s.smdIVSLoop(s.ctx) })
 	s.queueSMDIVSSync()
 	s.QueueSync()
 	return nil
 }
 
+// Close joins both scheduled jobs and manual syncs before closing SQLite.
+// beginSync registers under s.mu, which also guards the transition to closed.
 func (s *Service) Close() error {
 	if s == nil {
 		return nil
 	}
 
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.cron != nil {
-		stopCtx := s.cron.Stop()
-		select {
-		case <-stopCtx.Done():
-		case <-time.After(5 * time.Second):
-		}
-		s.cron = nil
+	if s.closed {
+		s.mu.Unlock()
+		<-s.closeDone
+		return s.closeErr
 	}
+	s.closed = true
 	s.started = false
-	if s.db != nil {
-		err := s.db.Close()
-		s.db = nil
-		return err
+	cronJob := s.cron
+	stopParent := s.stopParent
+	s.mu.Unlock()
+	if stopParent != nil {
+		stopParent()
 	}
-	return nil
+	s.cancel()
+	if cronJob != nil {
+		<-cronJob.Stop().Done()
+	}
+	s.wg.Wait()
+	s.closeErr = s.db.Close()
+	close(s.closeDone)
+	return s.closeErr
 }
 
 func (s *Service) QueueSync() {
@@ -276,6 +296,11 @@ func (s *Service) SyncNow(ctx context.Context) error {
 	if s == nil {
 		return nil
 	}
+	ctx, finish, err := s.beginSync(ctx)
+	if err != nil {
+		return err
+	}
+	defer finish()
 	if !s.chunkRunning.CompareAndSwap(0, 1) {
 		s.logger.Debug().Msg("archive recording chunk sync already running")
 		return nil
@@ -562,9 +587,9 @@ func (s *Service) runLoop(ctx context.Context) {
 		case request := <-s.trigger:
 			switch request {
 			case syncRequestSMDIVS:
-				go s.runSMDIVSSync(ctx)
+				s.wg.Go(func() { s.runSMDIVSSync(ctx) })
 			default:
-				go s.runChunkSync(ctx)
+				s.wg.Go(func() { s.runChunkSync(ctx) })
 			}
 		}
 	}
@@ -604,6 +629,11 @@ func (s *Service) SyncSMDIVSNow(ctx context.Context) error {
 	if s == nil {
 		return nil
 	}
+	ctx, finish, err := s.beginSync(ctx)
+	if err != nil {
+		return err
+	}
+	defer finish()
 	if !s.smdIVSRunning.CompareAndSwap(0, 1) {
 		s.logger.Debug().Msg("archive smd_ivs sync already running")
 		return nil
@@ -706,12 +736,15 @@ func (s *Service) syncChannel(ctx context.Context, device config.DeviceConfig, c
 }
 
 func (s *Service) syncArchiveWindow(ctx context.Context, deviceID string, channel int, startTime time.Time, endTime time.Time) (archiveChunkSyncStats, error) {
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancel()
 	stats := archiveChunkSyncStats{QueryCount: 1}
 	result, err := s.searcher.NVRRecordings(ctx, deviceID, dahua.NVRRecordingQuery{
 		Channel:   channel,
 		StartTime: startTime,
 		EndTime:   endTime,
 		Limit:     archiveQueryLimit,
+		ScanAll:   true,
 	})
 	if err != nil {
 		return stats, fmt.Errorf("search archive files: %w", err)
@@ -743,12 +776,15 @@ func (s *Service) syncArchiveWindow(ctx context.Context, deviceID string, channe
 }
 
 func (s *Service) syncEventWindow(ctx context.Context, deviceID string, channel int, eventCode string, startTime time.Time, endTime time.Time) (smdIVSSyncStats, error) {
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancel()
 	stats := smdIVSSyncStats{QueryCount: 1}
 	result, err := s.searcher.NVRRecordings(ctx, deviceID, dahua.NVRRecordingQuery{
 		Channel:   channel,
 		StartTime: startTime,
 		EndTime:   endTime,
 		Limit:     archiveQueryLimit,
+		ScanAll:   true,
 		EventCode: eventCode,
 		EventOnly: true,
 	})
@@ -788,48 +824,29 @@ func (s *Service) syncEventWindow(ctx context.Context, deviceID string, channel 
 }
 
 func (s *Service) syncSMDIVSChannel(ctx context.Context, deviceID string, channel int) error {
-	windowEnd := time.Now().In(time.Local)
-	windowStart := windowEnd.AddDate(0, 0, -s.cfg.PrefetchDays).Truncate(archiveSyncWindow)
 	startedAt := time.Now()
-	windowCount := 0
-	stats := smdIVSSyncStats{}
-	err := forArchiveSyncWindows(windowStart, windowEnd, func(from, to time.Time) error {
-		windowCount++
-		if s.cfg.PrefetchSMD {
-			for _, code := range smdEventCodes {
-				windowStats, err := s.syncEventWindow(ctx, deviceID, channel, code, from, to)
-				stats.add(windowStats)
-				if err != nil {
-					return err
-				}
-			}
+	codes := make([]string, 0, 5)
+	if s.cfg.PrefetchSMD {
+		codes = append(codes, smdEventCodes...)
+	}
+	if s.cfg.PrefetchIVS {
+		codes = append(codes, ivsEventCodes...)
+	}
+	var firstErr error
+	for _, code := range codes {
+		if err := ctx.Err(); err != nil {
+			return err
 		}
-		if s.cfg.PrefetchIVS {
-			for _, code := range ivsEventCodes {
-				windowStats, err := s.syncEventWindow(ctx, deviceID, channel, code, from, to)
-				stats.add(windowStats)
-				if err != nil {
-					return err
-				}
-			}
+		if err := s.syncIncrementalEventCode(ctx, deviceID, channel, code, startedAt); err != nil && firstErr == nil {
+			firstErr = err
 		}
-		return nil
-	})
-	if err != nil {
-		return err
 	}
 	s.logger.Info().
 		Str("device_id", deviceID).
 		Int("channel", channel).
-		Str("window_start", windowStart.In(time.Local).Format(archiveTimeLayout)).
-		Str("window_end", windowEnd.In(time.Local).Format(archiveTimeLayout)).
-		Int("window_count", windowCount).
-		Int("query_count", stats.QueryCount).
-		Int("returned_rows", stats.ReturnedRows).
-		Int("accepted_rows", stats.AcceptedRows).
 		Dur("duration", time.Since(startedAt)).
-		Msg("archive smd_ivs channel sync completed")
-	return nil
+		Msg("archive incremental smd_ivs channel sync completed")
+	return firstErr
 }
 
 func forArchiveSyncWindows(windowStart time.Time, windowEnd time.Time, fn func(time.Time, time.Time) error) error {
@@ -985,8 +1002,35 @@ func (s *Service) deletePrunedClips(ctx context.Context, clipIDs []string) {
 		if clipID == "" {
 			continue
 		}
-		if err := s.deleter.DeleteClip(ctx, clipID); err != nil {
-			s.logger.Warn().Err(err).Str("clip_id", clipID).Msg("archive pruned clip cleanup failed")
+		if s.clipInfo != nil {
+			clip, err := s.clipInfo.GetClip(clipID)
+			if err == nil && isActiveArchiveAssetState(string(clip.Status)) {
+				continue
+			}
+			if err != nil && !errors.Is(err, mediaapi.ErrClipNotFound) && !errors.Is(err, os.ErrNotExist) {
+				s.logger.Warn().Err(err).Str("clip_id", clipID).Msg("archive pruned clip status unavailable; cleanup will retry")
+				continue
+			}
+		}
+		var deleteErr error
+		if deleter, ok := s.deleter.(interface {
+			DeleteArchiveClip(context.Context, mediaapi.ClipInfo) error
+		}); ok {
+			clip, err := s.store.clipForCleanup(ctx, clipID)
+			if err == nil {
+				deleteErr = deleter.DeleteArchiveClip(ctx, clip)
+			} else if !errors.Is(err, sql.ErrNoRows) {
+				deleteErr = err
+			}
+		} else {
+			deleteErr = s.deleter.DeleteClip(ctx, clipID)
+		}
+		if deleteErr != nil && !errors.Is(deleteErr, mediaapi.ErrClipNotFound) && !errors.Is(deleteErr, os.ErrNotExist) {
+			s.logger.Warn().Err(deleteErr).Str("clip_id", clipID).Msg("archive pruned clip cleanup failed")
+			continue
+		}
+		if err := s.store.finishClipCleanup(ctx, clipID); err != nil {
+			s.logger.Warn().Err(err).Str("clip_id", clipID).Msg("archive pruned clip cleanup acknowledgement failed")
 		}
 	}
 }
@@ -1007,19 +1051,25 @@ func (s *Service) prefetchEventAssets(ctx context.Context, deviceID string, item
 		return nil
 	}
 
-	pending := make([]dahua.NVRRecording, 0, len(items))
+	// Complete recorder scans can contain many pages. Export only a bounded
+	// candidate batch here; remaining rows stay eligible for the pending queue.
+	candidateLimit := max(archiveQueryLimit, max(1, s.cfg.MaxParallelJobs)*4)
+	pending := make([]dahua.NVRRecording, 0, min(len(items), candidateLimit))
 	for _, item := range items {
 		ensureArchiveRecordIdentity(deviceID, &item)
 		if !s.shouldPrefetchArchiveEventClip(item) {
 			continue
 		}
 		pending = append(pending, item)
+		if len(pending) >= candidateLimit {
+			break
+		}
 	}
 	if len(pending) == 0 {
 		return nil
 	}
 
-	if err := s.refreshActiveClipAssets(ctx); err != nil {
+	if err := s.reconcileClipAssets(ctx); err != nil {
 		s.logger.Warn().Err(err).Msg("archive event active clip refresh failed")
 	}
 	storedAssets, err := s.store.LoadClipAssets(ctx, deviceID, pending)
@@ -1067,7 +1117,7 @@ func (s *Service) prefetchPendingEventAssets(ctx context.Context) error {
 	if !s.cfg.ExportEventMP4Enabled() {
 		return nil
 	}
-	if err := s.refreshActiveClipAssets(ctx); err != nil {
+	if err := s.reconcileClipAssets(ctx); err != nil {
 		s.logger.Warn().Err(err).Msg("archive event active clip refresh failed")
 	}
 	activeJobs, err := s.store.CountActiveClipJobs(ctx)
@@ -1125,12 +1175,12 @@ func (s *Service) prefetchPendingEventAssets(ctx context.Context) error {
 	return nil
 }
 
-func (s *Service) refreshActiveClipAssets(ctx context.Context) error {
+func (s *Service) reconcileClipAssets(ctx context.Context) error {
 	if s == nil || s.store == nil || s.clipInfo == nil {
 		return nil
 	}
 	limit := max(archiveQueryLimit, max(1, s.cfg.MaxParallelJobs)*4)
-	assets, err := s.store.LoadActiveEventClipAssets(ctx, limit)
+	assets, err := s.store.LoadEventClipAssetsForReconciliation(ctx, limit)
 	if err != nil {
 		return err
 	}

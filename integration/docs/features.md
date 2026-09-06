@@ -3,7 +3,7 @@
 ## Integration Core
 
 - UI config flow and options flow.
-- Bridge URL validation through `GET /api/v1/status`.
+- Bridge URL and token validation through the protected native catalog endpoint.
 - Polling coordinator for `GET /api/v1/home-assistant/native/catalog`.
 - Reverse-proxy-safe bridge URL rewriting.
 - Direct `rtsp://` passthrough when RTSP is selected or used as fallback.

@@ -10,21 +10,24 @@ already created.
 - `custom:dahuabridge-surveillance-panel`: full dashboard for live streams, recent events, archive lists, MP4 clips, VTO controls, and device actions.
 - `custom:dahuabridge-surveillance-tile`: compact single-device live card for one camera or VTO.
 
-Both cards are bundled into:
+Both cards are registered by this entry module:
 
 ```text
 dist/dahuabridge-surveillance-panel.js
 ```
+
+Deploy the entire `dist/` directory, including `chunks/` and image assets. HLS,
+DASH, and the card editor load their modules when first used.
 
 ## Current Scope
 
 The HA card code keeps only these media and archive workflows:
 
 - live camera and VTO streams
-- SMD/IVS event list, type/date filters, summary counters, direct RTSP playback, and MP4 download/export through bridge-created clips
+- SMD/IVS event list, type/date filters, summary counters, bridge archive playback, and MP4 download/export through bridge-created clips
 - 30-minute recording chunk list with download only
 - MP4 clips created by the card recording button with play and download
-- selected-camera archive seek through the Home Assistant timeframe proxy
+- selected-camera archive seek through bridge playback sessions
 - bridge recording start/stop controls when the integration exposes them
 
 Archive support is driven by these integration attributes and bridge response fields:
@@ -37,9 +40,10 @@ Archive support is driven by these integration attributes and bridge response fi
 - row-level `export_url`, `asset_playback_url`, and `asset_download_url`: bridge-created MP4 playback/download
 - row-level `download_url`: direct recording chunk download
 
-The card does not use `bridge_playback_sessions_url` or
-`bridge_archive_coverage_url`. Playback sessions, coverage timelines, and
-card-side MP4 delete controls are not used by the HA cards.
+The card uses `bridge_playback_sessions_url` for archive playback when the bridge
+exposes stable live relay URLs. Older catalogs retain native RTSP playback
+compatibility. `bridge_archive_coverage_url`, coverage timelines, and card-side
+MP4 delete controls are not used by the HA cards.
 
 ## Documentation
 
@@ -60,6 +64,13 @@ npm run check
 ```
 
 `check` runs the TypeScript typecheck, Vitest suite, and production build.
+The build enforces a 175 kB gzip budget for the initial JavaScript dependency
+graph and rejects eager HLS/DASH imports. Lifecycle tests exercise delayed
+microphone permission, cancellation, out-of-order playback, and user pause.
+
+After building, `npm run test:browser -- /path/to/chrome` runs a local headless
+Chromium smoke test of card registration and lazy loading. On Windows the script
+also detects standard Chrome/Edge installation paths.
 
 ## Related Workspaces
 

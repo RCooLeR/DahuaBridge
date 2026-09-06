@@ -19,9 +19,18 @@ func (m *Manager) getOrCreateHLSWorker(entry streams.Entry, profileName string, 
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.closed {
+		return nil, ErrManagerClosed
+	}
+	if profile.MediaGeneration != m.streamGenerations[entry.ID] {
+		return nil, ErrStreamSourceChanged
+	}
 	if existing, ok := m.hlsWorkers[key]; ok {
-		existing.touch()
-		return existing, nil
+		if existing.completed || existing.ctx.Err() == nil {
+			existing.touch()
+			return existing, nil
+		}
+		delete(m.hlsWorkers, key)
 	}
 	if m.cfg.MaxWorkers > 0 && m.activeWorkerCountLocked() >= m.cfg.MaxWorkers {
 		err := fmt.Errorf("%w: %d active, max %d", ErrWorkerLimitReached, m.activeWorkerCountLocked(), m.cfg.MaxWorkers)
@@ -31,7 +40,7 @@ func (m *Manager) getOrCreateHLSWorker(entry streams.Entry, profileName string, 
 		return nil, err
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(m.context())
 	w := &hlsWorker{
 		key:         key,
 		streamID:    entry.ID,
@@ -54,7 +63,7 @@ func (m *Manager) getOrCreateHLSWorker(entry streams.Entry, profileName string, 
 	if m.metrics != nil {
 		m.metrics.ObserveMediaStart(entry.ID, profileName, nil)
 	}
-	go w.run()
+	m.wg.Go(w.run)
 	return w, nil
 }
 
@@ -72,6 +81,7 @@ func (m *Manager) removeHLSWorker(key string, w *hlsWorker) {
 }
 
 func (w *hlsWorker) run() {
+	defer w.cancel()
 	outputDir := ""
 	retainOutput := false
 	includeAudio := w.parent.shouldIncludeSourceAudio(w.profile, w.logger)
@@ -80,7 +90,16 @@ func (w *hlsWorker) run() {
 		if retainOutput && outputDir != "" && w.parent.cfg.HLSKeepAfterExit > 0 {
 			keepFor := w.parent.cfg.HLSKeepAfterExit
 			w.logger.Info().Str("hls_output_dir", outputDir).Dur("keep_after_exit", keepFor).Msg("retaining completed hls output")
-			time.AfterFunc(keepFor, func() {
+			retained := w.parent.retainHLSWorker(w)
+			w.parent.wg.Go(func() {
+				defer w.parent.releaseRetainedOutput(retained)
+				timer := time.NewTimer(keepFor)
+				defer timer.Stop()
+				select {
+				case <-timer.C:
+				case <-w.parent.ctx.Done():
+				case <-retained.expired:
+				}
 				w.parent.removeHLSWorker(w.key, w)
 				if err := os.RemoveAll(outputDir); err != nil {
 					w.logger.Warn().Err(err).Str("hls_output_dir", outputDir).Msg("failed to cleanup retained hls output")
@@ -125,7 +144,7 @@ func (w *hlsWorker) run() {
 	}
 	w.mu.Unlock()
 
-	go w.stopWhenIdle()
+	w.parent.wg.Go(w.stopWhenIdle)
 
 	attempts := buildFFmpegStartAttempts(w.parent.cfg)
 	for index, attempt := range attempts {
@@ -170,6 +189,9 @@ func (w *hlsWorker) run() {
 			w.setError(fmt.Errorf("start ffmpeg: %w", err))
 			return
 		}
+		w.mu.Lock()
+		w.processID = cmd.Process.Pid
+		w.mu.Unlock()
 		w.logger.Debug().
 			Bool("hwaccel", attempt.useHWAccel).
 			Str("input_preset", attempt.inputPreset).
@@ -203,10 +225,12 @@ func (w *hlsWorker) run() {
 				continue
 			}
 			w.setError(waitErr)
+			w.parent.reportLiveSourceFailure(w.ctx, w.streamID, w.profile)
 			return
 		}
 
-		if w.isPlaybackStream() || w.parent.cfg.HLSKeepAfterExit > 0 {
+		w.parent.reportLiveSourceFailure(w.ctx, w.streamID, w.profile)
+		if w.isPlaybackStream() {
 			retainOutput = true
 		}
 		w.logger.Debug().Bool("retain_output", retainOutput).Msg("hls worker exited cleanly")
@@ -292,13 +316,13 @@ func (w *hlsWorker) stopWhenIdle() {
 			return
 		case <-ticker.C:
 			w.mu.Lock()
-			lastAccessAt := w.lastAccessAt
-			w.mu.Unlock()
-			if time.Since(lastAccessAt) >= w.parent.cfg.IdleTimeout {
+			if time.Since(w.lastAccessAt) >= w.parent.cfg.IdleTimeout {
 				w.logger.Debug().Msg("stopping idle media worker")
 				w.cancel()
+				w.mu.Unlock()
 				return
 			}
+			w.mu.Unlock()
 		}
 	}
 }
@@ -361,6 +385,9 @@ func (w *hlsWorker) readFileWhenReady(ctx context.Context, fileName string) ([]b
 		case err := <-w.startErr:
 			return nil, err
 		case <-timeout.C:
+			if fileName == "index.m3u8" {
+				w.parent.reportLiveSourceFailure(w.ctx, w.streamID, w.profile)
+			}
 			return nil, fmt.Errorf("timed out waiting for hls asset %q", fileName)
 		case <-ticker.C:
 		}
@@ -382,6 +409,8 @@ func (w *hlsWorker) status() WorkerStatus {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	status := WorkerStatus{
+		ProcessID:        w.processID,
+		SharedInput:      w.profile.LiveRelayURL != "",
 		Key:              w.key,
 		Format:           "hls",
 		StreamID:         w.streamID,

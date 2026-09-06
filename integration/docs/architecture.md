@@ -25,7 +25,8 @@ The integration does not maintain its own device inventory. The bridge catalog i
 `api/`
 
 - normalizes the configured bridge URL
-- preserves direct non-HTTP targets such as `rtsp://...`
+- addresses bridge RTSP relays through HA's configured bridge host and the relay port
+- preserves other non-HTTP targets, including legacy direct RTSP playback URLs
 - rewrites bridge-hosted HTTP URLs through the configured base URL, including reverse-proxy path prefixes
 - performs JSON, bytes, and MJPEG-frame HTTP requests
 

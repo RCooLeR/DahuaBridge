@@ -36,19 +36,34 @@ func (m *Manager) shouldIncludeSourceAudio(profile streams.Profile, logger zerol
 
 	now := time.Now()
 	m.audioProbeMu.Lock()
+	for key, cached := range m.audioProbeCache {
+		if now.Sub(cached.CheckedAt) >= audioProbeCacheTTL {
+			delete(m.audioProbeCache, key)
+		}
+	}
 	if cached, ok := m.audioProbeCache[streamURL]; ok && now.Sub(cached.CheckedAt) < audioProbeCacheTTL {
 		m.audioProbeMu.Unlock()
 		return cached.HasAudio
 	}
 	m.audioProbeMu.Unlock()
 
-	hasAudio, err := probeStreamHasAudio(m.cfg, profile)
+	hasAudio, err := probeStreamHasAudioContext(m.context(), m.cfg, profile)
 	if err != nil {
 		logger.Debug().Err(err).Msg("source audio probe failed; keeping audio output enabled")
 		return true
 	}
 
 	m.audioProbeMu.Lock()
+	if len(m.audioProbeCache) >= 128 {
+		var oldestKey string
+		var oldestTime time.Time
+		for key, cached := range m.audioProbeCache {
+			if oldestTime.IsZero() || cached.CheckedAt.Before(oldestTime) {
+				oldestKey, oldestTime = key, cached.CheckedAt
+			}
+		}
+		delete(m.audioProbeCache, oldestKey)
+	}
 	m.audioProbeCache[streamURL] = audioProbeCacheEntry{
 		CheckedAt: now,
 		HasAudio:  hasAudio,
@@ -58,7 +73,11 @@ func (m *Manager) shouldIncludeSourceAudio(profile streams.Profile, logger zerol
 }
 
 func probeStreamHasAudio(cfg config.MediaConfig, profile streams.Profile) (bool, error) {
-	probeCtx, cancel := context.WithTimeout(context.Background(), audioProbeTimeout(cfg.StartTimeout))
+	return probeStreamHasAudioContext(context.Background(), cfg, profile)
+}
+
+func probeStreamHasAudioContext(ctx context.Context, cfg config.MediaConfig, profile streams.Profile) (bool, error) {
+	probeCtx, cancel := context.WithTimeout(ctx, audioProbeTimeout(cfg.StartTimeout))
 	defer cancel()
 
 	args := []string{
@@ -73,10 +92,10 @@ func probeStreamHasAudio(cfg config.MediaConfig, profile streams.Profile) (bool,
 	if transport == "" {
 		transport = "tcp"
 	}
-	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(profile.StreamURL)), "rtsp://") {
+	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(mediaInputURL(profile))), "rtsp://") {
 		args = append(args, "-rtsp_transport", transport)
 	}
-	args = append(args, profile.StreamURL)
+	args = append(args, mediaInputURL(profile))
 
 	cmd := exec.CommandContext(probeCtx, ffprobePath(cfg.FFmpegPath), args...)
 	body, err := cmd.CombinedOutput()

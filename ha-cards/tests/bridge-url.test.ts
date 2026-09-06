@@ -7,6 +7,10 @@ import {
 } from "../src/ha/bridge-url";
 
 describe("bridge URL rewriting", () => {
+  it("preserves native live and recorder RTSP hosts and credentials", () => {
+    const source = "rtsp://camera-user:camera-pass@camera.local:554/cam/realmonitor?channel=1&subtype=0";
+    expect(rewriteBridgeUrl(source, "https://ha.example.com/bridge")).toBe(source);
+  });
   it("rewrites absolute bridge URLs to the configured browser bridge URL", () => {
     expect(
       rewriteBridgeUrl(

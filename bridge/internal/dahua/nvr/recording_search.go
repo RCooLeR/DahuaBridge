@@ -104,16 +104,18 @@ func (d *Driver) findRecordingsViaCGI(ctx context.Context, query dahua.NVRRecord
 		return dahua.NVRRecordingSearchResult{}, fmt.Errorf("start recording search returned %q", strings.TrimSpace(findBody))
 	}
 
-	itemsKV, err := d.client.GetKeyValues(ctx, "/cgi-bin/mediaFileFind.cgi", url.Values{
-		"action": []string{"findNextFile"},
-		"object": []string{handle},
-		"count":  []string{strconv.Itoa(query.Limit)},
+	result, err := readRecordingPages(ctx, query, func(count int) (dahua.NVRRecordingSearchResult, error) {
+		itemsKV, err := d.client.GetKeyValues(ctx, "/cgi-bin/mediaFileFind.cgi", url.Values{
+			"action": []string{"findNextFile"},
+			"object": []string{handle},
+			"count":  []string{strconv.Itoa(count)},
+		})
+		return parseRecordingSearchResult(itemsKV), err
 	})
 	if err != nil {
 		return dahua.NVRRecordingSearchResult{}, fmt.Errorf("fetch recording search results: %w", err)
 	}
 
-	result := parseRecordingSearchResult(itemsKV)
 	result.DeviceID = d.ID()
 	result.Channel = query.Channel
 	result.StartTime = query.StartTime.In(time.Local).Format(recordingTimeLayout)
@@ -153,18 +155,23 @@ func (d *Driver) findRecordingsViaRPC(ctx context.Context, query dahua.NVRRecord
 		return dahua.NVRRecordingSearchResult{}, fmt.Errorf("start recording search: %w", err)
 	}
 
-	var rawResult map[string]any
-	if err := d.rpc.CallObject(ctx, "mediaFileFind.findNextFile", map[string]any{
-		"count": query.Limit,
-	}, handle, &rawResult); err != nil {
+	result, err := d.readRPCRecordingPages(ctx, query, handle)
+	if err != nil {
 		return dahua.NVRRecordingSearchResult{}, fmt.Errorf("fetch recording search results: %w", err)
 	}
 
-	result := parseRPCRecordingSearchResult(rawResult)
 	result.DeviceID = d.ID()
 	result.Channel = query.Channel
 	result.StartTime = query.StartTime.In(time.Local).Format(recordingTimeLayout)
 	result.EndTime = query.EndTime.In(time.Local).Format(recordingTimeLayout)
 	result.Limit = query.Limit
 	return result, nil
+}
+
+func (d *Driver) readRPCRecordingPages(ctx context.Context, query dahua.NVRRecordingQuery, handle int64) (dahua.NVRRecordingSearchResult, error) {
+	return readRecordingPages(ctx, query, func(count int) (dahua.NVRRecordingSearchResult, error) {
+		var rawResult map[string]any
+		err := d.rpc.CallObject(ctx, "mediaFileFind.findNextFile", map[string]any{"count": count}, handle, &rawResult)
+		return parseRPCRecordingSearchResult(rawResult), err
+	})
 }

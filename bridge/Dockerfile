@@ -89,7 +89,7 @@ RUN set -eux; \
     mkdir -p /config /data /data/tmp; \
     chown -R dahuabridge:dahuabridge /data /data/tmp /var/lib/dahuabridge
 
-EXPOSE 9020
+EXPOSE 9020 8554
 
 VOLUME ["/config", "/data"]
 

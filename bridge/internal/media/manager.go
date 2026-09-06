@@ -23,7 +23,25 @@ type StreamResolver interface {
 	GetStream(string, string, bool) (streams.Entry, streams.Profile, bool)
 }
 
+// A live worker's final input failure is a hint: the runtime verifies the
+// alternate route before publishing it and reconnecting affected workers.
+func (m *Manager) reportLiveSourceFailure(ctx context.Context, streamID string, profile streams.Profile) {
+	if ctx.Err() != nil || strings.HasPrefix(streamID, "nvrpb_") || strings.Contains(profile.StreamURL, "/cam/playback") {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if profile.MediaGeneration != m.streamGenerations[streamID] {
+		return
+	}
+	if reporter, ok := m.resolver.(interface{ ReportLiveSourceFailure(string, string) }); ok {
+		reporter.ReportLiveSourceFailure(streamID, profile.StreamURL)
+	}
+}
+
 var ErrWorkerLimitReached = errors.New("media worker limit reached")
+
+var ErrStreamSourceChanged = errors.New("live source changed; reconnect the stream")
 
 type WebRTCSessionDescription struct {
 	Type string `json:"type"`
@@ -53,11 +71,19 @@ type IntercomStatus struct {
 }
 
 type Manager struct {
-	cfg      config.MediaConfig
-	resolver StreamResolver
-	metrics  *metrics.Registry
-	logger   zerolog.Logger
+	cfg            config.MediaConfig
+	resolver       StreamResolver
+	metrics        *metrics.Registry
+	logger         zerolog.Logger
+	ctx            context.Context
+	cancel         context.CancelFunc
+	wg             sync.WaitGroup
+	closed         bool
+	processMu      sync.Mutex
+	processSamples map[int]processSample
 
+	// mu owns worker membership, generation checks, and task registration.
+	// When both are needed, take mu before an individual worker's mutex.
 	mu                    sync.Mutex
 	audioProbeMu          sync.Mutex
 	mjpegWorkers          map[string]*worker
@@ -67,9 +93,24 @@ type Manager struct {
 	webrtcPeers           map[string]*webrtcSession
 	intercomUplinkEnabled map[string]bool
 	audioProbeCache       map[string]audioProbeCacheEntry
+	streamGenerations     map[string]uint64
+	retainedOutputs       map[string]*retainedOutput
+	retentionSerial       uint64
+	relayStatuses         func() []WorkerStatus
 }
 
 type WorkerStatus struct {
+	State                  string    `json:"state,omitempty"`
+	LiveSource             string    `json:"live_source,omitempty"`
+	SharedInput            bool      `json:"shared_input,omitempty"`
+	Warm                   bool      `json:"warm,omitempty"`
+	PreconnectMode         string    `json:"preconnect_mode,omitempty"`
+	BytesReceived          uint64    `json:"bytes_received,omitempty"`
+	Bitrate                uint64    `json:"bitrate_bps,omitempty"`
+	Reconnects             uint64    `json:"reconnects,omitempty"`
+	ProcessID              int       `json:"process_id,omitempty"`
+	CPUPercent             *float64  `json:"cpu_percent,omitempty"`
+	ResidentMemoryBytes    uint64    `json:"resident_memory_bytes,omitempty"`
 	Key                    string    `json:"key"`
 	Format                 string    `json:"format,omitempty"`
 	StreamID               string    `json:"stream_id"`
@@ -124,19 +165,21 @@ type worker struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 
-	mu             sync.Mutex
-	subscribers    map[chan []byte]struct{}
-	idleGeneration uint64
-	lastFrame      []byte
-	lastFrameAt    time.Time
-	lastError      error
-	startedAt      time.Time
-	activeAttempt  ffmpegStartAttempt
-	includeAudio   bool
-	cmd            *exec.Cmd
-	ready          chan struct{}
-	startErr       chan error
-	readyOnce      sync.Once
+	mu                sync.Mutex
+	subscribers       map[chan []byte]struct{}
+	subscribersClosed bool
+	idleGeneration    uint64
+	lastFrame         []byte
+	lastFrameAt       time.Time
+	lastError         error
+	startedAt         time.Time
+	activeAttempt     ffmpegStartAttempt
+	includeAudio      bool
+	cmd               *exec.Cmd
+	processID         int
+	ready             chan struct{}
+	startErr          chan error
+	readyOnce         sync.Once
 }
 
 type hlsWorker struct {
@@ -158,8 +201,10 @@ type hlsWorker struct {
 	activeAttempt       ffmpegStartAttempt
 	includeAudio        bool
 	cmd                 *exec.Cmd
+	processID           int
 	startErr            chan error
 	playlistReadyLogged bool
+	completed           bool // Protected by parent.mu; retained output has no running process.
 }
 
 type ffmpegStartAttempt struct {
@@ -168,7 +213,10 @@ type ffmpegStartAttempt struct {
 }
 
 func New(cfg config.MediaConfig, resolver StreamResolver, logger zerolog.Logger, metricsRegistry *metrics.Registry) *Manager {
+	ctx, cancel := context.WithCancel(context.Background())
 	manager := &Manager{
+		ctx:                   ctx,
+		cancel:                cancel,
 		cfg:                   cfg,
 		resolver:              resolver,
 		metrics:               metricsRegistry,
@@ -180,6 +228,8 @@ func New(cfg config.MediaConfig, resolver StreamResolver, logger zerolog.Logger,
 		webrtcPeers:           make(map[string]*webrtcSession),
 		intercomUplinkEnabled: make(map[string]bool),
 		audioProbeCache:       make(map[string]audioProbeCacheEntry),
+		streamGenerations:     make(map[string]uint64),
+		retainedOutputs:       make(map[string]*retainedOutput),
 	}
 	if metricsRegistry != nil {
 		metricsRegistry.SetMediaWorkers(0)
@@ -352,8 +402,13 @@ func (m *Manager) SubscribeScaled(ctx context.Context, streamID string, profileN
 	ch := make(chan []byte, 4)
 	w.addSubscriber(ch)
 
+	unsubscribed := make(chan struct{})
+	var unsubscribeOnce sync.Once
 	unsubscribe := func() {
-		w.removeSubscriber(ch)
+		unsubscribeOnce.Do(func() {
+			w.removeSubscriber(ch)
+			close(unsubscribed)
+		})
 	}
 
 	if err := w.waitUntilReady(ctx); err != nil {
@@ -361,10 +416,16 @@ func (m *Manager) SubscribeScaled(ctx context.Context, streamID string, profileN
 		return nil, nil, err
 	}
 
-	go func() {
-		<-ctx.Done()
+	m.runTask(func() {
+		select {
+		case <-ctx.Done():
+		case <-w.ctx.Done():
+		case <-m.ctx.Done():
+		case <-unsubscribed:
+			return
+		}
 		unsubscribe()
-	}()
+	})
 
 	return ch, unsubscribe, nil
 }
@@ -427,8 +488,19 @@ func (m *Manager) ListWorkers() []WorkerStatus {
 
 	m.mu.Lock()
 	statuses := m.workerStatusesLocked()
+	relayStatuses := m.relayStatuses
 	m.mu.Unlock()
+	m.enrichProcessStatuses(statuses)
+	if relayStatuses != nil {
+		statuses = append(statuses, relayStatuses()...)
+	}
 	return statuses
+}
+
+func (m *Manager) AttachRelayStatuses(statuses func() []WorkerStatus) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.relayStatuses = statuses
 }
 
 func (m *Manager) resolveStream(streamID string, profileName string) (streams.Entry, streams.Profile, string, error) {
@@ -436,11 +508,80 @@ func (m *Manager) resolveStream(streamID string, profileName string) (streams.En
 		profileName = "stable"
 	}
 
+	// Capture before resolving: a concurrent source switch must not let an old
+	// resolution start a worker after InvalidateStream has removed the old input.
+	m.mu.Lock()
+	generation := m.streamGenerations[streamID]
+	m.mu.Unlock()
 	entry, profile, ok := m.resolver.GetStream(streamID, profileName, true)
 	if !ok {
 		return streams.Entry{}, streams.Profile{}, "", fmt.Errorf("stream %q profile %q not found", streamID, profileName)
 	}
+	if strings.TrimSpace(profile.StreamURL) == "" {
+		if entry.LiveSource != nil && entry.LiveSource.Source == streams.LiveSourceCamera {
+			return streams.Entry{}, streams.Profile{}, "", streams.ErrLiveSourceUnavailable
+		}
+		return streams.Entry{}, streams.Profile{}, "", fmt.Errorf("stream %q has no video source", streamID)
+	}
+	profile.MediaGeneration = generation
+	if !strings.HasPrefix(streamID, "nvrpb_") && profile.InputDuration == 0 && profile.InputPrefixURL == "" {
+		if relay, ok := m.resolver.(interface{ LiveMediaInput(string, string) string }); ok {
+			profile.LiveRelayURL = relay.LiveMediaInput(streamID, profileName)
+			if profile.LiveRelayURL != "" {
+				profile.RTSPTransport = "tcp"
+			}
+		}
+	}
 	return entry, profile, profileName, nil
+}
+
+// InvalidateStream reconnects live viewers after an upstream change. Finite
+// recordings keep their original input so changing the viewer does not cut a clip.
+func (m *Manager) InvalidateStream(streamID string) {
+	if m == nil || streamID == "" {
+		return
+	}
+	m.mu.Lock()
+	if m.streamGenerations == nil {
+		m.streamGenerations = make(map[string]uint64)
+	}
+	m.streamGenerations[streamID]++
+	var cancels []context.CancelFunc
+	for key, w := range m.mjpegWorkers {
+		if w.streamID == streamID {
+			cancels = append(cancels, w.cancel)
+			delete(m.mjpegWorkers, key)
+		}
+	}
+	for key, w := range m.hlsWorkers {
+		if w.streamID == streamID {
+			cancels = append(cancels, w.cancel)
+			delete(m.hlsWorkers, key)
+		}
+	}
+	for key, w := range m.dashWorkers {
+		if w.streamID == streamID {
+			cancels = append(cancels, w.cancel)
+			delete(m.dashWorkers, key)
+		}
+	}
+	for key, session := range m.webrtcPeers {
+		if session.streamID == streamID {
+			cancels = append(cancels, session.cancel)
+			delete(m.webrtcPeers, key)
+		}
+	}
+	if m.metrics != nil {
+		m.metrics.SetMediaViewers(streamID, "quality", 0)
+		m.metrics.SetMediaViewers(streamID, "stable", 0)
+	}
+	m.setMediaWorkerCountLocked()
+	m.mu.Unlock()
+	for _, cancel := range cancels {
+		if cancel != nil {
+			cancel()
+		}
+	}
 }
 
 func (m *Manager) removeWebRTCSession(key string, session *webrtcSession) {
@@ -457,7 +598,18 @@ func (m *Manager) removeWebRTCSession(key string, session *webrtcSession) {
 }
 
 func (m *Manager) activeWorkerCountLocked() int {
-	return len(m.mjpegWorkers) + len(m.hlsWorkers) + len(m.dashWorkers) + len(m.clipJobs) + len(m.webrtcPeers)
+	count := len(m.mjpegWorkers) + len(m.clipJobs) + len(m.webrtcPeers)
+	for _, w := range m.hlsWorkers {
+		if !w.completed {
+			count++
+		}
+	}
+	for _, w := range m.dashWorkers {
+		if !w.completed {
+			count++
+		}
+	}
+	return count
 }
 
 func (m *Manager) setMediaWorkerCountLocked() {
@@ -480,10 +632,18 @@ func (m *Manager) workerStatusesLocked() []WorkerStatus {
 		statuses = append(statuses, w.status())
 	}
 	for _, w := range m.hlsWorkers {
-		statuses = append(statuses, w.status())
+		status := w.status()
+		if w.completed {
+			status.State = "retained"
+		}
+		statuses = append(statuses, status)
 	}
 	for _, w := range m.dashWorkers {
-		statuses = append(statuses, w.status())
+		status := w.status()
+		if w.completed {
+			status.State = "retained"
+		}
+		statuses = append(statuses, status)
 	}
 	for _, job := range m.clipJobs {
 		statuses = append(statuses, job.status())

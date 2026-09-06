@@ -80,6 +80,7 @@ export class BridgeIntercomSessionController {
   private desiredEnabled = false;
   private currentOfferUrl: string | null = null;
   private connectionVersion = 0;
+  private connectionAbort: AbortController | null = null;
   private snapshot: BridgeIntercomSnapshot = INITIAL_SNAPSHOT;
 
   constructor(options: BridgeIntercomSessionOptions) {
@@ -119,6 +120,8 @@ export class BridgeIntercomSessionController {
     try {
       await this.connect(version, false);
     } catch (error) {
+      // An old permission/offer rejection must not close a newer microphone session.
+      if (version !== this.connectionVersion || !this.desiredEnabled) return;
       this.desiredEnabled = false;
       this.currentOfferUrl = null;
       this.clearReconnectTimer();
@@ -152,6 +155,8 @@ export class BridgeIntercomSessionController {
 
     this.clearReconnectTimer();
     this.closePeer();
+    const controller = new AbortController();
+    this.connectionAbort = controller;
     this.publish({
       enabled: true,
       phase: isReconnect ? "reconnecting" : "negotiating",
@@ -171,7 +176,15 @@ export class BridgeIntercomSessionController {
       throw new Error("Browser microphone capture is not available in this browser.");
     }
     if (!this.micStream) {
-      this.micStream = await this.getUserMedia({ audio: true });
+      // Permission prompts cannot be aborted. Keep the grant local until this
+      // connection still owns it, otherwise stop every newly acquired track.
+      const acquired = await this.getUserMedia({ audio: true });
+      if (!this.isCurrentConnection(version, peer)) {
+        for (const track of acquired.getTracks()) track.stop();
+        peer.close();
+        return;
+      }
+      this.micStream = acquired;
     }
     if (!this.isCurrentConnection(version, peer)) {
       peer.close();
@@ -199,7 +212,7 @@ export class BridgeIntercomSessionController {
       peer.close();
       return;
     }
-    await waitForIceComplete(peer);
+    await waitForIceComplete(peer, controller.signal);
     if (!this.isCurrentConnection(version, peer)) {
       peer.close();
       return;
@@ -211,9 +224,10 @@ export class BridgeIntercomSessionController {
         "Content-Type": "application/json",
       },
       body: JSON.stringify(peer.localDescription),
+      signal: controller.signal,
     });
+    if (!this.isCurrentConnection(version, peer)) return;
     if (!response.ok) {
-      this.closePeer();
       throw new Error(await response.text());
     }
 
@@ -303,9 +317,10 @@ export class BridgeIntercomSessionController {
       this.reconnectTimer = null;
       const version = ++this.connectionVersion;
       void this.connect(version, true).catch((error) => {
-        if (!this.desiredEnabled) {
+        if (!this.desiredEnabled || version !== this.connectionVersion) {
           return;
         }
+        this.closePeer();
         this.publish({
           enabled: true,
           phase: "reconnecting",
@@ -335,6 +350,8 @@ export class BridgeIntercomSessionController {
   }
 
   private closePeer(): void {
+    this.connectionAbort?.abort();
+    this.connectionAbort = null;
     if (!this.peer) {
       return;
     }
@@ -382,18 +399,33 @@ function reconnectDelayMilliseconds(attempt: number): number {
   return Math.min(1000 * 2 ** Math.min(attempt, 4), 10_000);
 }
 
-async function waitForIceComplete(peer: RTCPeerConnection): Promise<void> {
+async function waitForIceComplete(peer: RTCPeerConnection, signal: AbortSignal): Promise<void> {
+  signal.throwIfAborted();
   if (peer.iceGatheringState === "complete") {
     return;
   }
 
-  await new Promise<void>((resolve) => {
+  await new Promise<void>((resolve, reject) => {
+    const cleanup = () => {
+      peer.removeEventListener("icegatheringstatechange", onChange);
+      signal.removeEventListener("abort", onAbort);
+      globalThis.clearTimeout(timer);
+    };
     const onChange = () => {
       if (peer.iceGatheringState === "complete") {
-        peer.removeEventListener("icegatheringstatechange", onChange);
+        cleanup();
         resolve();
       }
     };
+    const onAbort = () => {
+      cleanup();
+      reject(new DOMException("Aborted", "AbortError"));
+    };
+    const timer = globalThis.setTimeout(() => {
+      cleanup();
+      reject(new Error("Microphone connection negotiation timed out."));
+    }, 15_000);
     peer.addEventListener("icegatheringstatechange", onChange);
+    signal.addEventListener("abort", onAbort, { once: true });
   });
 }

@@ -38,6 +38,7 @@ type webrtcSession struct {
 	lastError              error
 	activeAttempt          ffmpegStartAttempt
 	cmd                    *exec.Cmd
+	processID              int
 	peer                   *webrtc.PeerConnection
 	hasAudio               bool
 	uplinkActive           bool
@@ -64,7 +65,7 @@ func (m *Manager) WebRTCAnswer(ctx context.Context, streamID string, profileName
 	}
 
 	key := entry.ID + ":" + resolvedProfileName + ":webrtc:" + uuid.NewV7().String()
-	sessionCtx, cancel := context.WithCancel(context.Background())
+	sessionCtx, cancel := context.WithCancel(m.context())
 	session := &webrtcSession{
 		key:         key,
 		streamID:    entry.ID,
@@ -82,6 +83,16 @@ func (m *Manager) WebRTCAnswer(ctx context.Context, streamID string, profileName
 	}
 
 	m.mu.Lock()
+	if m.closed {
+		m.mu.Unlock()
+		cancel()
+		return WebRTCSessionDescription{}, ErrManagerClosed
+	}
+	if profile.MediaGeneration != m.streamGenerations[entry.ID] {
+		m.mu.Unlock()
+		cancel()
+		return WebRTCSessionDescription{}, ErrStreamSourceChanged
+	}
 	if m.cfg.MaxWorkers > 0 && m.activeWorkerCountLocked() >= m.cfg.MaxWorkers {
 		err := fmt.Errorf("%w: %d active, max %d", ErrWorkerLimitReached, m.activeWorkerCountLocked(), m.cfg.MaxWorkers)
 		m.mu.Unlock()
@@ -92,6 +103,8 @@ func (m *Manager) WebRTCAnswer(ctx context.Context, streamID string, profileName
 		return WebRTCSessionDescription{}, err
 	}
 	m.webrtcPeers[key] = session
+	m.wg.Add(1)
+	defer m.wg.Done()
 	m.setMediaWorkerCountLocked()
 	m.logWorkerInventoryLocked("added", session.status())
 	if m.metrics != nil {
@@ -176,7 +189,7 @@ func (s *webrtcSession) start(ctx context.Context, offer WebRTCSessionDescriptio
 		s.uplinkCodec = strings.TrimSpace(track.Codec().MimeType)
 		s.mu.Unlock()
 
-		go s.receiveIncomingAudio(track)
+		s.parent.runTask(func() { s.receiveIncomingAudio(track) })
 	})
 
 	gatherComplete := webrtc.GatheringCompletePromise(peerConnection)
@@ -208,6 +221,13 @@ func (s *webrtcSession) start(ctx context.Context, offer WebRTCSessionDescriptio
 	}
 
 	select {
+	case <-s.ctx.Done():
+		_ = peerConnection.Close()
+		_ = videoConn.Close()
+		if audioConn != nil {
+			_ = audioConn.Close()
+		}
+		return WebRTCSessionDescription{}, s.ctx.Err()
 	case <-ctx.Done():
 		_ = peerConnection.Close()
 		_ = videoConn.Close()
@@ -219,11 +239,11 @@ func (s *webrtcSession) start(ctx context.Context, offer WebRTCSessionDescriptio
 	}
 
 	for _, sender := range tracks.senders {
-		go drainRTCP(s.ctx, sender)
+		s.parent.wg.Go(func() { drainRTCP(s.ctx, sender) })
 	}
-	go s.forwardRTP(videoConn, tracks.video)
+	s.parent.wg.Go(func() { s.forwardRTP(videoConn, tracks.video) })
 	if audioConn != nil && tracks.audio != nil {
-		go s.forwardRTP(audioConn, tracks.audio)
+		s.parent.wg.Go(func() { s.forwardRTP(audioConn, tracks.audio) })
 	}
 	cmd, err := s.startFFmpeg(videoPort, audioPort, includeAudio, videoConn, audioConn)
 	if err != nil {
@@ -239,7 +259,7 @@ func (s *webrtcSession) start(ctx context.Context, offer WebRTCSessionDescriptio
 	s.cmd = cmd
 	s.mu.Unlock()
 
-	go s.closePeerOnCancel()
+	s.parent.wg.Go(s.closePeerOnCancel)
 	s.logger.Debug().Bool("include_audio", includeAudio).Msg("webrtc session started")
 
 	localDescription := peerConnection.LocalDescription()
@@ -455,6 +475,9 @@ func (s *webrtcSession) startFFmpeg(videoPort int, audioPort int, includeAudio b
 			}
 			return nil, fmt.Errorf("start ffmpeg: %w", err)
 		}
+		s.mu.Lock()
+		s.processID = cmd.Process.Pid
+		s.mu.Unlock()
 		s.logger.Debug().
 			Bool("hwaccel", attempt.useHWAccel).
 			Bool("include_audio", attempt.includeAudio).
@@ -480,6 +503,8 @@ func (s *webrtcSession) startFFmpeg(videoPort int, audioPort int, includeAudio b
 		select {
 		case <-s.ctx.Done():
 			timer.Stop()
+			<-waitDone
+			<-stderrDone
 			return nil, s.ctx.Err()
 		case err := <-waitDone:
 			timer.Stop()
@@ -523,6 +548,7 @@ func (s *webrtcSession) startFFmpeg(videoPort int, audioPort int, includeAudio b
 					Msg("webrtc ffmpeg attempt failed")
 				continue
 			}
+			s.parent.reportLiveSourceFailure(s.ctx, s.streamID, s.profile)
 			if err != nil {
 				if stderrText != "" {
 					err = fmt.Errorf("%w: %s", err, stderrText)
@@ -543,7 +569,7 @@ func (s *webrtcSession) startFFmpeg(videoPort int, audioPort int, includeAudio b
 			s.activeAttempt = attempt.ffmpegStartAttempt
 			s.hasAudio = attempt.includeAudio
 			s.mu.Unlock()
-			go s.waitForFFmpeg(cmd, waitDone, stderrDone, attempt.ffmpegStartAttempt, conns...)
+			s.parent.wg.Go(func() { s.waitForFFmpeg(cmd, waitDone, stderrDone, attempt.ffmpegStartAttempt, conns...) })
 			return cmd, nil
 		}
 	}
@@ -640,7 +666,7 @@ func (s *webrtcSession) forwardRTP(conn *net.UDPConn, track *webrtc.TrackLocalSt
 			s.cancel()
 			return
 		}
-		if !s.hasAudio && track.Kind() == webrtc.RTPCodecTypeAudio && packetReceived {
+		if track.Kind() == webrtc.RTPCodecTypeAudio && packetReceived {
 			s.mu.Lock()
 			s.hasAudio = true
 			s.mu.Unlock()
@@ -743,6 +769,7 @@ func (s *webrtcSession) waitForFFmpeg(cmd *exec.Cmd, waitDone <-chan error, stde
 	if errors.Is(s.ctx.Err(), context.Canceled) {
 		return
 	}
+	s.parent.reportLiveSourceFailure(s.ctx, s.streamID, s.profile)
 	if stderrText != "" {
 		s.logger.Debug().
 			Bool("hwaccel", attempt.useHWAccel).
@@ -791,6 +818,8 @@ func (s *webrtcSession) status() WorkerStatus {
 	defer s.mu.Unlock()
 
 	status := WorkerStatus{
+		ProcessID:        s.processID,
+		SharedInput:      s.profile.LiveRelayURL != "",
 		Key:              s.key,
 		Format:           "webrtc",
 		StreamID:         s.streamID,

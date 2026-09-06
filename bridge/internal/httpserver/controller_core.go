@@ -50,10 +50,7 @@ func (c *controller) registerCoreRoutes(router chi.Router) {
 			c.cfg.HealthPath,
 			c.cfg.MetricsPath,
 		)
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		w.Header().Set("Cache-Control", "no-store")
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(body))
+		writeHTMLPage(w, c.cfg, body)
 	})
 	router.Get("/admin/test-bridge", func(w http.ResponseWriter, r *http.Request) {
 		mediaEnabled := false
@@ -61,10 +58,7 @@ func (c *controller) registerCoreRoutes(router chi.Router) {
 			mediaEnabled = c.media.Enabled()
 		}
 		body := renderAdminTestBridgePage(c.snapshots.ListStreams(false), c.actions != nil, mediaEnabled)
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		w.Header().Set("Cache-Control", "no-store")
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(body))
+		writeHTMLPage(w, c.cfg, body)
 	})
 	router.Handle(c.cfg.MetricsPath, c.metricsRegistry.Handler())
 }

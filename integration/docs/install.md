@@ -39,13 +39,13 @@ For reverse proxy setups, use the full public bridge path:
 https://ha.example.com/dahuabridge
 ```
 
-The setup flow validates the URL by calling:
+The setup flow validates the URL and API token by calling the protected catalog:
 
 ```text
-GET /api/v1/status
+GET /api/v1/home-assistant/native/catalog
 ```
 
-After setup, the integration starts polling:
+After setup, the integration polls the same endpoint:
 
 ```text
 GET /api/v1/home-assistant/native/catalog

@@ -1,6 +1,7 @@
 import type {NvrArchiveRecordingModel} from "../domain/archive";
 import type {CameraStreamProfileViewModel, CameraViewModel} from "../domain/model";
 import {resolveSelectedCameraStreamProfile} from "./surveillance-panel-media";
+import {isBridgeRtspRelayUrl} from "../ha/bridge-url";
 
 export interface SelectedNativePlaybackState {
     sourceDeviceId: string;
@@ -76,6 +77,44 @@ export function resolveMainArchivePlaybackProfile(
         ) ??
         resolveArchivePlaybackProfile(camera, selectedProfileKey)
     );
+}
+
+export function archivePlaybackStreamCandidates(
+    camera: CameraViewModel,
+    profile: CameraStreamProfileViewModel | null,
+    recording?: NvrArchiveRecordingModel,
+): string[] {
+    if (isBridgeRtspRelayUrl(profile?.streamUrl) || isBridgeRtspRelayUrl(camera.stream.source)) {
+        // Current bridges own upstream URLs and expose a stable live relay.
+        // Archive uses bridge playback sessions; only older catalogs need RTSP derivation.
+        return [];
+    }
+    const profiles = camera.cameraEntity?.attributes.bridge_profiles;
+    const rawProfile = profiles && typeof profiles === "object" && !Array.isArray(profiles)
+        ? (profiles as Record<string, unknown>)[profile?.key ?? ""]
+        : null;
+    const raw = rawProfile && typeof rawProfile === "object" && !Array.isArray(rawProfile)
+        ? rawProfile as Record<string, unknown>
+        : {};
+    const recordings = profile?.key === "stable"
+        ? [recording?.rtspSubUrl, recording?.rtspMainUrl]
+        : [recording?.rtspMainUrl, recording?.rtspSubUrl];
+    const candidates: unknown[] = [raw.recorder_stream_url, profile?.recorderStreamUrl, ...recordings];
+    // Legacy catalogs have only stream_url. It is a recorder URL only when
+    // live input is NVR; direct-camera URLs must never become archive inputs.
+    if (camera.stream.liveSource?.source !== "camera") {
+        candidates.push(
+            raw.stream_url,
+            raw.streamUrl,
+            profile?.streamUrl,
+            camera.cameraEntity?.attributes.stream_source,
+            camera.stream.source,
+            camera.stream.onvifStreamUrl,
+        );
+    }
+    return [...new Set(candidates.filter((value): value is string =>
+        typeof value === "string" && Boolean(value.trim()),
+    ).map((value) => value.trim()))];
 }
 
 export function isArchiveEventRecording(recording: NvrArchiveRecordingModel): boolean {

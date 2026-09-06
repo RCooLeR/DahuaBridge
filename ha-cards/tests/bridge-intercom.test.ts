@@ -54,6 +54,64 @@ describe("bridge intercom helpers", () => {
 });
 
 describe("BridgeIntercomSessionController", () => {
+  it("stops a microphone granted after the session was disabled", async () => {
+    let grant!: (stream: MediaStream) => void;
+    const track = { stop: vi.fn() };
+    const peer = new FakePeerConnection();
+    const controller = new BridgeIntercomSessionController({
+      onChange: vi.fn(),
+      getUserMedia: () => new Promise((resolve) => { grant = resolve; }),
+      createPeerConnection: () => peer as unknown as RTCPeerConnection,
+    });
+    const pending = controller.enable("https://bridge/api/v1/media/intercom/vto/quality");
+    await controller.disable();
+    grant({ getTracks: () => [track] } as unknown as MediaStream);
+    await pending;
+    expect(track.stop).toHaveBeenCalledOnce();
+    expect(controller.currentSnapshot()).toMatchObject({ enabled: false, phase: "idle" });
+  });
+
+  it("does not let an obsolete microphone rejection close a newer session", async () => {
+    let rejectOld!: (error: Error) => void;
+    const track = { stop: vi.fn() };
+    const stream = { getTracks: () => [track], getAudioTracks: () => [track] } as unknown as MediaStream;
+    const peers: FakePeerConnection[] = [];
+    const controller = new BridgeIntercomSessionController({
+      onChange: vi.fn(),
+      getUserMedia: vi.fn().mockImplementationOnce(() => new Promise((_resolve, reject) => { rejectOld = reject; })).mockResolvedValue(stream),
+      fetchImpl: vi.fn().mockResolvedValue({ ok: true, json: async () => ({ type: "answer", sdp: "answer" }) }),
+      createPeerConnection: () => {
+        const peer = new FakePeerConnection();
+        peers.push(peer);
+        return peer as unknown as RTCPeerConnection;
+      },
+    });
+    const old = controller.enable("https://bridge/api/v1/media/intercom/old/quality");
+    await controller.enable("https://bridge/api/v1/media/intercom/new/quality");
+    rejectOld(new Error("Permission dismissed"));
+    await old;
+    expect(peers[1]?.closed).toBe(false);
+    expect(track.stop).not.toHaveBeenCalled();
+    expect(controller.currentSnapshot()).toMatchObject({ enabled: true, phase: "connected" });
+    await controller.disable();
+  });
+
+  it("cancels ICE negotiation when disabled without leaving a pending enable", async () => {
+    const track = { stop: vi.fn() };
+    const peer = new FakePeerConnection();
+    peer.iceGatheringState = "gathering";
+    const controller = new BridgeIntercomSessionController({
+      onChange: vi.fn(),
+      getUserMedia: async () => ({ getTracks: () => [track], getAudioTracks: () => [track] }) as unknown as MediaStream,
+      createPeerConnection: () => peer as unknown as RTCPeerConnection,
+    });
+    const pending = controller.enable("https://bridge/api/v1/media/intercom/vto/quality");
+    await vi.waitFor(() => expect(peer.localDescription).not.toBeNull());
+    await controller.disable();
+    await pending;
+    expect(track.stop).toHaveBeenCalledOnce();
+  });
+
   it("enables and disables the browser microphone session", async () => {
     const snapshots: string[] = [];
     const micTrack = { stop: vi.fn() };

@@ -39,6 +39,9 @@ func (d *Driver) findEventRecordings(ctx context.Context, query dahua.NVRRecordi
 		appendResult(next, err)
 	}
 
+	if query.ScanAll && firstErr != nil {
+		return dahua.NVRRecordingSearchResult{}, firstErr
+	}
 	if len(result.Items) == 0 {
 		if firstErr != nil {
 			return dahua.NVRRecordingSearchResult{}, firstErr
@@ -51,7 +54,7 @@ func (d *Driver) findEventRecordings(ctx context.Context, query dahua.NVRRecordi
 	sort.SliceStable(result.Items, func(i, j int) bool {
 		return nvrRecordingStartSortKey(result.Items[i]).After(nvrRecordingStartSortKey(result.Items[j]))
 	})
-	if query.Limit > 0 && len(result.Items) > query.Limit {
+	if !query.ScanAll && query.Limit > 0 && len(result.Items) > query.Limit {
 		result.Items = result.Items[:query.Limit]
 	}
 	result.ReturnedCount = len(result.Items)
@@ -77,14 +80,23 @@ func (d *Driver) findEventRecordingsViaSMDRPC(ctx context.Context, query dahua.N
 	}, &startResp); err != nil {
 		return dahua.NVRRecordingSearchResult{}, fmt.Errorf("start smd event search: %w", err)
 	}
+	if query.ScanAll && (startResp.Count < 0 || (startResp.Count > 0 && startResp.Token == 0)) {
+		// Treat a malformed nonempty search as incomplete. Reporting an empty
+		// success here would let archive indexing checkpoint past missing events.
+		return result, fmt.Errorf("smd search returned an invalid cursor/count; checkpoint was not advanced")
+	}
 	if startResp.Token == 0 || startResp.Count == 0 {
 		return result, nil
 	}
+	if query.ScanAll && startResp.Count > maxRecordingScanRows {
+		return result, fmt.Errorf("smd count exceeds bounded archive scan; checkpoint was not advanced")
+	}
 
 	pageSize := recordingEventSearchPageSize(query.Limit)
-	for offset := 0; offset < startResp.Count && len(result.Items) < query.Limit; offset += pageSize {
+	seenPages := make(map[[32]byte]bool)
+	for offset := 0; offset < startResp.Count && (query.ScanAll || len(result.Items) < query.Limit); {
 		count := pageSize
-		if remaining := query.Limit - len(result.Items); remaining > 0 && remaining < count {
+		if remaining := query.Limit - len(result.Items); !query.ScanAll && remaining > 0 && remaining < count {
 			count = remaining
 		}
 		if count <= 0 {
@@ -100,8 +112,24 @@ func (d *Driver) findEventRecordingsViaSMDRPC(ctx context.Context, query dahua.N
 			return dahua.NVRRecordingSearchResult{}, fmt.Errorf("fetch smd event results: %w", err)
 		}
 		if len(findResp.SMDInfo) == 0 {
+			if query.ScanAll {
+				return result, fmt.Errorf("smd cursor ended before its reported count; checkpoint was not advanced")
+			}
 			break
 		}
+		if query.ScanAll {
+			fingerprint, err := recordingPageFingerprint(findResp.SMDInfo)
+			if err != nil {
+				return result, err
+			}
+			if seenPages[fingerprint] || offset+len(findResp.SMDInfo) > maxRecordingScanRows {
+				return result, fmt.Errorf("smd cursor did not advance within the bounded scan; checkpoint was not advanced")
+			}
+			seenPages[fingerprint] = true
+		}
+		// Firmware may cap a page below Count. Advance by raw cursor rows, not
+		// requested rows or converted records (conversion can reject entries).
+		offset += len(findResp.SMDInfo)
 
 		for _, info := range findResp.SMDInfo {
 			recording, ok := smdInfoToRecording(info, query)
@@ -112,11 +140,11 @@ func (d *Driver) findEventRecordingsViaSMDRPC(ctx context.Context, query dahua.N
 				recording.FilePath = filePath
 			}
 			result.Items = append(result.Items, recording)
-			if len(result.Items) >= query.Limit {
+			if !query.ScanAll && len(result.Items) >= query.Limit {
 				break
 			}
 		}
-		if len(findResp.SMDInfo) < count {
+		if !query.ScanAll && len(findResp.SMDInfo) < count {
 			break
 		}
 	}
@@ -230,14 +258,11 @@ func (d *Driver) findEventRecordingsViaIVSRPC(ctx context.Context, query dahua.N
 		d.logger.Debug().Err(err).Int64("handle", handle).Msg("ivs event result option setup failed")
 	}
 
-	var rawResult map[string]any
-	if err := d.rpc.CallObject(ctx, "mediaFileFind.findNextFile", map[string]any{
-		"count": query.Limit,
-	}, handle, &rawResult); err != nil {
+	result, err := d.readRPCRecordingPages(ctx, query, handle)
+	if err != nil {
 		return dahua.NVRRecordingSearchResult{}, fmt.Errorf("fetch ivs event results: %w", err)
 	}
 
-	result = parseRPCRecordingSearchResult(rawResult)
 	result.DeviceID = d.ID()
 	result.Channel = query.Channel
 	result.StartTime = query.StartTime.In(time.Local).Format(recordingTimeLayout)

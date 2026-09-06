@@ -38,3 +38,24 @@ clear_native_playback_source:
     entity:
       integration: dahuabridge
       domain: camera
+
+set_live_source:
+  name: Set live source
+  description: Use the integration default or prefer the recorder or camera for live video, with automatic fallback to the other source. Recorded playback stays on the recorder.
+  target:
+    entity:
+      integration: dahuabridge
+      domain: camera
+  fields:
+    source:
+      name: Preferred live source
+      required: true
+      selector:
+        select:
+          options:
+            - label: Use integration default
+              value: default
+            - label: NVR
+              value: nvr
+            - label: Camera
+              value: camera

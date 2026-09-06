@@ -56,6 +56,7 @@ type HomeAssistantConfig struct {
 }
 
 type MediaConfig struct {
+	RTSPListenAddress   string                  `yaml:"rtsp_listen_address"`
 	Enabled             bool                    `yaml:"enabled"`
 	FFmpegPath          string                  `yaml:"ffmpeg_path"`
 	FFmpegLogLevel      string                  `yaml:"ffmpeg_log_level"`
@@ -156,6 +157,7 @@ type ChannelImouOverride struct {
 
 type ChannelDirectIPCCredential struct {
 	NVRChannel        int    `yaml:"nvr_channel"`
+	DirectIPCChannel  int    `yaml:"direct_ipc_channel"`
 	DirectIPCIP       string `yaml:"direct_ipc_ip"`
 	DirectIPCBaseURL  string `yaml:"direct_ipc_base_url"`
 	DirectIPCUser     string `yaml:"direct_ipc_user"`
@@ -245,26 +247,27 @@ func defaultConfig() Config {
 			MediaRateLimitBurst:        12,
 		},
 		Media: MediaConfig{
-			Enabled:          true,
-			FFmpegPath:       "ffmpeg",
-			FFmpegLogLevel:   "error",
-			VideoEncoder:     "software",
-			InputPreset:      "low_latency",
-			ClipPath:         "/data/clips",
-			IdleTimeout:      30 * time.Second,
-			StartTimeout:     15 * time.Second,
-			MaxWorkers:       32,
-			FrameRate:        5,
-			StableFrameRate:  5,
-			JPEGQuality:      7,
-			Threads:          1,
-			ScaleWidth:       960,
-			ReadBufferSize:   1024 * 1024,
-			HLSSegmentTime:   2 * time.Second,
-			HLSListSize:      6,
-			HLSTmpDir:        "/data/tmp/dahuabridge/hls",
-			HLSTempPath:      "/data/tmp/dahuabridge/hls",
-			HLSKeepAfterExit: 6 * time.Hour,
+			RTSPListenAddress: ":8554",
+			Enabled:           true,
+			FFmpegPath:        "ffmpeg",
+			FFmpegLogLevel:    "error",
+			VideoEncoder:      "software",
+			InputPreset:       "low_latency",
+			ClipPath:          "/data/clips",
+			IdleTimeout:       30 * time.Second,
+			StartTimeout:      15 * time.Second,
+			MaxWorkers:        32,
+			FrameRate:         5,
+			StableFrameRate:   5,
+			JPEGQuality:       7,
+			Threads:           1,
+			ScaleWidth:        960,
+			ReadBufferSize:    1024 * 1024,
+			HLSSegmentTime:    2 * time.Second,
+			HLSListSize:       6,
+			HLSTmpDir:         "/data/tmp/dahuabridge/hls",
+			HLSTempPath:       "/data/tmp/dahuabridge/hls",
+			HLSKeepAfterExit:  6 * time.Hour,
 		},
 		Archive: ArchiveConfig{
 			Enabled:         false,
@@ -344,6 +347,13 @@ func (c *Config) normalize() error {
 		c.Imou.EventActiveWindow = 20 * time.Second
 	}
 	c.Media.FFmpegPath = strings.TrimSpace(c.Media.FFmpegPath)
+	c.Media.RTSPListenAddress = strings.TrimSpace(c.Media.RTSPListenAddress)
+	if c.Media.RTSPListenAddress == "" {
+		c.Media.RTSPListenAddress = ":8554"
+	}
+	if _, port, err := net.SplitHostPort(c.Media.RTSPListenAddress); err != nil || port == "" {
+		return fmt.Errorf("media.rtsp_listen_address must be a host:port listen address")
+	}
 	if c.Media.FFmpegPath == "" {
 		c.Media.FFmpegPath = "ffmpeg"
 	}
@@ -979,6 +989,7 @@ func normalizeSingleChannelImouOverride(override ChannelImouOverride) (ChannelIm
 func normalizeSingleChannelDirectIPCCredential(credential ChannelDirectIPCCredential) (ChannelDirectIPCCredential, bool) {
 	normalized := ChannelDirectIPCCredential{
 		NVRChannel:        credential.NVRChannel,
+		DirectIPCChannel:  credential.DirectIPCChannel,
 		DirectIPCIP:       strings.TrimSpace(credential.DirectIPCIP),
 		DirectIPCBaseURL:  strings.TrimSpace(credential.DirectIPCBaseURL),
 		DirectIPCUser:     strings.TrimSpace(credential.DirectIPCUser),
@@ -991,7 +1002,7 @@ func normalizeSingleChannelDirectIPCCredential(credential ChannelDirectIPCCreden
 		}
 		normalized.DirectIPCBaseURL = baseURL
 	}
-	if normalized.NVRChannel <= 0 || normalized.DirectIPCIP == "" || normalized.DirectIPCUser == "" || normalized.DirectIPCPassword == "" {
+	if normalized.NVRChannel <= 0 || normalized.DirectIPCChannel < 0 || normalized.DirectIPCIP == "" || normalized.DirectIPCUser == "" || normalized.DirectIPCPassword == "" {
 		return ChannelDirectIPCCredential{}, false
 	}
 	return normalized, true

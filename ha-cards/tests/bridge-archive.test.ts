@@ -235,10 +235,10 @@ describe("bridge archive", () => {
             file_path: "/mnt/dvr/2026-05-01/1/10.00.00-10.00.20.dav",
             asset_status: "ready",
             asset_clip_id: "clip_ready",
-            asset_playback_url: "http://bridge.local:9020/api/v1/media/recordings/clip_ready/play",
-            asset_download_url: "http://bridge.local:9020/api/v1/media/recordings/clip_ready/download",
-            asset_self_url: "http://bridge.local:9020/api/v1/media/recordings/clip_ready",
-            asset_stop_url: "http://bridge.local:9020/api/v1/media/recordings/clip_ready/stop",
+            asset_playback_url: "/api/v1/media/recordings/clip_ready/play",
+            asset_download_url: "/api/v1/media/recordings/clip_ready/download",
+            asset_self_url: "/api/v1/media/recordings/clip_ready",
+            asset_stop_url: "/api/v1/media/recordings/clip_ready/stop",
             rtsp_main_url:
               "rtsp://user:pass@192.0.2.10:554/cam/playback?channel=1&subtype=0&starttime=2026_05_01_10_00_00",
             rtsp_sub_url:

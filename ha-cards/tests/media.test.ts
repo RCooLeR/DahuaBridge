@@ -21,6 +21,7 @@ import {
   type CameraViewportSource,
 } from "../src/cards/surveillance-panel-media";
 import { selectedCameraLiveStreamModel } from "../src/cards/surveillance-panel-live-stream-model";
+import { archivePlaybackStreamCandidates } from "../src/cards/surveillance-panel-native-playback-model";
 import type { CameraViewModel } from "../src/domain/model";
 
 function buildCamera(overrides: Partial<CameraViewModel> = {}): CameraViewModel {
@@ -132,6 +133,50 @@ function buildCamera(overrides: Partial<CameraViewModel> = {}): CameraViewModel 
 }
 
 describe("camera media helpers", () => {
+  it("uses the selected bridge profile instead of pretending HA native can override its entity profile", () => {
+    const camera = buildCamera({cameraEntity: {
+      entity_id: "camera.west20_nvr_channel_01_camera", state: "idle", attributes: {}, last_changed: "", last_updated: "",
+    }});
+    camera.stream.preferredVideoSource = "rtsp";
+    camera.stream.profiles[1]!.localHlsUrl = "http://bridge.local:9020/api/v1/media/hls/west20_nvr_channel_01/stable/index.m3u8";
+    expect(resolveSelectedCameraViewportSource(camera, "native", "quality")).toBe("native");
+    expect(resolveSelectedCameraViewportSource(camera, "native", "stable")).toBe("hls");
+    expect(availableCameraViewportSources(camera, "stable")).not.toContain("native");
+    camera.stream.preferredVideoProfile = "stable";
+    expect(resolveSelectedCameraViewportSource(camera, "native", "stable")).toBe("native");
+    expect(resolveSelectedCameraViewportSource(camera, "native", "quality")).toBe("hls");
+  });
+  it("uses bridge archive playback for stable relay catalogs without deriving upstream URLs", () => {
+    const camera = buildCamera();
+    const relayUrl = "rtsp://bridge.local:8554/api/v1/rtsp/live/nvr_channel_5/quality";
+    camera.stream.source = relayUrl;
+    const profile = {...camera.stream.profiles[0]!, streamUrl: relayUrl};
+    expect(archivePlaybackStreamCandidates(camera, profile)).toEqual([]);
+    expect(buildRtspPlaybackUrl({streamUrl: relayUrl, channel: 5, seekTime: "2026-05-01T10:00:00Z"})).toBeNull();
+  });
+  it("keeps archive playback on the recorder when live input is the camera", () => {
+    const camera = buildCamera();
+    const recorderUrl = "rtsp://nvr-user:nvr-pass@nvr.local/cam/realmonitor?channel=5&subtype=0";
+    const cameraUrl = "rtsp://ipc-user:ipc-pass@camera.local/cam/realmonitor?channel=1&subtype=0";
+    camera.stream.liveSource = {source: "camera", cameraAvailable: true, cameraUnavailableReason: null, url: "/api/v1/streams/cam1/live-source"};
+    camera.stream.source = cameraUrl;
+    camera.stream.onvifStreamUrl = cameraUrl;
+    const profile = {...camera.stream.profiles[0]!, streamUrl: cameraUrl, recorderStreamUrl: recorderUrl};
+    const candidates = archivePlaybackStreamCandidates(camera, profile);
+    expect(candidates).toEqual([recorderUrl]);
+    expect(buildRtspPlaybackUrl({streamUrl: candidates[0], channel: 5, subtype: 0, seekTime: "2026-05-01T10:00:00Z"})).toContain("@nvr.local/cam/playback?channel=5&subtype=0&starttime=");
+
+    // A missing recorder URL must not turn camera credentials into NVR playback.
+    expect(archivePlaybackStreamCandidates(camera, {...profile, recorderStreamUrl: null})).toEqual([]);
+  });
+
+  it("retains the legacy NVR stream as archive input for older bridge catalogs", () => {
+    const camera = buildCamera();
+    const recorderUrl = "rtsp://user:pass@nvr.local/cam/realmonitor?channel=1&subtype=0";
+    camera.stream.source = recorderUrl;
+    expect(archivePlaybackStreamCandidates(camera, null)).toEqual([recorderUrl]);
+  });
+
   it("prefers the configured or recommended profile", () => {
     const camera = buildCamera();
 
@@ -156,7 +201,6 @@ describe("camera media helpers", () => {
       "mjpeg",
     ] satisfies CameraViewportSource[]);
     expect(availableCameraViewportSources(camera, "stable")).toEqual([
-      "native",
       "mjpeg",
     ] satisfies CameraViewportSource[]);
     expect(resolveSelectedCameraViewportSource(camera, "hls", "stable")).toBe("mjpeg");
@@ -385,9 +429,7 @@ describe("camera media helpers", () => {
     });
     expect(preserveCameraViewportSourceSelection(camera, "quality", "mjpeg")).toBe("mjpeg");
     expect(preserveCameraViewportSourceSelection(camera, "stable", "hls")).toBeNull();
-    expect(preserveCameraViewportSourceSelectionOnProfileChange(camera, "stable", "native")).toBe(
-      "native",
-    );
+    expect(preserveCameraViewportSourceSelectionOnProfileChange(camera, "stable", "native")).toBeNull();
   });
 
   it("prefers the bridge snapshot URL over the entity picture fallback", () => {

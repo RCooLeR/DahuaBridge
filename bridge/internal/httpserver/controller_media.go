@@ -5,12 +5,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 
+	"RCooLeR/DahuaBridge/internal/dahua"
 	"RCooLeR/DahuaBridge/internal/ha"
 	mediaapi "RCooLeR/DahuaBridge/internal/media"
 	"RCooLeR/DahuaBridge/internal/streams"
@@ -21,12 +23,16 @@ import (
 func (c *controller) registerCatalogRoutes(router chi.Router) {
 	router.Get("/api/v1/home-assistant/native/catalog", func(w http.ResponseWriter, r *http.Request) {
 		includeCredentials := r.URL.Query().Get("include_credentials") == "true"
+		entries := c.snapshots.ListStreams(includeCredentials)
+		if publisher, ok := c.snapshots.(interface{ ListHomeAssistantStreams(bool) []streams.Entry }); ok {
+			entries = publisher.ListHomeAssistantStreams(includeCredentials)
+		}
 		writeJSON(
 			w,
 			http.StatusOK,
 			ha.BuildNativeCatalog(
 				c.probes.List(),
-				c.snapshots.ListStreams(includeCredentials),
+				entries,
 				nativeCatalogBaseURL(c.snapshots.AdminSettings()),
 			),
 		)
@@ -56,6 +62,47 @@ func (c *controller) registerCatalogRoutes(router chi.Router) {
 		}
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "stream not found"})
 	})
+	router.With(rateLimitMiddleware(c.adminLimiter)).Put("/api/v1/streams/{streamID}/live-source", func(w http.ResponseWriter, r *http.Request) {
+		setter, ok := c.snapshots.(interface {
+			SetStreamLiveSource(context.Context, string, string) (streams.Entry, error)
+		})
+		if !ok {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "live source settings are unavailable"})
+			return
+		}
+		var request struct {
+			Source string `json:"source"`
+		}
+		decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096))
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(&request); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json body"})
+			return
+		}
+		if err := decoder.Decode(new(any)); err != io.EOF {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json body"})
+			return
+		}
+		entry, err := setter.SetStreamLiveSource(r.Context(), chi.URLParam(r, "streamID"), request.Source)
+		if err != nil {
+			status := http.StatusInternalServerError
+			switch {
+			case errors.Is(err, streams.ErrInvalidLiveSource), errors.Is(err, streams.ErrInvalidLiveSourceOverride), errors.Is(err, streams.ErrLiveSourceUnsupported):
+				status = http.StatusBadRequest
+			case errors.Is(err, streams.ErrLiveSourceUnavailable):
+				status = http.StatusConflict
+			case errors.Is(err, streams.ErrLiveSourcePersistence):
+				status = http.StatusServiceUnavailable
+			case errors.Is(err, dahua.ErrDeviceNotFound):
+				status = http.StatusNotFound
+			}
+			writeJSON(w, status, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, entry)
+	})
+	c.registerLiveSourceSettingsRoutes(router)
+	c.registerLivePreconnectSettingsRoutes(router)
 }
 
 func nativeCatalogBaseURL(settings map[string]any) string {
@@ -228,10 +275,7 @@ func (c *controller) registerMediaRoutes(router chi.Router) {
 		}
 
 		body := renderMediaPreviewPage(entry, profileName, selectedProfile)
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		w.Header().Set("Cache-Control", "no-store")
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(body))
+		writeHTMLPage(w, c.cfg, body)
 	})
 	router.With(rateLimitMiddleware(c.mediaLimiter)).Get("/api/v1/media/webrtc/{streamID}/{profile}", func(w http.ResponseWriter, r *http.Request) {
 		if c.media == nil || !c.media.Enabled() {
@@ -253,10 +297,7 @@ func (c *controller) registerMediaRoutes(router chi.Router) {
 		}
 
 		body := renderWebRTCPage(entry, profileName, profile, c.media.WebRTCICEServers())
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		w.Header().Set("Cache-Control", "no-store")
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(body))
+		writeHTMLPage(w, c.cfg, body)
 	})
 	router.With(rateLimitMiddleware(c.mediaLimiter)).Post("/api/v1/media/webrtc/{streamID}/{profile}/offer", func(w http.ResponseWriter, r *http.Request) {
 		if c.media == nil || !c.media.Enabled() {
@@ -378,7 +419,7 @@ func (c *controller) registerMediaRoutes(router chi.Router) {
 		w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
 		w.Header().Set("Cache-Control", "no-store")
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write(body)
+		_, _ = w.Write(authorizeManifest(body, r, c.cfg, false))
 	})
 	router.With(rateLimitMiddleware(c.mediaLimiter)).Get("/api/v1/media/hls/{streamID}/{profile}/{segmentName}", func(w http.ResponseWriter, r *http.Request) {
 		if c.media == nil || !c.media.Enabled() {
@@ -423,7 +464,7 @@ func (c *controller) registerMediaRoutes(router chi.Router) {
 		w.Header().Set("Content-Type", "application/dash+xml")
 		w.Header().Set("Cache-Control", "no-store")
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write(body)
+		_, _ = w.Write(authorizeManifest(body, r, c.cfg, true))
 	})
 	router.With(rateLimitMiddleware(c.mediaLimiter)).Get("/api/v1/media/dash/{streamID}/{profile}/{assetName}", func(w http.ResponseWriter, r *http.Request) {
 		if c.media == nil || !c.media.Enabled() {

@@ -39,6 +39,9 @@ def looks_like_bridge_path(value: str) -> bool:
     text = value.strip()
     if not text:
         return False
+    parsed = urlsplit(text)
+    if parsed.scheme == "rtsp" and parsed.path.startswith("/api/v1/rtsp/live/"):
+        return True
     return text.startswith("/") or text.startswith("http://") or text.startswith(
         "https://"
     )

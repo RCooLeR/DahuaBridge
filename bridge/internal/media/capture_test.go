@@ -1,6 +1,9 @@
 package media
 
 import (
+	"context"
+	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -10,6 +13,43 @@ import (
 	"RCooLeR/DahuaBridge/internal/streams"
 	"github.com/rs/zerolog"
 )
+
+func TestDeleteClipPreservesMetadataForRetryAfterVideoRemovalFailure(t *testing.T) {
+	root := t.TempDir()
+	manager := New(config.MediaConfig{ClipPath: root}, testResolver{}, zerolog.Nop(), nil)
+	t.Cleanup(manager.Close)
+	info := ClipInfo{ID: "clip_delete_retry", FileName: "clip_delete_retry.mp4", Status: ClipStatusFailed}
+	if err := manager.persistClip(info); err != nil {
+		t.Fatal(err)
+	}
+	videoPath := filepath.Join(root, info.FileName)
+	// A non-empty directory produces a removal failure on Unix and Windows.
+	if err := os.Mkdir(videoPath, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	blocker := filepath.Join(videoPath, "blocker")
+	if err := os.WriteFile(blocker, []byte("occupied"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.DeleteClip(context.Background(), info.ID); err == nil {
+		t.Fatal("expected video removal to fail")
+	}
+	if stored, err := manager.GetClip(info.ID); err != nil || stored.FileName != info.FileName {
+		t.Fatalf("metadata needed for retry was lost: %+v, %v", stored, err)
+	}
+	if err := os.Remove(blocker); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.DeleteClip(context.Background(), info.ID); err != nil {
+		t.Fatalf("retry failed: %v", err)
+	}
+	if _, err := manager.GetClip(info.ID); !errors.Is(err, ErrClipNotFound) {
+		t.Fatalf("metadata was not removed after successful retry: %v", err)
+	}
+	if _, err := os.Stat(videoPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("video was not removed after successful retry: %v", err)
+	}
+}
 
 func TestClipFilePathRejectsEscapingNames(t *testing.T) {
 	root := t.TempDir()

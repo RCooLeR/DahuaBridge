@@ -50,9 +50,23 @@ func (s *SQLiteStore) UpsertClipAsset(ctx context.Context, recordKind string, re
 	if recordKind == "" || recordID == "" || deviceID == "" || strings.TrimSpace(clip.ID) == "" {
 		return nil
 	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var queued int
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM archive_clip_retention WHERE clip_id = ? AND queued = 1`, strings.TrimSpace(clip.ID)).Scan(&queued); err != nil {
+		return err
+	}
+	if queued != 0 {
+		// Queueing quarantines the ID until deletion is acknowledged. A reader
+		// must not reattach it while filesystem cleanup runs outside SQLite.
+		return fmt.Errorf("archive clip is pending retention cleanup")
+	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	clipPath := filepath.ToSlash(strings.TrimSpace(clip.FileName))
-	if _, err := s.db.ExecContext(ctx, `INSERT INTO bridge_mp4_clips (
+	if _, err := tx.ExecContext(ctx, `INSERT INTO bridge_mp4_clips (
 		clip_id, device_id, channel, stream_id, start_time, end_time, file_path, status, error_text, created_at, updated_at
 	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	ON CONFLICT(clip_id) DO UPDATE SET
@@ -79,8 +93,11 @@ func (s *SQLiteStore) UpsertClipAsset(ctx context.Context, recordKind string, re
 	); err != nil {
 		return err
 	}
-	if recordKind == "smd_ivs" || recordKind == "event" {
-		_, err := s.db.ExecContext(ctx, `UPDATE smd_ivs_events
+	if err := rememberArchiveClipOwnership(ctx, tx, recordKind, recordID, deviceID, clip); err != nil {
+		return err
+	}
+	if recordKind == "smd_ivs" {
+		_, err := tx.ExecContext(ctx, `UPDATE smd_ivs_events
 			SET mp4_clip_id = ?,
 				mp4_file_path = ?,
 				mp4_status = ?,
@@ -88,8 +105,7 @@ func (s *SQLiteStore) UpsertClipAsset(ctx context.Context, recordKind string, re
 				source_file_path = CASE
 					WHEN ? <> '' THEN ?
 					ELSE source_file_path
-				END,
-				last_seen_at = ?
+				END
 			WHERE device_id = ? AND event_id = ?`,
 			strings.TrimSpace(clip.ID),
 			clipPath,
@@ -97,13 +113,14 @@ func (s *SQLiteStore) UpsertClipAsset(ctx context.Context, recordKind string, re
 			strings.TrimSpace(clip.Error),
 			strings.TrimSpace(sourceFilePath),
 			strings.TrimSpace(sourceFilePath),
-			now,
 			deviceID,
 			recordID,
 		)
-		return err
+		if err != nil {
+			return err
+		}
 	}
-	return nil
+	return tx.Commit()
 }
 
 func (s *SQLiteStore) LoadClipAssets(ctx context.Context, deviceID string, items []dahua.NVRRecording) (map[string]storedClipAsset, error) {
@@ -170,7 +187,7 @@ func (s *SQLiteStore) DeleteClipAsset(ctx context.Context, recordKind string, re
 	if recordKind == "" || recordID == "" || deviceID == "" {
 		return nil
 	}
-	if recordKind == "smd_ivs" || recordKind == "event" {
+	if recordKind == "smd_ivs" {
 		if _, err := s.db.ExecContext(ctx, `UPDATE smd_ivs_events
 			SET mp4_clip_id = '', mp4_file_path = '', mp4_status = '', mp4_error = ''
 			WHERE device_id = ? AND event_id = ?`,
@@ -309,16 +326,17 @@ func archiveEventVideoChannelSQLList(channels []int) (string, []any) {
 	return "channel IN (" + strings.Join(placeholders, ",") + ")", args
 }
 
-func (s *SQLiteStore) LoadActiveEventClipAssets(ctx context.Context, limit int) ([]activeEventClipAsset, error) {
+func (s *SQLiteStore) LoadEventClipAssetsForReconciliation(ctx context.Context, limit int) ([]activeEventClipAsset, error) {
 	if limit <= 0 {
 		limit = archiveQueryLimit
 	}
 	rows, err := s.db.QueryContext(ctx, `SELECT
-		device_id, event_id, source_file_path, mp4_clip_id
-		FROM smd_ivs_events
-		WHERE mp4_clip_id <> ''
-			AND LOWER(COALESCE(mp4_status, '')) IN ('recording', 'transcoding', 'queued', 'downloading')
-		ORDER BY start_time DESC
+		e.device_id, e.event_id, e.source_file_path, e.mp4_clip_id
+		FROM smd_ivs_events e LEFT JOIN bridge_mp4_clips c ON c.clip_id=e.mp4_clip_id
+		WHERE e.mp4_clip_id <> ''
+			AND LOWER(COALESCE(e.mp4_status, '')) IN ('recording', 'transcoding', 'queued', 'downloading', 'completed', 'ready')
+		ORDER BY CASE WHEN e.mp4_status IN ('ready','completed') THEN 1 ELSE 0 END,
+			COALESCE(c.updated_at, '') ASC, e.event_id
 		LIMIT ?`,
 		limit,
 	)

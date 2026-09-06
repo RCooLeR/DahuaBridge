@@ -108,7 +108,11 @@ export function availableStreamViewportSources(
 ): CameraViewportSource[] {
   const sources: CameraViewportSource[] = [];
   const profile = resolveSelectedStreamProfile(stream, selectedProfileKey);
-  if (nativeAvailable) {
+  const nativeProfileKey = preferredProfileKeyForStream(stream) ??
+    recommendedProfileKeyForStream(stream) ?? mainProfileKeyForStream(stream);
+  // HA's native camera player requests only the entity ID. Frontend state
+  // attributes cannot change that entity's configured stream profile.
+  if (nativeAvailable && (!nativeProfileKey || profile?.key === nativeProfileKey)) {
     sources.push("native");
   }
   if (profile?.localHlsUrl) {

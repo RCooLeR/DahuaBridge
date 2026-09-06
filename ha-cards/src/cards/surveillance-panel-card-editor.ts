@@ -8,17 +8,10 @@ import type {
   LovelaceCardEditor,
 } from "../types/home-assistant";
 import { createLocalizer, resolvePanelLanguage, type Localizer } from "../localization";
+import { createSurveillancePanelStubConfig } from "./card-stub-config";
+export { createSurveillancePanelStubConfig } from "./card-stub-config";
 
 type DraftConfig = Partial<SurveillancePanelCardConfig> & LovelaceCardConfig;
-
-export function createSurveillancePanelStubConfig(): SurveillancePanelCardConfig {
-  return {
-    type: "custom:dahuabridge-surveillance-panel",
-    event_lookback_hours: 12,
-    bridge_event_poll_seconds: 15,
-    max_events: 14,
-  };
-}
 
 export class DahuaBridgeSurveillancePanelCardEditor
   extends LitElement

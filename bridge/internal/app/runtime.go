@@ -20,6 +20,9 @@ import (
 
 type runtimeServices struct {
 	mu               sync.RWMutex
+	liveSourceMu     sync.Mutex
+	liveHealth       liveSourceHealthRuntime
+	liveRelay        interface{ InvalidateStream(string) }
 	cfg              config.Config
 	probes           *store.ProbeStore
 	media            runtimeMediaReader
@@ -93,6 +96,7 @@ func newRuntimeServices(cfg config.Config, probes *store.ProbeStore) *runtimeSer
 	return &runtimeServices{
 		cfg:              cfg,
 		probes:           probes,
+		liveHealth:       newLiveSourceHealthRuntime(),
 		nvrSnapshots:     make(map[string]dahua.SnapshotProvider),
 		nvrDownloads:     make(map[string]dahua.NVRRecordingDownloader),
 		nvrClipDownloads: make(map[string]dahua.NVRRecordingClipDownloader),
@@ -217,7 +221,7 @@ func (r *runtimeServices) NVRSnapshot(ctx context.Context, deviceID string, chan
 	)
 	if mediaReader != nil {
 		if body, contentType, err = r.captureSnapshotFromStream(ctx, mediaReader, deviceID, channel, dahua.DeviceKindNVRChannel); err == nil {
-			r.storeSnapshot(cacheKey, body, contentType)
+			r.storeSnapshotForFlight(cacheKey, flight, body, contentType)
 			r.finishSnapshotFlight(cacheKey, flight, body, contentType, nil)
 			return body, contentType, nil
 		}
@@ -233,7 +237,7 @@ func (r *runtimeServices) NVRSnapshot(ctx context.Context, deviceID string, chan
 		r.finishSnapshotFlight(cacheKey, flight, nil, "", err)
 		return nil, "", err
 	}
-	r.storeSnapshot(cacheKey, body, contentType)
+	r.storeSnapshotForFlight(cacheKey, flight, body, contentType)
 	r.finishSnapshotFlight(cacheKey, flight, body, contentType, nil)
 	return body, contentType, nil
 }
@@ -552,6 +556,10 @@ func (r *runtimeServices) AdminSettings() map[string]any {
 }
 
 func (r *runtimeServices) ListStreams(includeCredentials bool) []streams.Entry {
+	return r.listStreams(includeCredentials, true)
+}
+
+func (r *runtimeServices) listStreams(includeCredentials, includeCapture bool) []streams.Entry {
 	r.mu.RLock()
 	mediaReader := r.media
 	nvrConfigs := make(map[string]config.DeviceConfig, len(r.nvrConfigs))
@@ -586,6 +594,7 @@ func (r *runtimeServices) ListStreams(includeCredentials bool) []streams.Entry {
 		}
 	}
 
+	defaultLiveSource, liveSources := r.probes.LiveSourceSettings()
 	entries := streams.BuildCatalog(streams.CatalogInput{
 		Config:             r.cfg,
 		ProbeResults:       r.probes.List(),
@@ -594,8 +603,11 @@ func (r *runtimeServices) ListStreams(includeCredentials bool) []streams.Entry {
 		IPCConfigs:         ipcConfigs,
 		IntercomStatuses:   intercomStatuses,
 		IncludeCredentials: includeCredentials,
+		LiveSources:        liveSources,
+		DefaultLiveSource:  defaultLiveSource,
+		LiveSourceStates:   r.liveSourceSelections(),
 	})
-	if mediaReader != nil {
+	if mediaReader != nil && includeCapture {
 		for index := range entries {
 			entries[index].Capture = buildCaptureSummary(r.cfg.HomeAssistant.PublicBaseURL, entries[index], mediaReader)
 		}
@@ -881,6 +893,24 @@ func (r *runtimeServices) storeSnapshot(cacheKey string, body []byte, contentTyp
 	}
 }
 
+func (r *runtimeServices) storeSnapshotForFlight(cacheKey string, flight *snapshotFlight, body []byte, contentType string) {
+	if len(body) == 0 {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	// A source switch removes the old flight. Its eventual result must not
+	// repopulate the cache for the newly selected upstream.
+	if r.snapshotFlight[cacheKey] != flight {
+		return
+	}
+	r.snapshotCache[cacheKey] = cachedSnapshot{
+		body:        append([]byte(nil), body...),
+		contentType: contentType,
+		expiresAt:   time.Now().Add(snapshotCacheTTL),
+	}
+}
+
 func recordingSearchCacheKey(deviceID string, query dahua.NVRRecordingQuery) string {
 	return strings.Join([]string{
 		strings.TrimSpace(deviceID),
@@ -891,6 +921,7 @@ func recordingSearchCacheKey(deviceID string, query dahua.NVRRecordingQuery) str
 		strings.TrimSpace(query.EventCode),
 		strconv.FormatBool(query.EventOnly),
 		strconv.FormatBool(query.SkipAssetEnrichment),
+		strconv.FormatBool(query.ScanAll),
 	}, "|")
 }
 
@@ -917,10 +948,27 @@ func (r *runtimeServices) cachedRecordingSearch(cacheKey string) (dahua.NVRRecor
 func (r *runtimeServices) storeRecordingSearch(cacheKey string, result dahua.NVRRecordingSearchResult) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	now := time.Now()
+	for key, entry := range r.recordingCache {
+		if !now.Before(entry.expiresAt) {
+			delete(r.recordingCache, key)
+		}
+	}
+	const maxRecordingSearchCacheEntries = 128
+	if _, exists := r.recordingCache[cacheKey]; !exists && len(r.recordingCache) >= maxRecordingSearchCacheEntries {
+		var oldestKey string
+		var oldest time.Time
+		for key, entry := range r.recordingCache {
+			if oldest.IsZero() || entry.expiresAt.Before(oldest) {
+				oldestKey, oldest = key, entry.expiresAt
+			}
+		}
+		delete(r.recordingCache, oldestKey)
+	}
 
 	r.recordingCache[cacheKey] = cachedRecordingSearch{
 		result:    cloneRecordingSearchResult(result),
-		expiresAt: time.Now().Add(recordingSearchCacheTTL),
+		expiresAt: now.Add(recordingSearchCacheTTL),
 	}
 }
 
@@ -943,7 +991,9 @@ func (r *runtimeServices) finishSnapshotFlight(cacheKey string, flight *snapshot
 	flight.body = append([]byte(nil), body...)
 	flight.contentType = contentType
 	flight.err = err
-	delete(r.snapshotFlight, cacheKey)
+	if r.snapshotFlight[cacheKey] == flight {
+		delete(r.snapshotFlight, cacheKey)
+	}
 	close(flight.done)
 }
 

@@ -8,6 +8,8 @@ import type {
   VtoViewModel,
 } from "../domain/model";
 import type { HassEntity, HomeAssistant } from "../types/home-assistant";
+import {nativeCameraEntityAvailable} from "../ha/native-camera";
+import {isBridgeRtspRelayUrl} from "../ha/bridge-url";
 import {
   availableCameraViewportSources,
   availablePlaybackViewportSources,
@@ -109,7 +111,7 @@ export function renderLiveViewport(
   volume = 1,
   t: Localizer = DEFAULT_LOCALIZER,
 ): TemplateResult {
-  if (!entity) {
+  if (!entity || !nativeCameraEntityAvailable(hass, entity)) {
     return html`<div class="viewport empty">${t("media.streamEntityUnavailable")}</div>`;
   }
 
@@ -138,6 +140,9 @@ function renderNativeLiveViewportWithFallback(
   preload: "none" | "metadata" | "auto",
   t: Localizer,
 ): TemplateResult {
+  if (!nativeCameraEntityAvailable(hass, entity)) {
+    return renderRemoteStream(fallbackDescriptor, {muted, volume, controls, preload});
+  }
   if (fallbackDescriptor.sources.length === 0) {
     return renderLiveViewport(hass, entity, muted, volume, t);
   }
@@ -521,7 +526,8 @@ class DahuaBridgeNativeFallbackStreamElement extends LitElement {
   protected willUpdate(changedProperties: PropertyValues<this>): void {
     if (
       changedProperties.has("entity") ||
-      changedProperties.has("fallbackDescriptor")
+      changedProperties.has("fallbackDescriptor") ||
+      changedProperties.has("hass")
     ) {
       const nextSourceKey = this.nativeSourceKey();
       if (nextSourceKey !== this._nativeSourceKey) {
@@ -553,7 +559,7 @@ class DahuaBridgeNativeFallbackStreamElement extends LitElement {
   }
 
   render(): TemplateResult {
-    if (this._nativeFailed || !this.entity) {
+    if (this._nativeFailed || !this.entity || !nativeCameraEntityAvailable(this.hass, this.entity)) {
       return this.renderFallback();
     }
     return renderLiveViewport(
@@ -664,6 +670,7 @@ class DahuaBridgeNativeFallbackStreamElement extends LitElement {
       this.entity?.entity_id ?? "",
       typeof streamSource === "string" ? streamSource : "",
       this.fallbackDescriptor?.cacheKey ?? "",
+      nativeCameraEntityAvailable(this.hass, this.entity) ? "available" : "unavailable",
     ].join(":");
   }
 
@@ -748,7 +755,7 @@ export function buildRtspPlaybackUrl({
   endTime?: string | null;
 }): string | null {
   const normalizedStreamUrl = streamUrl?.trim() ?? "";
-  if (!normalizedStreamUrl) {
+  if (!normalizedStreamUrl || isBridgeRtspRelayUrl(normalizedStreamUrl)) {
     return null;
   }
 
@@ -1239,9 +1246,6 @@ function applyVideoAudioState(
   }
   if (video.hasAttribute("muted") !== muted) {
     video.toggleAttribute("muted", muted);
-  }
-  if (video.paused && (video.currentSrc.trim() || video.src.trim())) {
-    void video.play().catch(() => undefined);
   }
 }
 

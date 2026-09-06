@@ -553,7 +553,8 @@ func TestNormalizeDeviceDirectIPCCredentials(t *testing.T) {
 			{NVRChannel: 8, DirectIPCIP: " 192.0.2.120 ", DirectIPCBaseURL: " https://192.0.2.120/ ", DirectIPCUser: " admin ", DirectIPCPassword: " secret "},
 			{NVRChannel: 0, DirectIPCIP: "192.0.2.80", DirectIPCUser: "admin", DirectIPCPassword: "secret"},
 			{NVRChannel: 8, DirectIPCIP: "192.0.2.121", DirectIPCUser: "operator", DirectIPCPassword: "updated"},
-			{NVRChannel: 11, DirectIPCIP: "192.0.2.20", DirectIPCUser: "viewer", DirectIPCPassword: "pw"},
+			{NVRChannel: 11, DirectIPCChannel: 2, DirectIPCIP: "192.0.2.20", DirectIPCUser: "viewer", DirectIPCPassword: "pw"},
+			{NVRChannel: 12, DirectIPCChannel: -1, DirectIPCIP: "192.0.2.20", DirectIPCUser: "viewer", DirectIPCPassword: "pw"},
 		},
 	}
 
@@ -576,7 +577,7 @@ func TestNormalizeDeviceDirectIPCCredentials(t *testing.T) {
 	if !ok {
 		t.Fatal("expected channel 11 direct ipc credential")
 	}
-	if channel11.DirectIPCIP != "192.0.2.20" || channel11.DirectIPCUser != "viewer" || channel11.DirectIPCPassword != "pw" {
+	if channel11.DirectIPCChannel != 2 || channel11.DirectIPCIP != "192.0.2.20" || channel11.DirectIPCUser != "viewer" || channel11.DirectIPCPassword != "pw" {
 		t.Fatalf("unexpected channel 11 credential %+v", channel11)
 	}
 }

@@ -21,11 +21,14 @@ import (
 	"RCooLeR/DahuaBridge/internal/logging"
 	"RCooLeR/DahuaBridge/internal/media"
 	"RCooLeR/DahuaBridge/internal/metrics"
+	"RCooLeR/DahuaBridge/internal/rtsprelay"
 	"RCooLeR/DahuaBridge/internal/store"
 	"github.com/rs/zerolog"
 )
 
 func Run(ctx context.Context, cfg config.Config, info buildinfo.BuildInfo) error {
+	ctx, cancelRun := context.WithCancel(ctx)
+	defer cancelRun()
 	logger := logging.New(cfg.Log).With().
 		Str("version", info.Version).
 		Str("commit", info.Commit).
@@ -43,7 +46,40 @@ func Run(ctx context.Context, cfg config.Config, info buildinfo.BuildInfo) error
 		return fmt.Errorf("load persisted state: %w", err)
 	}
 
-	var persistenceWG sync.WaitGroup
+	var persistenceWG, driverWG, serverWG sync.WaitGroup
+	var archiveService *archive.Service
+	var relay *rtsprelay.Server
+	var adminServer *httpserver.Server
+	var stopLiveSourceHealth func()
+	// Every exit, including bind/initialization failures, owns the same cleanup.
+	defer func() {
+		cancelRun()
+		if stopLiveSourceHealth != nil {
+			stopLiveSourceHealth()
+		}
+		mediaManager.Close()
+		if relay != nil {
+			relay.Close()
+		}
+		if adminServer != nil {
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			if err := adminServer.Shutdown(shutdownCtx); err != nil {
+				logger.Error().Err(err).Msg("admin http shutdown failed")
+			}
+			cancel()
+		}
+		serverWG.Wait()
+		driverWG.Wait()
+		persistenceWG.Wait()
+		if archiveService != nil {
+			if err := archiveService.Close(); err != nil {
+				logger.Error().Err(err).Msg("archive service shutdown failed")
+			}
+		}
+		if err := persistState(cfg, logger, metricsRegistry, probeStore, imouClient); err != nil {
+			logger.Error().Err(err).Msg("final state store flush failed")
+		}
+	}()
 	if cfg.StateStore.Enabled {
 		persistenceWG.Go(func() {
 			runStateStoreLoop(ctx, cfg, logger, metricsRegistry, probeStore, imouClient)
@@ -54,7 +90,8 @@ func Run(ctx context.Context, cfg config.Config, info buildinfo.BuildInfo) error
 	if len(drivers) == 0 {
 		return errors.New("no enabled drivers were created from config")
 	}
-	archiveService, err := archive.New(cfg.Archive, cfg.Devices.NVR, archiveLiveSearcher{runtime: services}, probeStore, logger)
+	var err error
+	archiveService, err = archive.New(cfg.Archive, cfg.Devices.NVR, archiveLiveSearcher{runtime: services}, probeStore, logger)
 	if err != nil {
 		return fmt.Errorf("create archive service: %w", err)
 	}
@@ -63,28 +100,37 @@ func Run(ctx context.Context, cfg config.Config, info buildinfo.BuildInfo) error
 		if err := archiveService.Start(ctx); err != nil {
 			return fmt.Errorf("start archive service: %w", err)
 		}
-		defer func() {
-			if closeErr := archiveService.Close(); closeErr != nil {
-				logger.Error().Err(closeErr).Msg("archive service shutdown failed")
-			}
-		}()
 	}
 	adminActions := newAdminActions(logger, metricsRegistry, probeStore, services, drivers)
-	adminServer := httpserver.New(cfg.HTTP, cfg.Archive, logger, metricsRegistry, probeStore, services, mediaManager, adminActions, nil)
+	stopLiveSourceHealth = services.StartLiveSourceHealth(ctx)
+	if cfg.Media.Enabled {
+		relay = rtsprelay.New(rtsprelay.Config{
+			ListenAddress: cfg.Media.RTSPListenAddress,
+			AuthToken:     cfg.HTTP.AuthToken,
+			IdleTimeout:   cfg.Media.IdleTimeout,
+			StartTimeout:  cfg.Media.StartTimeout,
+			MaxStreams:    cfg.Media.MaxWorkers,
+		}, services, logger)
+		services.AttachLiveRelay(relay)
+		if err := relay.Start(); err != nil {
+			return fmt.Errorf("start live RTSP relay: %w", err)
+		}
+		attachRelayDiagnostics(mediaManager, metricsRegistry, relay)
+	}
+	adminServer = httpserver.New(cfg.HTTP, cfg.Archive, logger, metricsRegistry, probeStore, services, mediaManager, adminActions, nil)
 
 	serverErrors := make(chan error, 1)
-	go func() {
+	serverWG.Go(func() {
 		serverErrors <- adminServer.Start()
-	}()
+	})
 
-	var wg sync.WaitGroup
 	for _, driver := range drivers {
-		wg.Go(func() {
+		driverWG.Go(func() {
 			runProbeLoop(ctx, logger, metricsRegistry, probeStore, driver)
 		})
 
 		if eventSource, ok := driver.(dahua.EventSource); ok {
-			wg.Go(func() {
+			driverWG.Go(func() {
 				runEventLoop(ctx, logger, metricsRegistry, probeStore, driver, eventSource)
 			})
 		}
@@ -98,19 +144,6 @@ func Run(ctx context.Context, cfg config.Config, info buildinfo.BuildInfo) error
 		}
 	}
 
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	if err := adminServer.Shutdown(shutdownCtx); err != nil {
-		logger.Error().Err(err).Msg("admin http shutdown failed")
-	}
-
-	wg.Wait()
-	persistenceWG.Wait()
-
-	if err := persistState(cfg, logger, metricsRegistry, probeStore, imouClient); err != nil {
-		logger.Error().Err(err).Msg("final state store flush failed")
-	}
 	return nil
 }
 

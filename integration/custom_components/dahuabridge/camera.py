@@ -6,12 +6,13 @@ from inspect import isawaitable
 from typing import Any
 
 from homeassistant.components.camera import Camera, CameraEntityFeature
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from . import DahuaBridgeConfigEntry
 from .api import DahuaBridgeAPIError
+from .api.client import redact_url_for_log
 from .camera_support import (
     async_placeholder_logo_bytes,
     camera_extra_state_attributes,
@@ -73,6 +74,30 @@ class DahuaBridgeCamera(DahuaBridgeEntity, Camera):
             "camera", getattr(coordinator, "integration_language", "en")
         )
         self._native_playback_source: str | None = None
+        self._last_live_source_key = self._live_source_key()
+
+    def _live_source_key(self) -> str | None:
+        return stream_source_for_record_with_preferences(
+            self.record,
+            self.coordinator.preferred_video_profile,
+            self.coordinator.preferred_video_source,
+            self.coordinator.video_fallbacks_enabled,
+        )
+
+    @callback
+    def _handle_coordinator_update(self) -> None:
+        live_source_key = self._live_source_key()
+        changed = live_source_key != self._last_live_source_key
+        self._last_live_source_key = live_source_key
+        if changed and not self._native_playback_source:
+            stream = getattr(self, "stream", None)
+            if stream is not None:
+                # Clear before publishing a changed profile/format URL so HA
+                # cannot reuse the old stream. Camera/NVR failover itself keeps
+                # the bridge relay URL stable and does not enter this branch.
+                self.stream = None
+                self.hass.async_create_task(self._stop_cached_stream(stream))
+        self._write_state_if_added()
 
     @property
     def supported_features(self) -> CameraEntityFeature:
@@ -110,7 +135,7 @@ class DahuaBridgeCamera(DahuaBridgeEntity, Camera):
             return source
         resolved = self.coordinator.api.bridge_resource_url(source)
         _LOGGER.debug(
-            "Resolved stream source for %s to %s", self.entity_id or self._device_id, resolved
+            "Resolved stream source for %s to %s", self.entity_id or self._device_id, redact_url_for_log(resolved)
         )
         return resolved
 
@@ -216,6 +241,22 @@ class DahuaBridgeCamera(DahuaBridgeEntity, Camera):
             await self._reset_cached_ha_stream()
         self._write_state_if_added()
 
+    async def async_set_live_source(self, source: str) -> None:
+        if source not in {"default", "nvr", "camera"}:
+            raise HomeAssistantError("Live source must be default, nvr or camera")
+        live_source = stream_for_record(self.record).get("live_source", {})
+        if not isinstance(live_source, dict) or not live_source.get("url"):
+            raise HomeAssistantError("Live source selection is not available for this camera")
+        previous_live_source_key = self._live_source_key()
+        target = self.coordinator.api.bridge_resource_url(str(live_source["url"]))
+        await self.coordinator.api.async_put_json(target, {"source": source})
+        await self.coordinator.async_request_refresh()
+        # The catalog refresh restores credentials omitted from the PUT response.
+        # Archive playback has its own source and must continue uninterrupted.
+        if not self._native_playback_source and self._live_source_key() != previous_live_source_key:
+            await self._reset_cached_ha_stream()
+        self._write_state_if_added()
+
     async def async_clear_native_playback_source(self) -> None:
         if not self._native_playback_source:
             return
@@ -231,6 +272,9 @@ class DahuaBridgeCamera(DahuaBridgeEntity, Camera):
         if stream is None:
             return
         self.stream = None
+        await self._stop_cached_stream(stream)
+
+    async def _stop_cached_stream(self, stream: Any) -> None:
         stop = getattr(stream, "stop", None)
         if not callable(stop):
             return

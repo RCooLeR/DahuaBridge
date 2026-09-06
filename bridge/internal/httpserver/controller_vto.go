@@ -154,10 +154,7 @@ func (c *controller) registerVTORoutes(router chi.Router) {
 		}
 
 		body := renderVTOIntercomPage(entry, profileName, profile, c.media.WebRTCICEServers())
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		w.Header().Set("Cache-Control", "no-store")
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(body))
+		writeHTMLPage(w, c.cfg, body)
 	})
 	router.Get("/api/v1/vto/{deviceID}/intercom/status", func(w http.ResponseWriter, r *http.Request) {
 		if c.media == nil || !c.media.Enabled() {

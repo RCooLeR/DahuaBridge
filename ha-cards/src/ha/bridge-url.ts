@@ -35,10 +35,25 @@ export function rewriteBridgeUrl(
 
   try {
     const parsedTarget = new URL(normalizedTarget);
+    if (parsedTarget.protocol !== "http:" && parsedTarget.protocol !== "https:") {
+      return normalizedTarget;
+    }
     return buildRewrittenUrl(browserBase, parsedTarget.pathname, parsedTarget.search, parsedTarget.hash);
   } catch {
     const parsedTarget = new URL(normalizedTarget, "https://dahuabridge.invalid/");
     return buildRewrittenUrl(browserBase, parsedTarget.pathname, parsedTarget.search, parsedTarget.hash);
+  }
+}
+
+export function isBridgeRtspRelayUrl(value: string | null | undefined): boolean {
+  if (!value) {
+    return false;
+  }
+  try {
+    const url = new URL(value);
+    return url.protocol === "rtsp:" && url.pathname.includes("/api/v1/rtsp/");
+  } catch {
+    return false;
   }
 }
 

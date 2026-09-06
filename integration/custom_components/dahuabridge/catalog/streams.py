@@ -68,6 +68,9 @@ def snapshot_url_for_record(record: dict[str, Any] | None) -> str | None:
 
 
 def stream_available_for_record(record: dict[str, Any] | None) -> bool:
+    live_source = stream_for_record(record).get("live_source")
+    if isinstance(live_source, dict) and live_source.get("source") == "camera":
+        return live_source.get("camera_available") is True and stream_source_for_record(record) is not None
     value = merged_fields_for_record(record).get("stream_available")
     if isinstance(value, bool):
         return value

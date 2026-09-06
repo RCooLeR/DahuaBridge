@@ -20,6 +20,7 @@ class DiagnosticsTests(unittest.TestCase):
             "download_url": "http://bridge.local/download",
             "bridge_archive_export_url": "http://bridge.local/archive/export",
             "stream_url": "rtsp://camera.local/live",
+            "recorder_stream_url": "rtsp://recorder:secret@nvr.local/live",
             "nested": {
                 "url": "http://bridge.local/action",
                 "keep": "value",
@@ -32,6 +33,7 @@ class DiagnosticsTests(unittest.TestCase):
         self.assertEqual(redacted["download_url"], REDACTED)
         self.assertEqual(redacted["bridge_archive_export_url"], REDACTED)
         self.assertEqual(redacted["stream_url"], REDACTED)
+        self.assertEqual(redacted["recorder_stream_url"], REDACTED)
         self.assertEqual(redacted["nested"]["url"], REDACTED)
         self.assertEqual(redacted["nested"]["keep"], "value")
 

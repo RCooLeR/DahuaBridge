@@ -33,6 +33,33 @@ Supported live paths are the stream sources exposed by the integration:
 The selected stream profile and source are browser-side UI choices. They do not
 create archive playback sessions.
 
+Home Assistant's native camera player uses the profile configured in the
+integration. Selecting a different profile in the card uses that profile's
+bridge HLS/DASH/MJPEG endpoint and displays the actual playback format. It does
+not change the shared camera entity's profile for other viewers.
+
+For an NVR channel, **Settings → Preferred live source** offers **Use integration
+default (NVR/Camera)**, **NVR**, and **Camera**. The default follows the global
+preference in the Home Assistant integration options; explicit NVR/Camera choices
+are saved as per-camera overrides. Changing the global default preserves these
+overrides. The setting applies to bridge RTSP and bridge media outputs and uses the authenticated
+Home Assistant `dahuabridge.set_live_source` service. The Camera preference can
+be saved without direct camera credentials. The bridge chooses the alternate
+source if the preferred route fails, and the card displays its effective source
+and fallback reason.
+The existing camera entity, video profile, and output protocol remain usable.
+
+Home Assistant receives one stable bridge URL per profile. The bridge owns
+camera/NVR health checks and failover; the card does not select or poll alternate
+upstream URLs. Changing effective-source metadata does not restart an unchanged
+player URL. Missing or restored Home Assistant entities are not rendered as
+native cameras during integration reloads.
+
+Archive playback uses bridge sessions backed by the recorder. Native recorder
+RTSP derivation is retained only for older catalogs; a bridge live RTSP URL is
+never converted into a Dahua archive URL. Older bridges without source settings
+display NVR with a disabled selector until updated.
+
 ## Events And Summaries
 
 The panel shows bridge events from the configured lookback window and can poll
@@ -54,13 +81,15 @@ Visible SMD/IVS workflows:
 
 - list events for the selected date
 - filter by SMD/IVS type
-- play an event through direct RTSP archive playback via the Home Assistant timeframe proxy
+- play an event through a bridge archive playback session
 - download an existing bridge MP4 asset from `asset_download_url`
 - ask the bridge to create an MP4 from `export_url`, then download it
 
 The selected camera viewport also has an archive seek control. Moving the seek
-slider builds a Dahua `/cam/playback` RTSP window and plays it through the
-Home Assistant camera timeframe proxy.
+slider creates a bridge playback window for the selected NVR channel.
+New playback choices supersede pending requests. Returning live, changing camera,
+or closing the card cancels pending playback and export polling. Pausing a player
+persists through HA updates, incoming media buffers, and volume changes.
 
 ## Recording Chunks
 
@@ -108,8 +137,6 @@ the bundled bridge logo if the browser cannot load the snapshot.
 
 These workflows are intentionally not present:
 
-- playback sessions from `bridge_playback_sessions_url`
 - archive coverage from `bridge_archive_coverage_url`
 - coverage timeline UI
-- playback profile selection for archive sessions
 - card-side MP4 delete actions

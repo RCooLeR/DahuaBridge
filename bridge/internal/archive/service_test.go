@@ -215,6 +215,7 @@ func TestSQLiteStorePruneReturnsCompletedClipIDsAndKeepsActiveExports(t *testing
 	activeID, activeKind := archiveRecordID("west20_nvr", items[1])
 	if err := archiveStore.UpsertClipAsset(context.Background(), completedKind, completedID, "west20_nvr", items[0].FilePath, mediaapi.ClipInfo{
 		ID:       "clip_completed",
+		StreamID: "nvr_export_completed",
 		Channel:  1,
 		Status:   mediaapi.ClipStatusCompleted,
 		FileName: "clip_completed.mp4",
@@ -223,6 +224,7 @@ func TestSQLiteStorePruneReturnsCompletedClipIDsAndKeepsActiveExports(t *testing
 	}
 	if err := archiveStore.UpsertClipAsset(context.Background(), activeKind, activeID, "west20_nvr", items[1].FilePath, mediaapi.ClipInfo{
 		ID:       "clip_active",
+		StreamID: "nvr_export_active",
 		Channel:  1,
 		Status:   mediaapi.ClipStatusRecording,
 		FileName: "clip_active.mp4",
@@ -301,6 +303,7 @@ func TestSQLiteStorePruneDoesNotReturnClipStillReferencedByRetainedEvent(t *test
 	recentID, recentKind := archiveRecordID("west20_nvr", items[1])
 	clipInfo := mediaapi.ClipInfo{
 		ID:       "clip_shared",
+		StreamID: "nvr_export_shared",
 		Channel:  1,
 		Status:   mediaapi.ClipStatusCompleted,
 		FileName: "clip_shared.mp4",
@@ -1005,7 +1008,7 @@ func TestServiceRefreshActiveClipAssetsClearsMissingClip(t *testing.T) {
 		},
 	}
 
-	if err := service.refreshActiveClipAssets(context.Background()); err != nil {
+	if err := service.reconcileClipAssets(context.Background()); err != nil {
 		t.Fatalf("refresh active clips: %v", err)
 	}
 

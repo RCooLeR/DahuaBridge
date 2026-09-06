@@ -1,7 +1,8 @@
 import { html, nothing, type TemplateResult } from "lit";
 
-import type { PanelModel } from "../domain/model";
+import type { CameraViewModel, PanelModel } from "../domain/model";
 import type { Localizer } from "../localization";
+import type { LiveSourceSelection } from "../domain/devices";
 import { renderCameraInspector } from "./surveillance-panel-inspector-camera";
 import { renderNvrInspector } from "./surveillance-panel-inspector-nvr";
 import {
@@ -25,6 +26,7 @@ interface RenderSurveillancePanelInspectorArgs {
   renderIcon: RenderIconFn;
   isBusy: IsBusyFn;
   onSelectDetailTab: (tab: DetailTab) => void;
+  onSelectLiveSource: (camera: CameraViewModel, source: LiveSourceSelection) => Promise<void>;
   onVtoSwitchAction: OnVtoSwitchAction;
   onVtoButtonAction: OnVtoButtonAction;
 }
@@ -41,6 +43,7 @@ export function renderSurveillancePanelInspector({
   renderIcon,
   isBusy,
   onSelectDetailTab,
+  onSelectLiveSource,
   onVtoSwitchAction,
   onVtoButtonAction,
 }: RenderSurveillancePanelInspectorArgs): TemplateResult | typeof nothing {
@@ -60,6 +63,8 @@ export function renderSurveillancePanelInspector({
             archiveContent,
             mp4Content,
             onSelectDetailTab,
+            isBusy(`camera:live-source:${model.selectedCamera.deviceId}`),
+            onSelectLiveSource,
           )
         : model.selectedNvr
           ? renderNvrInspector(

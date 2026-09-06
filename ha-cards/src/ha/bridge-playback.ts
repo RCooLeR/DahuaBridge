@@ -1,7 +1,6 @@
 import { z } from "zod";
 
 import {
-  createPlaybackSeekRequest,
   createPlaybackSessionRequest,
   type NvrArchiveRecordingModel,
   type NvrPlaybackSeekRequestModel,
@@ -9,6 +8,7 @@ import {
   type NvrPlaybackSessionRequestModel,
 } from "../domain/archive";
 import { rewriteBridgeUrl } from "./bridge-url";
+import { authenticatedBridgeResourceUrl } from "./bridge-resource";
 
 const playbackProfileSchema = z.object({
   name: z.string().min(1),
@@ -41,7 +41,8 @@ export async function createPlaybackSession(
   browserBridgeUrl?: string | null,
   signal?: AbortSignal,
 ): Promise<NvrPlaybackSessionModel> {
-  const response = await fetch(playbackUrl, {
+  const requestUrl = rewriteBridgeUrl(playbackUrl, browserBridgeUrl) ?? playbackUrl;
+  const response = await fetch(requestUrl, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -67,6 +68,7 @@ export async function createPlaybackSession(
   return mapPlaybackSession(
     playbackSessionSchema.parse(await response.json()),
     browserBridgeUrl,
+    playbackUrl,
   );
 }
 
@@ -77,7 +79,9 @@ export async function seekPlaybackSession(
   browserBridgeUrl?: string | null,
   signal?: AbortSignal,
 ): Promise<NvrPlaybackSessionModel> {
-  const response = await fetch(resolvePlaybackSeekUrl(seekUrl, sessionID), {
+  const endpoint = resolvePlaybackSeekUrl(seekUrl, sessionID);
+  const requestUrl = rewriteBridgeUrl(endpoint, browserBridgeUrl) ?? endpoint;
+  const response = await fetch(requestUrl, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -96,6 +100,7 @@ export async function seekPlaybackSession(
   return mapPlaybackSession(
     playbackSessionSchema.parse(await response.json()),
     browserBridgeUrl,
+    endpoint,
   );
 }
 
@@ -114,12 +119,6 @@ export function createPlaybackSessionFromRecording(
   );
 }
 
-export function createPlaybackSeekRequestFromRecording(
-  seekTime: string,
-): NvrPlaybackSeekRequestModel {
-  return createPlaybackSeekRequest(seekTime);
-}
-
 export function resolvePlaybackLaunchUrl(session: NvrPlaybackSessionModel): string | null {
   const preferredProfile =
     session.profiles[session.recommendedProfile] ?? Object.values(session.profiles)[0] ?? null;
@@ -133,7 +132,10 @@ export function resolvePlaybackLaunchUrl(session: NvrPlaybackSessionModel): stri
 function mapPlaybackSession(
   payload: z.infer<typeof playbackSessionSchema>,
   browserBridgeUrl?: string | null,
+  authenticatedRequestUrl?: string,
 ): NvrPlaybackSessionModel {
+  const mediaUrl = (target: string | null | undefined): string | null =>
+    authenticatedBridgeResourceUrl(target, authenticatedRequestUrl ?? browserBridgeUrl ?? "", browserBridgeUrl);
   return {
     id: payload.id,
     streamId: payload.stream_id,
@@ -145,7 +147,7 @@ function mapPlaybackSession(
     endTime: payload.end_time,
     seekTime: payload.seek_time,
     recommendedProfile: payload.recommended_profile,
-    snapshotUrl: rewriteBridgeUrl(payload.snapshot_url ?? null, browserBridgeUrl),
+    snapshotUrl: mediaUrl(payload.snapshot_url),
     createdAt: payload.created_at ?? "",
     expiresAt: payload.expires_at ?? "",
     profiles: Object.fromEntries(
@@ -153,10 +155,10 @@ function mapPlaybackSession(
         key,
         {
           name: profile.name,
-          dashUrl: rewriteBridgeUrl(profile.dash_url ?? null, browserBridgeUrl),
-          hlsUrl: rewriteBridgeUrl(profile.hls_url ?? null, browserBridgeUrl),
-          mjpegUrl: rewriteBridgeUrl(profile.mjpeg_url ?? null, browserBridgeUrl),
-          webrtcOfferUrl: rewriteBridgeUrl(profile.webrtc_offer_url ?? null, browserBridgeUrl),
+          dashUrl: mediaUrl(profile.dash_url),
+          hlsUrl: mediaUrl(profile.hls_url),
+          mjpegUrl: mediaUrl(profile.mjpeg_url),
+          webrtcOfferUrl: mediaUrl(profile.webrtc_offer_url),
         },
       ]),
     ),

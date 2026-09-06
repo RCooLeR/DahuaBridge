@@ -19,6 +19,7 @@ import (
 const minimumClipOutputBytesOnProbeFailure int64 = 4 * 1024
 
 func (job *clipJob) run(parent *Manager, profile streams.Profile, duration time.Duration, started chan<- error) {
+	defer job.cancel()
 	defer close(job.done)
 	defer parent.removeClipJob(job.info.ID, job)
 
@@ -28,7 +29,13 @@ func (job *clipJob) run(parent *Manager, profile streams.Profile, duration time.
 		}
 	}
 	waitErr := job.runFFmpegAttempt(parent, profile, duration, started, true)
-	if waitErr != nil && strings.TrimSpace(profile.InputPrefixURL) != "" {
+	if waitErr != nil && job.canRetry() && canRemuxClipVideo(profile) {
+		job.logger.Info().Msg("clip remux failed validation; retrying with video encoding")
+		_ = os.Remove(job.outputPath)
+		profile.ForceVideoTranscode = true
+		waitErr = job.runFFmpegAttempt(parent, profile, duration, started, false)
+	}
+	if waitErr != nil && job.canRetry() && strings.TrimSpace(profile.InputPrefixURL) != "" {
 		job.logger.Warn().
 			Err(waitErr).
 			Str("clip_id", job.info.ID).
@@ -45,7 +52,8 @@ func (job *clipJob) run(parent *Manager, profile streams.Profile, duration time.
 }
 
 func (job *clipJob) runFFmpegAttempt(parent *Manager, profile streams.Profile, duration time.Duration, started chan<- error, notifyStarted bool) error {
-	disableStdin := duration > 0
+	// Even finite clips need stdin so shutdown can finalize their MP4 cleanly.
+	const disableStdin = false
 	includeAudio := parent.shouldIncludeSourceAudio(profile, job.logger)
 	job.mu.Lock()
 	job.includeAudio = includeAudio
@@ -60,7 +68,7 @@ func (job *clipJob) runFFmpegAttempt(parent *Manager, profile streams.Profile, d
 		Int("source_width", profile.SourceWidth).
 		Int("source_height", profile.SourceHeight).
 		Str("output_video_codec", "H.264").
-		Str("output_video_encoder", "libx264").
+		Str("output_video_encoder", clipVideoEncoder(profile)).
 		Str("output_audio_codec", conditionalCodec(includeAudio, "AAC")).
 		Int("output_width", outputWidth).
 		Int("output_height", outputHeight).
@@ -77,18 +85,24 @@ func (job *clipJob) runFFmpegAttempt(parent *Manager, profile streams.Profile, d
 		Bool("iframe_prefix", strings.TrimSpace(profile.InputPrefixURL) != "").
 		Msg("clip transcode starting")
 
-	cmd := exec.Command(parent.cfg.FFmpegPath, args...)
-	var stdin io.WriteCloser
-	var err error
-	if !disableStdin {
-		stdin, err = cmd.StdinPipe()
-		if err != nil {
-			if notifyStarted {
-				started <- fmt.Errorf("ffmpeg stdin pipe: %w", err)
-			}
-			return fmt.Errorf("ffmpeg stdin pipe: %w", err)
+	cmd := exec.CommandContext(job.ctx, parent.cfg.FFmpegPath, args...)
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		if notifyStarted {
+			started <- fmt.Errorf("ffmpeg stdin pipe: %w", err)
 		}
+		return fmt.Errorf("ffmpeg stdin pipe: %w", err)
 	}
+	defer stdin.Close()
+	// Each attempt owns its command and pipe. A stop cancels the shared job
+	// context, finalizing this MP4 and preventing any fallback attempt.
+	cmd.Cancel = func() error {
+		_, err := io.WriteString(stdin, "q\n")
+		_ = stdin.Close()
+		return err
+	}
+	// FFmpeg can ignore stdin if its input is stuck; shutdown must still finish.
+	cmd.WaitDelay = 5 * time.Second
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
 		if notifyStarted {
@@ -98,17 +112,15 @@ func (job *clipJob) runFFmpegAttempt(parent *Manager, profile streams.Profile, d
 	}
 	cmd.Stdout = io.Discard
 
-	job.mu.Lock()
-	job.stdin = stdin
-	job.cmd = cmd
-	job.mu.Unlock()
-
 	if err := cmd.Start(); err != nil {
 		if notifyStarted {
 			started <- fmt.Errorf("start ffmpeg: %w", err)
 		}
 		return fmt.Errorf("start ffmpeg: %w", err)
 	}
+	job.mu.Lock()
+	job.processID = cmd.Process.Pid
+	job.mu.Unlock()
 	job.logger.Debug().
 		Str("clip_id", job.info.ID).
 		Str("source_video_codec", profile.VideoCodec).
@@ -116,7 +128,7 @@ func (job *clipJob) runFFmpegAttempt(parent *Manager, profile streams.Profile, d
 		Int("source_width", profile.SourceWidth).
 		Int("source_height", profile.SourceHeight).
 		Str("output_video_codec", "H.264").
-		Str("output_video_encoder", "libx264").
+		Str("output_video_encoder", clipVideoEncoder(profile)).
 		Str("output_audio_codec", conditionalCodec(includeAudio, "AAC")).
 		Int("output_width", outputWidth).
 		Int("output_height", outputHeight).
@@ -131,19 +143,34 @@ func (job *clipJob) runFFmpegAttempt(parent *Manager, profile streams.Profile, d
 
 	waitErr := cmd.Wait()
 	stderrText := <-stderrDone
+	job.mu.Lock()
+	stopped := job.stopping
+	job.mu.Unlock()
+	if stopped && errors.Is(waitErr, context.Canceled) {
+		// A graceful user stop finalizes a shorter clip intentionally.
+		waitErr = nil
+	}
 	if waitErr != nil && stderrText != "" {
 		waitErr = fmt.Errorf("%w: %s", waitErr, stderrText)
 	}
-	if waitErr == nil {
+	if waitErr == nil && stopped {
+		actual, err := probeMediaDuration(parent.cfg.FFmpegPath, job.outputPath, audioProbeTimeout(parent.cfg.StartTimeout))
+		if err != nil || actual <= 0 {
+			waitErr = fmt.Errorf("stopped clip has no valid media duration: %v", err)
+		} else {
+			job.mu.Lock()
+			job.info.Duration = actual
+			if !job.info.SourceStartAt.IsZero() {
+				job.info.SourceEndAt = job.info.SourceStartAt.Add(actual)
+			}
+			job.mu.Unlock()
+		}
+	}
+	if waitErr == nil && !stopped {
 		if validationErr := job.validateClipOutput(parent, profile); validationErr != nil {
 			waitErr = validationErr
 		}
 	}
-
-	job.mu.Lock()
-	job.stdin = nil
-	job.cmd = nil
-	job.mu.Unlock()
 
 	return waitErr
 }
@@ -298,32 +325,26 @@ func (job *clipJob) complete(parent *Manager, waitErr error) {
 
 func (job *clipJob) stop(ctx context.Context) error {
 	job.mu.Lock()
-	stdin := job.stdin
-	cmd := job.cmd
+	job.stopping = true
+	cancel := job.cancel
 	done := job.done
 	job.mu.Unlock()
-
-	if stdin != nil {
-		job.logger.Info().Str("clip_id", job.info.ID).Msg("clip stop requested")
-		_, _ = io.WriteString(stdin, "q\n")
-		_ = stdin.Close()
+	if cancel != nil {
+		cancel()
 	}
-
-	timer := time.NewTimer(5 * time.Second)
-	defer timer.Stop()
 
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
 	case <-done:
 		return nil
-	case <-timer.C:
-		if cmd != nil && cmd.Process != nil {
-			_ = cmd.Process.Kill()
-		}
-		<-done
-		return nil
 	}
+}
+
+func (job *clipJob) canRetry() bool {
+	job.mu.Lock()
+	defer job.mu.Unlock()
+	return job.ctx.Err() == nil && !job.stopping && job.processID != 0
 }
 
 func (job *clipJob) snapshot() ClipInfo {
@@ -351,6 +372,7 @@ func (job *clipJob) status() WorkerStatus {
 	}
 
 	return WorkerStatus{
+		ProcessID:          job.processID,
 		Key:                job.info.ID,
 		Format:             "clip",
 		StreamID:           job.info.StreamID,
@@ -362,7 +384,7 @@ func (job *clipJob) status() WorkerStatus {
 		SourceWidth:        job.profile.SourceWidth,
 		SourceHeight:       job.profile.SourceHeight,
 		OutputVideoCodec:   "H.264",
-		OutputVideoEncoder: "libx264",
+		OutputVideoEncoder: clipVideoEncoder(job.profile),
 		OutputAudioCodec:   conditionalCodec(job.includeAudio, "AAC"),
 		OutputWidth:        job.profile.SourceWidth,
 		OutputHeight:       job.profile.SourceHeight,
@@ -401,12 +423,13 @@ func buildClipFFmpegArgs(cfg config.MediaConfig, profile streams.Profile, durati
 	}
 
 	// MP4 exports intentionally ignore live max-width. Resolution follows the selected source profile.
+	args = append(args, "-map", "0:v:0")
+	if canRemuxClipVideo(profile) {
+		args = append(args, "-c:v", "copy")
+	} else {
+		args = append(args, "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p", "-profile:v", "high")
+	}
 	args = append(args,
-		"-map", "0:v:0",
-		"-c:v", "libx264",
-		"-preset", "veryfast",
-		"-pix_fmt", "yuv420p",
-		"-profile:v", "high",
 		"-tag:v", "avc1",
 		"-movflags", "+faststart",
 		"-y",
@@ -424,6 +447,22 @@ func buildClipFFmpegArgs(cfg config.MediaConfig, profile streams.Profile, durati
 	}
 	args = append(args, outputPath)
 	return args
+}
+
+// canRemuxClipVideo limits packet copy to an unchanged H.264 source timeline.
+// Accurate trimming, prefix concatenation, or timestamp repair needs re-encoding;
+// failed remux validation also forces that encoder path on the next attempt.
+func canRemuxClipVideo(profile streams.Profile) bool {
+	codec := strings.ToLower(strings.NewReplacer(".", "", "-", "").Replace(strings.TrimSpace(profile.VideoCodec)))
+	return !profile.ForceVideoTranscode && (codec == "h264" || codec == "avc" || codec == "avc1") &&
+		profile.InputSeekOffset == 0 && profile.InputPrefixURL == "" && !profile.UseWallclockAsTimestamps
+}
+
+func clipVideoEncoder(profile streams.Profile) string {
+	if canRemuxClipVideo(profile) {
+		return "copy"
+	}
+	return "libx264"
 }
 
 func buildPrefixedClipFFmpegArgs(cfg config.MediaConfig, profile streams.Profile, duration time.Duration, outputPath string, includeAudio bool, disableStdin bool) []string {

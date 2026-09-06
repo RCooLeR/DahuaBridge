@@ -11,6 +11,7 @@ import {
 } from "./events";
 import {
   discoverBridgeTopology,
+  type BridgeLiveSourceModel,
   type CameraDeviceModel,
   type IpcModel,
   type NvrChannelModel,
@@ -160,6 +161,7 @@ export interface CameraStreamProfileViewModel {
   key: string;
   name: string;
   streamUrl: string | null;
+  recorderStreamUrl?: string | null;
   localMjpegUrl: string | null;
   localHlsUrl: string | null;
   localDashUrl: string | null;
@@ -173,6 +175,7 @@ export interface CameraStreamProfileViewModel {
 
 export interface CameraStreamViewModel {
   available: boolean;
+  liveSource?: BridgeLiveSourceModel;
   source: string | null;
   snapshotUrl: string | null;
   localIntercomUrl: string | null;
@@ -686,6 +689,7 @@ function buildCameraStreamViewModel(
 ): CameraStreamViewModel {
   return {
     available: camera.media.streamAvailable,
+    liveSource: camera.media.liveSource,
     source: rewriteBridgeUrl(camera.media.streamSource, browserBridgeUrl),
     snapshotUrl: rewriteBridgeUrl(camera.media.snapshotUrl, browserBridgeUrl),
     localIntercomUrl: rewriteBridgeUrl(camera.media.localIntercomUrl, browserBridgeUrl),
@@ -706,6 +710,7 @@ function buildCameraStreamViewModel(
         key,
         name: streamProfileDisplayName(key, profile.name, t),
         streamUrl: rewriteBridgeUrl(profile.streamUrl, browserBridgeUrl),
+        recorderStreamUrl: rewriteBridgeUrl(profile.recorderStreamUrl, browserBridgeUrl),
         localMjpegUrl: rewriteBridgeUrl(profile.localMjpegUrl, browserBridgeUrl),
         localHlsUrl: rewriteBridgeUrl(profile.localHlsUrl, browserBridgeUrl),
         localDashUrl: rewriteBridgeUrl(profile.localDashUrl, browserBridgeUrl),

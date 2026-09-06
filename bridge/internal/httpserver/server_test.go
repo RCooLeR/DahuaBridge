@@ -597,7 +597,7 @@ func TestAPICORSPrefightRequest(t *testing.T) {
 	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != "*" {
 		t.Fatalf("unexpected allow origin header %q", got)
 	}
-	if got := rec.Header().Get("Access-Control-Allow-Methods"); got != "GET, POST, DELETE, OPTIONS" {
+	if got := rec.Header().Get("Access-Control-Allow-Methods"); got != "GET, POST, PUT, DELETE, OPTIONS" {
 		t.Fatalf("unexpected allow methods header %q", got)
 	}
 	if got := rec.Header().Get("Access-Control-Allow-Headers"); got != "content-type" {

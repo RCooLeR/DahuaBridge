@@ -3,6 +3,7 @@ module RCooLeR/DahuaBridge
 go 1.27.0
 
 require (
+	github.com/bluenviron/gortsplib/v5 v5.6.5
 	github.com/go-chi/chi/v5 v5.3.2
 	github.com/pion/rtp v1.10.5
 	github.com/pion/webrtc/v4 v4.2.19
@@ -16,9 +17,11 @@ require (
 
 require (
 	github.com/beorn7/perks v1.0.1 // indirect
+	github.com/bluenviron/mediacommon/v2 v2.9.4 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/google/uuid v1.6.0 // indirect
+	github.com/gorilla/websocket v1.5.3 // indirect
 	github.com/mattn/go-colorable v0.1.15 // indirect
 	github.com/mattn/go-isatty v0.0.24 // indirect
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect

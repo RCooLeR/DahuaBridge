@@ -1,0 +1,3 @@
+pytest-homeassistant-custom-component==0.13.364
+PyTurboJPEG==1.8.3
+av==17.0.1

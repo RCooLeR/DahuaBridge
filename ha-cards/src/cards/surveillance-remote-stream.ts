@@ -1,4 +1,4 @@
-import Hls from "hls.js";
+import type Hls from "hls.js";
 import type { MediaPlayerClass } from "dashjs";
 import { css, html, LitElement, type PropertyValues, type TemplateResult } from "lit";
 import { createRef, ref } from "lit/directives/ref.js";
@@ -77,7 +77,7 @@ export function renderRemoteStream(
   `;
 }
 
-class DahuaBridgeRemoteStreamElement extends LitElement {
+export class DahuaBridgeRemoteStreamElement extends LitElement {
   static properties = {
     descriptor: { attribute: false },
     muted: { type: Boolean },
@@ -149,6 +149,8 @@ class DahuaBridgeRemoteStreamElement extends LitElement {
   private _videoListenersCleanup: (() => void) | null = null;
   private _hls: Hls | null = null;
   private _dash: MediaPlayerClass | null = null;
+  private _sourceAbort: AbortController | null = null;
+  private _pausedByUser = false;
   private _hlsMediaRecoveryAttempts = 0;
   private _hlsNetworkRecoveryAttempts = 0;
   private _startupTimer: number | null = null;
@@ -159,6 +161,8 @@ class DahuaBridgeRemoteStreamElement extends LitElement {
 
   connectedCallback(): void {
     super.connectedCallback();
+    // HA may reinsert the same cached element without changing its descriptor.
+    this.requestUpdate();
     this.updateRemoteStreamLogState("connected");
   }
 
@@ -181,6 +185,8 @@ class DahuaBridgeRemoteStreamElement extends LitElement {
       this._hlsMediaRecoveryAttempts = 0;
       this._hlsNetworkRecoveryAttempts = 0;
       this._sourceFailureCounts.clear();
+      // A different playback selection starts a fresh pause state.
+      this._pausedByUser = false;
       this.cleanupPlayback();
     }
     const previousFallbackUrl = previousDescriptor?.fallbackImageUrl?.trim() ?? "";
@@ -266,7 +272,7 @@ class DahuaBridgeRemoteStreamElement extends LitElement {
       <video
         ${ref(this._videoRef)}
         class=${className}
-        autoplay
+        ?autoplay=${!this._pausedByUser}
         playsinline
         ?controls=${this.controls}
         preload=${this.preload}
@@ -345,20 +351,31 @@ class DahuaBridgeRemoteStreamElement extends LitElement {
     this.cleanupPlayback();
     this._attachedVideo = video;
     this._attachedSourceKey = sourceKey;
+    // Imports cannot be canceled; the signal also guards against late results
+    // when a new attachment happens to reuse exactly the same source URL.
+    const controller = new AbortController();
+    this._sourceAbort = controller;
     this._videoListenersCleanup = this.attachVideoListeners(video, sourceKey);
     this.updateRemoteStreamLogState("attaching", {
       ...this.streamLogContext(source),
       source_key: sourceKey,
     });
-    switch (source.kind) {
-      case "dash":
-        await this.attachDash(video, source.url, sourceKey);
-        return;
-      case "hls":
-        await this.attachHls(video, source.url, sourceKey);
-        return;
-      default:
-        this.advanceToNextSource(`unsupported source kind: ${source.kind}`);
+    try {
+      this.startStartupTimer(sourceKey);
+      switch (source.kind) {
+        case "dash":
+          await this.attachDash(video, source.url, sourceKey, controller.signal);
+          return;
+        case "hls":
+          await this.attachHls(video, source.url, sourceKey, controller.signal);
+          return;
+        default:
+          this.advanceToNextSource(`unsupported source kind: ${source.kind}`);
+      }
+    } catch {
+      if (!controller.signal.aborted && this.isCurrentSource(sourceKey)) {
+        this.advanceToNextSource("player initialization failed", { retryable: true });
+      }
     }
   }
 
@@ -402,6 +419,7 @@ class DahuaBridgeRemoteStreamElement extends LitElement {
       if (!this.isCurrentSource(sourceKey)) {
         return;
       }
+      this._pausedByUser = false;
       this.updateRemoteStreamLogState("playing", {
         ...this.streamLogContext(),
         source_key: sourceKey,
@@ -409,16 +427,23 @@ class DahuaBridgeRemoteStreamElement extends LitElement {
       });
     };
 
+    const onPause = () => {
+      if (this.isCurrentSource(sourceKey) && video.readyState > 0) this._pausedByUser = true;
+    };
     video.addEventListener("loadedmetadata", onReady);
     video.addEventListener("canplay", onReady);
     video.addEventListener("playing", onReady);
     video.addEventListener("play", onPlay);
+    video.addEventListener("pause", onPause);
+    video.addEventListener("ended", onPause);
     video.addEventListener("error", onError);
     return () => {
       video.removeEventListener("loadedmetadata", onReady);
       video.removeEventListener("canplay", onReady);
       video.removeEventListener("playing", onReady);
       video.removeEventListener("play", onPlay);
+      video.removeEventListener("pause", onPause);
+      video.removeEventListener("ended", onPause);
       video.removeEventListener("error", onError);
     };
   }
@@ -427,6 +452,7 @@ class DahuaBridgeRemoteStreamElement extends LitElement {
     video: HTMLVideoElement,
     sourceUrl: string,
     sourceKey: string,
+    signal: AbortSignal,
   ): Promise<void> {
     const normalizedSource = normalizeHlsPlaybackUrl(sourceUrl);
     if (!normalizedSource) {
@@ -437,6 +463,8 @@ class DahuaBridgeRemoteStreamElement extends LitElement {
     this.prepareVideo(video);
     this.startStartupTimer(sourceKey);
 
+    const { default: Hls } = await import("hls.js");
+    if (signal.aborted || !this.isCurrentSource(sourceKey)) return;
     const playbackMode = resolveHlsPlaybackMode({
       hlsJsSupported: Hls.isSupported(),
       nativeHlsSupported: canPlayNativeHls(video),
@@ -552,6 +580,7 @@ class DahuaBridgeRemoteStreamElement extends LitElement {
     video: HTMLVideoElement,
     sourceUrl: string,
     sourceKey: string,
+    signal: AbortSignal,
   ): Promise<void> {
     const normalizedSource = normalizeDashPlaybackUrl(sourceUrl);
     if (!normalizedSource) {
@@ -560,6 +589,7 @@ class DahuaBridgeRemoteStreamElement extends LitElement {
     }
 
     const dashModule = await import("dashjs");
+    if (signal.aborted || !this.isCurrentSource(sourceKey)) return;
     const playerFactory = dashModule.MediaPlayer;
     if (!playerFactory) {
       this.advanceToNextSource("dash.js unavailable");
@@ -571,11 +601,13 @@ class DahuaBridgeRemoteStreamElement extends LitElement {
 
     try {
       const manifestResponse = await fetch(normalizedSource, {
+        signal,
         cache: "no-store",
         headers: {
           Accept: "application/dash+xml,application/xml,text/xml;q=0.9,*/*;q=0.1",
         },
       });
+      if (signal.aborted || !this.isCurrentSource(sourceKey)) return;
       if (!manifestResponse.ok) {
         this.advanceToNextSource(
           `dash manifest request failed: ${manifestResponse.status}`,
@@ -584,7 +616,7 @@ class DahuaBridgeRemoteStreamElement extends LitElement {
         return;
       }
       const manifestText = await manifestResponse.text();
-      if (!this.isCurrentSource(sourceKey)) {
+      if (signal.aborted || !this.isCurrentSource(sourceKey)) {
         return;
       }
       if (!manifestText.includes("<MPD")) {
@@ -592,6 +624,7 @@ class DahuaBridgeRemoteStreamElement extends LitElement {
         return;
       }
     } catch (error) {
+      if (signal.aborted || !this.isCurrentSource(sourceKey)) return;
       logCardWarn("card remote stream dash manifest request failed", {
         ...this.streamLogContext({ kind: "dash", url: normalizedSource }),
         source_key: sourceKey,
@@ -737,7 +770,7 @@ class DahuaBridgeRemoteStreamElement extends LitElement {
   private prepareVideo(video: HTMLVideoElement): void {
     this.applyAudioState(video, this.muted, this.volume);
     applyMediaElementStyle(video);
-    video.autoplay = true;
+    video.autoplay = !this._pausedByUser;
     video.playsInline = true;
   }
 
@@ -772,7 +805,7 @@ class DahuaBridgeRemoteStreamElement extends LitElement {
     if (video.hasAttribute("muted") !== muted) {
       video.toggleAttribute("muted", muted);
     }
-    if (playImmediately && video.paused) {
+    if (playImmediately && !this._pausedByUser && video.paused) {
       void video.play().catch(() => undefined);
     }
   }
@@ -784,7 +817,7 @@ class DahuaBridgeRemoteStreamElement extends LitElement {
     }
     this._playbackFrame = window.requestAnimationFrame(() => {
       this._playbackFrame = null;
-      if (!this.isConnected || this._attachedVideo !== video || !video.paused) {
+      if (!this.isConnected || this._attachedVideo !== video || !video.paused || this._pausedByUser) {
         return;
       }
       void video.play().catch(() => undefined);
@@ -880,6 +913,8 @@ class DahuaBridgeRemoteStreamElement extends LitElement {
   }
 
   private cleanupPlayback(): void {
+    this._sourceAbort?.abort();
+    this._sourceAbort = null;
     this.clearStartupTimer();
     this.cancelQueuedPlayback();
     this._videoListenersCleanup?.();
@@ -1083,7 +1118,7 @@ export function resolveHlsPlaybackMode(capabilities: {
 }
 
 export function isHlsPlaylistStalled(details: string): boolean {
-  return details === Hls.ErrorDetails.PLAYLIST_UNCHANGED_ERROR;
+  return details === "playlistUnchangedError";
 }
 
 function getVideoElementDiagnostics(video: HTMLVideoElement): {

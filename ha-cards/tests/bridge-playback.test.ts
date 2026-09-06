@@ -12,7 +12,7 @@ describe("bridge playback", () => {
     vi.restoreAllMocks();
   });
 
-  it("creates a playback session and rewrites returned profile URLs for the browser bridge URL", async () => {
+  it("rebases playback requests and carries bridge authentication to returned media URLs", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue({
       ok: true,
       json: async () => ({
@@ -42,7 +42,7 @@ describe("bridge playback", () => {
     } as Response);
 
     const session = await createPlaybackSession(
-      "https://ha.example.com/bridge/api/v1/nvr/west20_nvr/playback/sessions",
+      "http://internal.local:9020/api/v1/nvr/west20_nvr/playback/sessions?auth_token=bridge-token",
       {
         channel: 2,
         startTime: "2026-04-28T00:00:00Z",
@@ -54,12 +54,33 @@ describe("bridge playback", () => {
 
     expect(session.deviceId).toBe("west20_nvr");
     expect(session.recommendedProfile).toBe("quality");
+    expect(fetch).toHaveBeenCalledWith("https://ha.example.com/bridge/api/v1/nvr/west20_nvr/playback/sessions?auth_token=bridge-token", expect.objectContaining({method: "POST"}));
     expect(session.profiles.quality?.hlsUrl).toBe(
-      "https://ha.example.com/bridge/api/v1/media/hls/nvrpb_test/quality/index.m3u8",
+      "https://ha.example.com/bridge/api/v1/media/hls/nvrpb_test/quality/index.m3u8?auth_token=bridge-token",
     );
     expect(resolvePlaybackLaunchUrl(session)).toBe(
-      "https://ha.example.com/bridge/api/v1/media/hls/nvrpb_test/quality/index.m3u8",
+      "https://ha.example.com/bridge/api/v1/media/hls/nvrpb_test/quality/index.m3u8?auth_token=bridge-token",
     );
+    expect(session.profiles.quality?.mjpegUrl).toBe("https://ha.example.com/bridge/api/v1/media/mjpeg/nvrpb_test?profile=quality&auth_token=bridge-token");
+    expect(session.snapshotUrl).toContain("?auth_token=bridge-token");
+    expect(session.profiles.quality?.dashUrl).toContain("?auth_token=bridge-token");
+    expect(session.profiles.quality?.webrtcOfferUrl).toContain("?auth_token=bridge-token");
+  });
+
+  it("never forwards the bridge token to another host and preserves endpoint-specific tokens", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue({ok: true, json: async () => ({
+      id: "pb", stream_id: "pb", device_id: "nvr", name: "Archive", channel: 1,
+      start_time: "2026-05-01T00:00:00Z", end_time: "2026-05-01T01:00:00Z", seek_time: "2026-05-01T00:00:00Z",
+      recommended_profile: "quality", profiles: {quality: {
+        name: "quality", hls_url: "https://other.example/api/media/index.m3u8",
+        mjpeg_url: "https://bridge.local/api/v1/media/mjpeg/pb?token=endpoint-token",
+      }},
+    })} as Response);
+    const session = await createPlaybackSession("https://bridge.local/api/v1/nvr/nvr/playback/sessions?auth_token=bridge-token", {
+      channel: 1, startTime: "2026-05-01T00:00:00Z", endTime: "2026-05-01T01:00:00Z", seekTime: null,
+    });
+    expect(session.profiles.quality?.hlsUrl).toBe("https://other.example/api/media/index.m3u8");
+    expect(session.profiles.quality?.mjpegUrl).toBe("https://bridge.local/api/v1/media/mjpeg/pb?token=endpoint-token");
   });
 
   it("creates a session request from an archive recording at the recording start time", () => {
@@ -116,16 +137,17 @@ describe("bridge playback", () => {
       }),
     } as Response);
 
-    await seekPlaybackSession(
+    const session = await seekPlaybackSession(
       "nvrpb_test",
-      "https://ha.example.com/bridge/api/v1/nvr/playback/sessions/%7Bsession_id%7D/seek",
+      "http://internal.local:9020/api/v1/nvr/playback/sessions/%7Bsession_id%7D/seek?auth_token=bridge-token",
       { seekTime: "2026-04-28T00:30:00Z" },
       "https://ha.example.com/bridge",
     );
 
     expect(fetchMock).toHaveBeenCalledWith(
-      "https://ha.example.com/bridge/api/v1/nvr/playback/sessions/nvrpb_test/seek",
+      "https://ha.example.com/bridge/api/v1/nvr/playback/sessions/nvrpb_test/seek?auth_token=bridge-token",
       expect.objectContaining({ method: "POST" }),
     );
+    expect(session.profiles.stable?.hlsUrl).toBe("https://ha.example.com/bridge/api/v1/media/hls/nvrpb_next/stable/index.m3u8?auth_token=bridge-token");
   });
 });

@@ -178,6 +178,7 @@ export interface BridgeDetectionState {
 
 export interface BridgeMediaModel {
   streamAvailable: boolean;
+  liveSource?: BridgeLiveSourceModel;
   streamSource: string | null;
   snapshotUrl: string | null;
   capture: BridgeCaptureSummary | null;
@@ -201,6 +202,7 @@ export interface BridgeMediaModel {
 export interface BridgeStreamProfileModel {
   name: string;
   streamUrl: string | null;
+  recorderStreamUrl?: string | null;
   localMjpegUrl: string | null;
   localHlsUrl: string | null;
   localDashUrl: string | null;
@@ -212,6 +214,26 @@ export interface BridgeStreamProfileModel {
   sourceHeight: number | null;
   useWallclockAsTimestamps: boolean;
   recommended: boolean;
+}
+
+export interface BridgeLiveSourceModel {
+  source: "nvr" | "camera";
+  preferredSource?: "nvr" | "camera";
+  fallbackReason?: string | null;
+  defaultSource?: "nvr" | "camera";
+  overrideSource?: "" | "nvr" | "camera";
+  cameraAvailable: boolean;
+  cameraUnavailableReason: string | null;
+  url: string | null;
+}
+
+export type LiveSourceSelection = "default" | "nvr" | "camera";
+
+export function liveSourceSelection(liveSource: BridgeLiveSourceModel | undefined): LiveSourceSelection {
+  if (liveSource?.overrideSource !== undefined) {
+    return liveSource.overrideSource || "default";
+  }
+  return liveSource?.source ?? "nvr";
 }
 
 export interface BridgeDeviceMetadataModel {
@@ -526,6 +548,7 @@ interface BridgeIntercomShape {
 interface BridgeProfileShape {
   name?: unknown;
   stream_url?: unknown;
+  recorder_stream_url?: unknown;
   local_mjpeg_url?: unknown;
   local_hls_url?: unknown;
   local_dash_url?: unknown;
@@ -586,7 +609,7 @@ function discoverBridgeDescriptors(
   registrySnapshot?: RegistrySnapshot | null,
 ): BridgeDescriptor[] {
   return Object.values(hass.states)
-    .filter((entity) => entity.entity_id.startsWith("camera."))
+    .filter((entity) => entity.entity_id.startsWith("camera.") && entity.attributes.restored !== true)
     .map((entity) => {
       const inferred = inferBridgeDescriptor(hass, entity);
       const deviceId =
@@ -800,6 +823,7 @@ function buildCameraDeviceBase(
   const features = bridgeFeaturesForEntity(cameraEntity);
   const archiveAttributes = bridgeArchiveAttributesForEntity(cameraEntity);
   const capture = bridgeCaptureForEntity(cameraEntity);
+  const liveSource = bridgeLiveSourceForEntity(cameraEntity);
   const streamSource =
     stringValue(cameraEntity?.attributes.stream_source) ??
     stringValue(cameraEntity?.attributes.snapshot_url);
@@ -820,9 +844,12 @@ function buildCameraDeviceBase(
     metadata: buildDeviceMetadata(hass, registrySnapshot, descriptor.deviceId),
     diagnostics: buildDeviceDiagnostics(hass, registrySnapshot, descriptor.deviceId),
     media: {
+      liveSource,
       streamAvailable:
-        binaryStateForDevice(hass, registrySnapshot, descriptor.deviceId, "stream_available") ||
-        booleanAttribute(cameraEntity?.attributes.stream_available),
+        liveSource.source === "camera" ? liveSource.cameraAvailable && Boolean(streamSource) : (
+          binaryStateForDevice(hass, registrySnapshot, descriptor.deviceId, "stream_available") ||
+          booleanAttribute(cameraEntity?.attributes.stream_available)
+        ),
       streamSource,
       snapshotUrl: stringValue(cameraEntity?.attributes.snapshot_url),
       capture,
@@ -1463,18 +1490,6 @@ function buildVtoCapabilities(
   };
 }
 
-function bridgeFeatureByKey(
-  features: BridgeFeatureSummary[],
-  key: string,
-): BridgeFeatureSummary | null {
-  for (const feature of features) {
-    if (feature.key === key) {
-      return feature;
-    }
-  }
-  return null;
-}
-
 function buildNvrRoomGroups(
   nvrDeviceId: string,
   channels: NvrChannelModel[],
@@ -1722,6 +1737,7 @@ function bridgeProfilesForEntity(
     profiles[normalizedKey] = {
       name: stringValue(typed.name) ?? normalizedKey,
       streamUrl: stringValue(typed.stream_url),
+      recorderStreamUrl: stringValue(typed.recorder_stream_url),
       localMjpegUrl: stringValue(typed.local_mjpeg_url),
       localHlsUrl: stringValue(typed.local_hls_url),
       localDashUrl: stringValue(typed.local_dash_url),
@@ -1737,6 +1753,24 @@ function bridgeProfilesForEntity(
   }
 
   return profiles;
+}
+
+function bridgeLiveSourceForEntity(entity: HassEntity | undefined): BridgeLiveSourceModel {
+  const value = entity?.attributes.bridge_live_source;
+  const source = isObject(value) ? value : {};
+  return {
+    source: source.source === "camera" ? "camera" : "nvr",
+    preferredSource: source.preferred_source === "camera" ? "camera" : source.preferred_source === "nvr" ? "nvr" : undefined,
+    fallbackReason: stringValue(source.fallback_reason),
+    ...(Object.hasOwn(source, "override_source") ? {
+      defaultSource: source.default_source === "camera" ? "camera" as const : "nvr" as const,
+      overrideSource: source.override_source === "camera" ? "camera" as const
+        : source.override_source === "nvr" ? "nvr" as const : "" as const,
+    } : {}),
+    cameraAvailable: source.camera_available === true,
+    cameraUnavailableReason: stringValue(source.camera_unavailable_reason),
+    url: stringValue(source.url),
+  };
 }
 
 function bridgeCaptureForEntity(

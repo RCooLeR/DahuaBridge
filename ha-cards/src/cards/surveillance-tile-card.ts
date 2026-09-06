@@ -444,7 +444,6 @@ export class DahuaBridgeSurveillanceTileCard
     const lightActive = findAuxTarget(camera, "light")?.active === true;
     const warningLightActive = findAuxTarget(camera, "warning_light")?.active === true;
     const sirenActive = findAuxTarget(camera, "siren")?.active === true;
-    const showRecording = camera.recordingActive || camera.bridgeRecordingActive;
     const title = this._config?.title ?? displayCameraLabel(camera);
 
     return html`

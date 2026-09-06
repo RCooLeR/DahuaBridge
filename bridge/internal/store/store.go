@@ -11,14 +11,19 @@ import (
 
 	"RCooLeR/DahuaBridge/internal/dahua"
 	"RCooLeR/DahuaBridge/internal/imou"
+	"RCooLeR/DahuaBridge/internal/streams"
 )
 
 type ProbeStore struct {
-	mu       sync.RWMutex
-	results  map[string]probeEntry
-	revision uint64
-	dirty    bool
-	imouAuth *imou.AuthState
+	mu                sync.RWMutex
+	fileMu            sync.Mutex
+	results           map[string]probeEntry
+	revision          uint64
+	dirty             bool
+	imouAuth          *imou.AuthState
+	liveSources       map[string]string
+	defaultLiveSource string
+	livePreconnect    streams.LivePreconnectSettings
 }
 
 type probeEntry struct {
@@ -27,10 +32,13 @@ type probeEntry struct {
 }
 
 type Snapshot struct {
-	Version  int                   `json:"version"`
-	SavedAt  time.Time             `json:"saved_at"`
-	Results  map[string]probeEntry `json:"results"`
-	IMOUAuth *imou.AuthState       `json:"imou_auth,omitempty"`
+	Version           int                            `json:"version"`
+	SavedAt           time.Time                      `json:"saved_at"`
+	Results           map[string]probeEntry          `json:"results"`
+	IMOUAuth          *imou.AuthState                `json:"imou_auth,omitempty"`
+	LiveSources       map[string]string              `json:"live_sources,omitempty"`
+	DefaultLiveSource string                         `json:"default_live_source,omitempty"`
+	LivePreconnect    streams.LivePreconnectSettings `json:"live_preconnect"`
 }
 
 type Stats struct {
@@ -40,7 +48,8 @@ type Stats struct {
 
 func NewProbeStore() *ProbeStore {
 	return &ProbeStore{
-		results: make(map[string]probeEntry),
+		results:     make(map[string]probeEntry),
+		liveSources: make(map[string]string),
 	}
 }
 
@@ -113,6 +122,8 @@ func (s *ProbeStore) Stats() Stats {
 }
 
 func (s *ProbeStore) SaveFile(path string) error {
+	s.fileMu.Lock()
+	defer s.fileMu.Unlock()
 	snapshot, revision, dirty := s.snapshot(nil, false)
 	if !dirty {
 		return nil
@@ -121,6 +132,8 @@ func (s *ProbeStore) SaveFile(path string) error {
 }
 
 func (s *ProbeStore) SaveFileWithMetadata(path string, imouAuth *imou.AuthState) error {
+	s.fileMu.Lock()
+	defer s.fileMu.Unlock()
 	snapshot, revision, dirty := s.snapshot(imouAuth, true)
 	if !dirty {
 		return nil
@@ -162,6 +175,8 @@ func (s *ProbeStore) LoadFile(path string) (bool, error) {
 }
 
 func (s *ProbeStore) LoadFileWithMetadata(path string) (bool, *imou.AuthState, error) {
+	s.fileMu.Lock()
+	defer s.fileMu.Unlock()
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -186,6 +201,9 @@ func (s *ProbeStore) LoadFileWithMetadata(path string) (bool, *imou.AuthState, e
 		}
 	}
 	s.imouAuth = cloneIMOUAuthState(snapshot.IMOUAuth)
+	s.liveSources = cloneStringMap(snapshot.LiveSources)
+	s.defaultLiveSource = snapshot.DefaultLiveSource
+	s.livePreconnect = snapshot.LivePreconnect.Defaulted()
 	s.dirty = false
 	return true, cloneIMOUAuthState(snapshot.IMOUAuth), nil
 }
@@ -202,17 +220,23 @@ func (s *ProbeStore) snapshot(imouAuth *imou.AuthState, includeMetadata bool) (S
 		}
 	}
 
-	authState := cloneIMOUAuthState(imouAuth)
+	authState := cloneIMOUAuthState(s.imouAuth)
+	if includeMetadata {
+		authState = cloneIMOUAuthState(imouAuth)
+	}
 	dirty := s.dirty
 	if includeMetadata && !equalIMOUAuthState(s.imouAuth, authState) {
 		dirty = true
 	}
 
 	return Snapshot{
-		Version:  2,
-		SavedAt:  time.Now().UTC(),
-		Results:  results,
-		IMOUAuth: authState,
+		Version:           5,
+		SavedAt:           time.Now().UTC(),
+		Results:           results,
+		IMOUAuth:          authState,
+		LiveSources:       cloneStringMap(s.liveSources),
+		DefaultLiveSource: s.defaultLiveSource,
+		LivePreconnect:    s.livePreconnect.Defaulted(),
 	}, s.revision, dirty
 }
 

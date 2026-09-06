@@ -21,6 +21,9 @@ type CatalogInput struct {
 	IPCConfigs         map[string]config.DeviceConfig
 	IntercomStatuses   map[string]RuntimeIntercomStatus
 	IncludeCredentials bool
+	LiveSources        map[string]string
+	DefaultLiveSource  string
+	LiveSourceStates   map[string]RuntimeLiveSourceState
 }
 
 type RuntimeIntercomStatus struct {
@@ -64,6 +67,8 @@ type Entry struct {
 	ONVIFStreamURL           string                 `json:"onvif_stream_url,omitempty"`
 	ONVIFSnapshotURL         string                 `json:"onvif_snapshot_url,omitempty"`
 	Profiles                 map[string]Profile     `json:"profiles"`
+	LiveSource               *LiveSourceSummary     `json:"live_source,omitempty"`
+	LiveSourceSignature      string                 `json:"-"`
 }
 
 type ChannelControlSummary struct {
@@ -193,6 +198,9 @@ type CaptureSummary struct {
 type Profile struct {
 	Name                     string `json:"name"`
 	StreamURL                string `json:"stream_url"`
+	LiveRelayURL             string `json:"-"` // Internal shared input for live FFmpeg consumers.
+	RecorderStreamURL        string `json:"recorder_stream_url,omitempty"`
+	AlternativeStreamURL     string `json:"-"`
 	LocalMJPEGURL            string `json:"local_mjpeg_url,omitempty"`
 	LocalHLSURL              string `json:"local_hls_url,omitempty"`
 	LocalDASHURL             string `json:"local_dash_url,omitempty"`
@@ -210,6 +218,8 @@ type Profile struct {
 	InputDuration            int64  `json:"-"`
 	InputPrefixURL           string `json:"-"`
 	InputPrefixDuration      int64  `json:"-"`
+	MediaGeneration          uint64 `json:"-"`
+	ForceVideoTranscode      bool   `json:"-"`
 }
 
 func BuildCatalog(input CatalogInput) []Entry {
@@ -271,6 +281,7 @@ func BuildCatalog(input CatalogInput) []Entry {
 					result.States[child.ID],
 				)
 				applyHASelection(&entry, result.States[child.ID])
+				applyNVRLiveSource(&entry, input, deviceCfg, child, result.States[child.ID])
 				entries = append(entries, entry)
 			}
 		case dahua.DeviceKindVTO:
@@ -1310,7 +1321,7 @@ func buildRTSPURL(deviceCfg config.DeviceConfig, channel int, subtype int, inclu
 	}
 
 	host := base.Hostname()
-	if port := base.Port(); port != "" && port != "80" && port != "443" {
+	if port := base.Port(); port != "" && (base.Scheme == "rtsp" || (port != "80" && port != "443")) {
 		host = net.JoinHostPort(host, port)
 	} else {
 		host = net.JoinHostPort(host, "554")

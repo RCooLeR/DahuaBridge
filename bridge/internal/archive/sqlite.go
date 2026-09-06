@@ -35,6 +35,11 @@ func (s *SQLiteStore) InitSchema(ctx context.Context) error {
 	}
 
 	statements := []string{
+		`CREATE TABLE IF NOT EXISTS archive_event_scan_progress (
+			device_id TEXT NOT NULL, channel INTEGER NOT NULL, event_code TEXT NOT NULL,
+			recent_end TEXT NOT NULL, backfill_before TEXT NOT NULL,
+			PRIMARY KEY(device_id, channel, event_code)
+		)`,
 		`CREATE TABLE IF NOT EXISTS smd_ivs_events (
 			event_id TEXT PRIMARY KEY,
 			device_id TEXT NOT NULL,
@@ -94,6 +99,19 @@ func (s *SQLiteStore) InitSchema(ctx context.Context) error {
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_bridge_mp4_clips_device_channel_time
 			ON bridge_mp4_clips(device_id, channel, start_time, end_time)`,
+		`CREATE TABLE IF NOT EXISTS archive_clip_retention (
+			clip_id TEXT PRIMARY KEY,
+			retain_from TEXT NOT NULL,
+			queued INTEGER NOT NULL DEFAULT 0,
+			last_attempt_at TEXT NOT NULL DEFAULT ''
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_archive_clip_retention_queue
+			ON archive_clip_retention(queued, last_attempt_at, retain_from)`,
+		// Recover old export attempts that lost their event link before ownership
+		// tracking existed. Manual/live recordings have a different stream ID.
+		`INSERT OR IGNORE INTO archive_clip_retention(clip_id, retain_from)
+			SELECT clip_id, COALESCE(NULLIF(end_time, ''), NULLIF(start_time, ''), created_at)
+			FROM bridge_mp4_clips WHERE substr(stream_id, 1, 11) = 'nvr_export_'`,
 	}
 	for _, statement := range statements {
 		if _, err := s.db.ExecContext(ctx, statement); err != nil {
@@ -117,6 +135,7 @@ func (s *SQLiteStore) dropSchema(ctx context.Context) error {
 		"smd_ivs_events",
 		"nvr_recording_chunks",
 		"bridge_mp4_clips",
+		"archive_clip_retention",
 	} {
 		if _, err := s.db.ExecContext(ctx, `DROP TABLE IF EXISTS `+table); err != nil {
 			return err
@@ -241,6 +260,9 @@ func (s *SQLiteStore) UpsertArchiveEvents(ctx context.Context, deviceID string, 
 	return err
 }
 
+// PruneOlderThan removes expired index rows and returns a bounded batch of
+// pending export cleanups. Clip metadata remains until finishClipCleanup;
+// returned IDs can therefore recur after an interrupted or failed deletion.
 func (s *SQLiteStore) PruneOlderThan(ctx context.Context, cutoff time.Time) (clipIDs []string, err error) {
 	formatted := cutoff.UTC().Format(time.RFC3339Nano)
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -252,35 +274,6 @@ func (s *SQLiteStore) PruneOlderThan(ctx context.Context, cutoff time.Time) (cli
 			_ = tx.Rollback()
 		}
 	}()
-
-	// Collect candidate clip IDs before pruning event rows. A clip is returned
-	// for filesystem deletion only after the row delete proves no retained event
-	// still references it.
-	rows, err := tx.QueryContext(ctx, `SELECT DISTINCT mp4_clip_id
-		FROM smd_ivs_events
-		WHERE last_seen_at < ?
-			AND mp4_clip_id <> ''
-			AND LOWER(COALESCE(mp4_status, '')) NOT IN ('recording', 'transcoding', 'queued', 'downloading')
-		ORDER BY mp4_clip_id`,
-		formatted,
-	)
-	if err != nil {
-		return nil, err
-	}
-	for rows.Next() {
-		var clipID string
-		if err = rows.Scan(&clipID); err != nil {
-			_ = rows.Close()
-			return nil, err
-		}
-		clipID = strings.TrimSpace(clipID)
-		if clipID != "" {
-			clipIDs = append(clipIDs, clipID)
-		}
-	}
-	if err = rows.Close(); err != nil {
-		return nil, err
-	}
 
 	statements := []string{
 		`DELETE FROM smd_ivs_events
@@ -297,29 +290,47 @@ func (s *SQLiteStore) PruneOlderThan(ctx context.Context, cutoff time.Time) (cli
 			return nil, err
 		}
 	}
-	deletedClipIDs := make([]string, 0, len(clipIDs))
-	for _, clipID := range clipIDs {
-		result, execErr := tx.ExecContext(ctx, `DELETE FROM bridge_mp4_clips
-			WHERE clip_id = ?
-				AND NOT EXISTS (
-					SELECT 1 FROM smd_ivs_events WHERE mp4_clip_id = ?
-				)`,
-			clipID,
-			clipID,
-		)
-		if execErr != nil {
-			err = execErr
+	// Ownership survives event-link replacement. Queue only archive exports
+	// past their original source retention time with no retained references.
+	// Rows remain durable until filesystem cleanup succeeds.
+	if _, err = tx.ExecContext(ctx, `UPDATE archive_clip_retention SET queued = 1
+		WHERE retain_from < ? AND queued = 0
+			AND NOT EXISTS (SELECT 1 FROM smd_ivs_events WHERE mp4_clip_id = archive_clip_retention.clip_id)`, formatted); err != nil {
+		return nil, err
+	}
+	rows, err := tx.QueryContext(ctx, `SELECT clip_id FROM archive_clip_retention
+		WHERE queued = 1 ORDER BY last_attempt_at, retain_from, clip_id LIMIT ?`, archiveQueryLimit)
+	if err != nil {
+		return nil, err
+	}
+	for rows.Next() {
+		var clipID string
+		if err = rows.Scan(&clipID); err != nil {
+			_ = rows.Close()
 			return nil, err
 		}
-		if rowsAffected, rowsErr := result.RowsAffected(); rowsErr == nil && rowsAffected > 0 {
-			deletedClipIDs = append(deletedClipIDs, clipID)
+		clipIDs = append(clipIDs, clipID)
+	}
+	if err = rows.Err(); err != nil {
+		_ = rows.Close()
+		return nil, err
+	}
+	if err = rows.Close(); err != nil {
+		return nil, err
+	}
+	// Rotate attempted work behind untouched entries even if every deletion
+	// in this batch fails or remains active, so one bad file cannot starve others.
+	for _, clipID := range clipIDs {
+		if _, err = tx.ExecContext(ctx, `UPDATE archive_clip_retention SET last_attempt_at = ? WHERE clip_id = ?`,
+			time.Now().UTC().Format(time.RFC3339Nano), clipID); err != nil {
+			return nil, err
 		}
 	}
 	err = tx.Commit()
 	if err != nil {
 		return nil, err
 	}
-	return deletedClipIDs, nil
+	return clipIDs, nil
 }
 
 type archiveFileRow struct {

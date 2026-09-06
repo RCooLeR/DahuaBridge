@@ -55,7 +55,7 @@ func (r *runtimeServices) EnsureNVRArchiveClip(ctx context.Context, deviceID str
 		Limit:     8,
 	}); err == nil {
 		for _, clip := range clips {
-			if clip.StreamID != streamID || !clipMatchesWindow(clip, request.StartTime, request.EndTime) {
+			if clip.StreamID != streamID || !clipMatchesWindow(clip, request.StartTime, request.EndTime) || !reusableArchiveClip(starter, clip) {
 				continue
 			}
 			_ = r.TrackNVRArchiveClip(ctx, deviceID, request, clip)
@@ -167,7 +167,7 @@ func (r *runtimeServices) EnsureNVRArchiveClip(ctx context.Context, deviceID str
 				Limit:     8,
 			}); findErr == nil {
 				for _, existing := range clips {
-					if existing.StreamID == streamID && clipMatchesWindow(existing, request.StartTime, request.EndTime) {
+					if existing.StreamID == streamID && clipMatchesWindow(existing, request.StartTime, request.EndTime) && reusableArchiveClip(starter, existing) {
 						_ = r.TrackNVRArchiveClip(ctx, deviceID, request, existing)
 						return existing, nil
 					}
@@ -237,7 +237,7 @@ func (r *runtimeServices) ensurePlaybackArchiveClip(
 				Limit:     8,
 			}); findErr == nil {
 				for _, existing := range clips {
-					if existing.StreamID == streamID && clipMatchesWindow(existing, request.StartTime, request.EndTime) {
+					if existing.StreamID == streamID && clipMatchesWindow(existing, request.StartTime, request.EndTime) && reusableArchiveClip(starter, existing) {
 						_ = r.TrackNVRArchiveClip(ctx, deviceID, request, existing)
 						return existing, nil
 					}
@@ -372,6 +372,32 @@ func clipMatchesWindow(clip media.ClipInfo, startTime time.Time, endTime time.Ti
 	const tolerance = 2 * time.Second
 	return timeDeltaWithin(clipStart, startTime.UTC(), tolerance) &&
 		timeDeltaWithin(clipEnd, endTime.UTC(), tolerance)
+}
+
+func reusableArchiveClip(starter runtimeDirectClipStarter, clip media.ClipInfo) bool {
+	if clip.Status == media.ClipStatusRecording {
+		active, ok := starter.(interface {
+			ActiveClip(string) (media.ClipInfo, bool)
+		})
+		if !ok {
+			return false
+		}
+		job, exists := active.ActiveClip(clip.StreamID)
+		return exists && job.ID == clip.ID
+	}
+	if clip.Status != media.ClipStatusCompleted {
+		return false
+	}
+	files, ok := starter.(interface{ ClipFilePath(string) (string, error) })
+	if !ok {
+		return false
+	}
+	path, err := files.ClipFilePath(clip.ID)
+	if err != nil {
+		return false
+	}
+	info, err := os.Stat(path)
+	return err == nil && info.Mode().IsRegular() && info.Size() > 0
 }
 
 func timeDeltaWithin(left time.Time, right time.Time, tolerance time.Duration) bool {

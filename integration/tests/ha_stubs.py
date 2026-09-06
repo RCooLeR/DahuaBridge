@@ -12,7 +12,7 @@ def install() -> None:
         return
 
     aiohttp = types.ModuleType("aiohttp")
-    aiohttp.ClientError = Exception
+    aiohttp.ClientError = type("ClientError", (Exception,), {})
     aiohttp.ClientSession = object
     aiohttp.web = types.SimpleNamespace(
         Request=object,
@@ -114,6 +114,24 @@ def install() -> None:
 
     config_entries = types.ModuleType("homeassistant.config_entries")
     config_entries.ConfigEntry = ConfigEntry
+
+    class _Flow:
+        def __init_subclass__(cls, **kwargs):
+            super().__init_subclass__()
+
+        def async_show_form(self, *, step_id, data_schema, errors=None):
+            return {
+                "type": "form",
+                "step_id": step_id,
+                "data_schema": data_schema,
+                "errors": errors or {},
+            }
+
+        def async_create_entry(self, *, title, data, **kwargs):
+            return {"type": "create_entry", "title": title, "data": data, **kwargs}
+
+    config_entries.ConfigFlow = type("ConfigFlow", (_Flow,), {})
+    config_entries.OptionsFlow = type("OptionsFlow", (_Flow,), {})
     sys.modules["homeassistant.config_entries"] = config_entries
 
     class HomeAssistant:

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 
 from ..catalog import (
     capture_for_record,
@@ -74,7 +74,8 @@ def camera_extra_state_attributes(
                     api,
                     parent_id,
                     channel,
-                    _include_direct_archive_credentials(preferred_video_source),
+                    _include_direct_archive_credentials(preferred_video_source)
+                    and "/api/v1/rtsp/" not in urlsplit(source or "").path,
                 )
             )
 
@@ -82,6 +83,12 @@ def camera_extra_state_attributes(
     attrs["preferred_video_profile"] = preferred_video_profile
     attrs["preferred_video_source"] = preferred_video_source
     attrs["video_fallbacks_enabled"] = video_fallbacks_enabled
+
+    live_source = stream.get("live_source")
+    if isinstance(live_source, dict):
+        attrs["bridge_live_source"] = resolve_bridge_urls(api, live_source)
+    elif str(device.get("kind", "")).strip() == "nvr_channel":
+        attrs["bridge_live_source"] = {"source": "nvr", "camera_available": False}
 
     _copy_stream_url_attr(api, stream, attrs, "local_preview_url", "preview_url")
     _copy_stream_url_attr(
@@ -143,13 +150,17 @@ def _nvr_archive_attrs(
 ) -> dict[str, str]:
     encoded_parent_id = quote(parent_id, safe="")
     chunks_template = (
-        api.absolute_url(f"/api/v1/nvr/{encoded_parent_id}/recording-chunks")
-        + f"?channel={channel}&start={{start}}&end={{end}}&limit={{limit}}"
+        api.absolute_url(
+            f"/api/v1/nvr/{encoded_parent_id}/recording-chunks"
+            f"?channel={channel}&start={{start}}&end={{end}}&limit={{limit}}"
+        )
     )
     smd_ivs_credentials = "&include_credentials=true" if include_credentials else ""
     smd_ivs_template = (
-        api.absolute_url(f"/api/v1/nvr/{encoded_parent_id}/smd-ivs")
-        + f"?channel={channel}&start={{start}}&end={{end}}&limit={{limit}}&event={{event}}{smd_ivs_credentials}"
+        api.absolute_url(
+            f"/api/v1/nvr/{encoded_parent_id}/smd-ivs"
+            f"?channel={channel}&start={{start}}&end={{end}}&limit={{limit}}&event={{event}}{smd_ivs_credentials}"
+        )
     )
     return {
         "bridge_archive_smd_ivs_url_template": smd_ivs_template,
@@ -162,8 +173,7 @@ def _nvr_archive_attrs(
             f"/api/v1/nvr/{encoded_parent_id}/playback/sessions"
         ),
         "bridge_archive_coverage_url": (
-            api.absolute_url(f"/api/v1/nvr/{encoded_parent_id}/recordings/coverage")
-            + f"?channel={channel}"
+            api.absolute_url(f"/api/v1/nvr/{encoded_parent_id}/recordings/coverage?channel={channel}")
         ),
     }
 

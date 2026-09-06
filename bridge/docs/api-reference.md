@@ -44,7 +44,38 @@ NVR channel catalog entries expose archive features:
 
 Use `include_credentials=true` only for operator-only diagnostics. It can include RTSP URLs with embedded credentials.
 
+`GET /api/v1/settings/live-source` returns the bridge default preference as `{"source":"nvr"}` or `{"source":"camera"}`. `PUT` to the same endpoint saves either preference. The initial default is NVR.
+
+`PUT /api/v1/streams/{streamID}/live-source` saves an override for an existing NVR channel:
+
+```json
+{"source": "camera"}
+```
+
+Use `"nvr"` to prefer the recorder, or `"default"` to remove the override and inherit the bridge default. The response is the updated stream entry without upstream credentials. The bridge validates and selects an alternate when the preferred route fails, and returns to the preferred route after recovery. Missing camera credentials do not prevent saving Camera as a preference; the effective route stays NVR with a reported reason.
+
+`live_source.source` is the effective source; `preferred_source` is the resolved preference. `default_source` and `override_source` are always present, with an empty override meaning inheritance. `fallback_reason` explains why the bridge uses an alternate. `camera_available` describes direct-camera configuration availability, not a guarantee that live media will play. Home Assistant receives a stable bridge live URL, and upstream alternatives stay private. Profiles retain `recorder_stream_url` for historical playback regardless of the live preference.
+
+Both setting endpoints use the same authentication as other bridge actions and return 503 if persistent state cannot be saved. Preferences survive restarts and device probes without changing YAML. Updating the default leaves explicit camera overrides in place and reconnects only streams whose effective source changes.
+
 ## Live Media
+
+`GET /api/v1/settings/live-preconnect` returns the persisted live input preconnection settings. `PUT` to the same protected endpoint saves both required fields:
+
+```json
+{"mode": "recent", "profile": "auto"}
+```
+
+The `mode` is `off`, `recent`, or `always`; `profile` is `auto`, `quality`, or `stable`. The initial settings are `off` / `auto`.
+
+- `off` preserves the configured media idle timeout, which defaults to 30 seconds.
+- `recent` keeps a recently viewed live input connected for five minutes after its last viewer leaves.
+- `always` continuously connects the selected profile.
+- `auto` follows the recommended profile, with quality/stable fallback. Explicit quality or stable selections use the same fallback order as Home Assistant.
+
+These settings keep bridge live RTSP inputs connected to reduce startup delay. They do not guarantee that a keyframe, FFmpeg output, or the client player is ready. The preferred camera/NVR source, archive playback, and client output format remain independent.
+
+Both operations return the current settings with status 200. Updates use the admin action rate limit. Invalid settings, unknown fields, malformed or trailing JSON, and bodies larger than 4096 bytes return 400. An unavailable settings runtime or a persistence failure returns 503.
 
 - `GET /api/v1/media/snapshot/{streamID}`: JPEG snapshot from a bridge stream.
 - `GET /api/v1/nvr/{deviceID}/channels/{channel}/snapshot`: NVR channel snapshot.

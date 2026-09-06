@@ -29,8 +29,17 @@ func (m *Manager) getOrCreateMJPEGWorkerWithEffectiveScale(entry streams.Entry, 
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.closed {
+		return nil, ErrManagerClosed
+	}
+	if profile.MediaGeneration != m.streamGenerations[entry.ID] {
+		return nil, ErrStreamSourceChanged
+	}
 	if existing, ok := m.mjpegWorkers[key]; ok {
-		return existing, nil
+		if existing.ctx.Err() == nil {
+			return existing, nil
+		}
+		delete(m.mjpegWorkers, key)
 	}
 	if m.cfg.MaxWorkers > 0 && m.activeWorkerCountLocked() >= m.cfg.MaxWorkers {
 		err := fmt.Errorf("%w: %d active, max %d", ErrWorkerLimitReached, m.activeWorkerCountLocked(), m.cfg.MaxWorkers)
@@ -40,7 +49,7 @@ func (m *Manager) getOrCreateMJPEGWorkerWithEffectiveScale(entry streams.Entry, 
 		return nil, err
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(m.context())
 	w := &worker{
 		key:         key,
 		streamID:    entry.ID,
@@ -66,7 +75,7 @@ func (m *Manager) getOrCreateMJPEGWorkerWithEffectiveScale(entry streams.Entry, 
 	if m.metrics != nil {
 		m.metrics.ObserveMediaStart(entry.ID, profileName, nil)
 	}
-	go w.run()
+	m.wg.Go(w.run)
 	return w, nil
 }
 
@@ -86,6 +95,10 @@ func (m *Manager) removeMJPEGWorker(key string, w *worker) {
 func (w *worker) addSubscriber(ch chan []byte) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	if w.ctx.Err() != nil || w.subscribersClosed {
+		close(ch)
+		return
+	}
 	w.subscribers[ch] = struct{}{}
 	w.idleGeneration++
 	if w.parent.metrics != nil {
@@ -106,6 +119,7 @@ func (w *worker) removeSubscriber(ch chan []byte) {
 	_, ok := w.subscribers[ch]
 	if ok {
 		delete(w.subscribers, ch)
+		close(ch)
 	}
 	empty := len(w.subscribers) == 0
 	idleGeneration := w.idleGeneration
@@ -116,9 +130,6 @@ func (w *worker) removeSubscriber(ch chan []byte) {
 	viewers := len(w.subscribers)
 	w.mu.Unlock()
 
-	if ok {
-		close(ch)
-	}
 	if w.parent.metrics != nil {
 		w.parent.metrics.SetMediaViewers(w.streamID, w.profileName, viewers)
 	}
@@ -126,7 +137,7 @@ func (w *worker) removeSubscriber(ch chan []byte) {
 		w.logger.Debug().Int("viewers", viewers).Msg("mjpeg subscriber removed")
 	}
 	if empty {
-		go w.stopWhenIdle(idleGeneration)
+		w.parent.runTask(func() { w.stopWhenIdle(idleGeneration) })
 	}
 }
 
@@ -143,14 +154,15 @@ func (w *worker) stopWhenIdle(idleGeneration uint64) {
 	w.mu.Lock()
 	empty := len(w.subscribers) == 0
 	sameIdleWindow := w.idleGeneration == idleGeneration
-	w.mu.Unlock()
 	if empty && sameIdleWindow {
 		w.logger.Debug().Msg("stopping idle media worker")
 		w.cancel()
 	}
+	w.mu.Unlock()
 }
 
 func (w *worker) run() {
+	defer w.cancel()
 	defer w.parent.removeMJPEGWorker(w.key, w)
 	defer w.closeSubscribers()
 
@@ -203,6 +215,9 @@ func (w *worker) run() {
 			w.setError(fmt.Errorf("start ffmpeg: %w", err))
 			return
 		}
+		w.mu.Lock()
+		w.processID = cmd.Process.Pid
+		w.mu.Unlock()
 		w.logger.Debug().
 			Bool("hwaccel", attempt.useHWAccel).
 			Str("input_preset", attempt.inputPreset).
@@ -235,6 +250,7 @@ func (w *worker) run() {
 				continue
 			}
 			w.setError(readErr)
+			w.parent.reportLiveSourceFailure(w.ctx, w.streamID, w.profile)
 			return
 		case waitErr != nil:
 			if stderrText != "" {
@@ -254,8 +270,10 @@ func (w *worker) run() {
 				continue
 			}
 			w.setError(waitErr)
+			w.parent.reportLiveSourceFailure(w.ctx, w.streamID, w.profile)
 			return
 		default:
+			w.parent.reportLiveSourceFailure(w.ctx, w.streamID, w.profile)
 			w.logger.Debug().Msg("mjpeg worker exited cleanly")
 			return
 		}
@@ -354,13 +372,9 @@ func (w *worker) publishFrame(frame []byte) {
 	w.mu.Lock()
 	w.lastFrame = append(w.lastFrame[:0], frame...)
 	w.lastFrameAt = time.Now()
-	subs := make([]chan []byte, 0, len(w.subscribers))
+	// Subscription removal closes channels under this same lock. A snapshot
+	// of channels cannot protect a later send from a concurrent disconnect.
 	for ch := range w.subscribers {
-		subs = append(subs, ch)
-	}
-	w.mu.Unlock()
-
-	for _, ch := range subs {
 		select {
 		case ch <- frame:
 		default:
@@ -369,6 +383,7 @@ func (w *worker) publishFrame(frame []byte) {
 			}
 		}
 	}
+	w.mu.Unlock()
 	if w.parent.metrics != nil {
 		w.parent.metrics.ObserveMediaFrame(w.streamID, w.profileName)
 	}
@@ -394,14 +409,10 @@ func (w *worker) setError(err error) {
 
 func (w *worker) closeSubscribers() {
 	w.mu.Lock()
-	subs := make([]chan []byte, 0, len(w.subscribers))
+	defer w.mu.Unlock()
+	w.subscribersClosed = true
 	for ch := range w.subscribers {
-		subs = append(subs, ch)
 		delete(w.subscribers, ch)
-	}
-	w.mu.Unlock()
-
-	for _, ch := range subs {
 		close(ch)
 	}
 }
@@ -428,6 +439,7 @@ func (w *worker) waitUntilReady(ctx context.Context) error {
 	case <-ctx.Done():
 		return ctx.Err()
 	case <-timeout.C:
+		w.parent.reportLiveSourceFailure(w.ctx, w.streamID, w.profile)
 		return fmt.Errorf("timed out waiting for first media frame")
 	case err := <-startErr:
 		return err
@@ -442,6 +454,8 @@ func (w *worker) status() WorkerStatus {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	status := WorkerStatus{
+		ProcessID:        w.processID,
+		SharedInput:      w.profile.LiveRelayURL != "",
 		Key:              w.key,
 		Format:           "mjpeg",
 		StreamID:         w.streamID,

@@ -91,12 +91,17 @@ func TestProbeStoreSaveFileWithMetadataSkipsUnchangedState(t *testing.T) {
 	if err := s.SaveFileWithMetadata(path, auth); err != nil {
 		t.Fatalf("SaveFileWithMetadata returned error: %v", err)
 	}
+	// A fixed timestamp detects unnecessary writes without sleeps or assuming
+	// filesystem clocks advance monotonically across VM/container boundaries.
+	sentinel := time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)
+	if err := os.Chtimes(path, sentinel, sentinel); err != nil {
+		t.Fatal(err)
+	}
 	firstInfo, err := os.Stat(path)
 	if err != nil {
 		t.Fatalf("stat state file: %v", err)
 	}
 
-	time.Sleep(20 * time.Millisecond)
 	if err := s.SaveFileWithMetadata(path, auth); err != nil {
 		t.Fatalf("second SaveFileWithMetadata returned error: %v", err)
 	}
@@ -112,7 +117,6 @@ func TestProbeStoreSaveFileWithMetadataSkipsUnchangedState(t *testing.T) {
 		AccessToken: "token-2",
 		ExpiresAt:   auth.ExpiresAt,
 	}
-	time.Sleep(20 * time.Millisecond)
 	if err := s.SaveFileWithMetadata(path, changedAuth); err != nil {
 		t.Fatalf("changed SaveFileWithMetadata returned error: %v", err)
 	}
@@ -120,7 +124,11 @@ func TestProbeStoreSaveFileWithMetadataSkipsUnchangedState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("stat state file after changed save: %v", err)
 	}
-	if !thirdInfo.ModTime().After(secondInfo.ModTime()) {
+	if thirdInfo.ModTime().Equal(secondInfo.ModTime()) {
 		t.Fatalf("expected changed metadata save to write: before=%s after=%s", secondInfo.ModTime(), thirdInfo.ModTime())
+	}
+	_, restored, err := NewProbeStore().LoadFileWithMetadata(path)
+	if err != nil || restored == nil || restored.AccessToken != changedAuth.AccessToken {
+		t.Fatalf("changed authentication metadata was not persisted: %v", err)
 	}
 }

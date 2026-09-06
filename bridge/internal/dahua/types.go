@@ -111,6 +111,8 @@ type NVRRecordingQuery struct {
 	EventCode           string
 	EventOnly           bool
 	SkipAssetEnrichment bool
+	// ScanAll is reserved for archive indexing; Limit becomes the page size.
+	ScanAll bool `json:"-"`
 }
 
 type NVRRecording struct {

@@ -119,8 +119,8 @@ func buildRTSPInputArgs(profile streams.Profile, inputPreset string) []string {
 }
 
 func buildInputArgsWithWallclock(profile streams.Profile, inputPreset string, useWallclockTimestamps bool) []string {
-	if !isRTSPScheme(profile.StreamURL) {
-		args := []string{"-i", profile.StreamURL}
+	if !isRTSPScheme(mediaInputURL(profile)) {
+		args := []string{"-i", mediaInputURL(profile)}
 		if seekOffset := time.Duration(profile.InputSeekOffset); seekOffset > 0 {
 			args = append(args, "-ss", formatFFmpegSeconds(seekOffset))
 		}
@@ -151,8 +151,12 @@ func buildRTSPInputArgsWithWallclock(profile streams.Profile, inputPreset string
 	if useWallclockTimestamps {
 		args = append(args, "-use_wallclock_as_timestamps", "1")
 	}
-	args = append(args, "-i", profile.StreamURL)
+	args = append(args, "-i", mediaInputURL(profile))
 	return args
+}
+
+func mediaInputURL(profile streams.Profile) string {
+	return firstNonEmpty(profile.LiveRelayURL, profile.StreamURL)
 }
 
 func isRTSPScheme(raw string) bool {

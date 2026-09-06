@@ -1,7 +1,7 @@
 # Card Install
 
-The HA cards are distributed as one Lovelace JavaScript bundle built from the
-`ha-cards/` workspace.
+The HA cards have one Lovelace entry module, optional JavaScript chunks, and image
+assets built from the `ha-cards/` workspace.
 
 ## Build
 
@@ -16,19 +16,24 @@ Build output:
 
 ```text
 dist/dahuabridge-surveillance-panel.js
+dist/chunks/*.js
+dist/logo-white.png
 ```
 
-That single bundle registers both:
+The entry module registers both:
 
 - `custom:dahuabridge-surveillance-panel`
 - `custom:dahuabridge-surveillance-tile`
 
 ## Manual Home Assistant Install
 
-Copy the bundle to a Home Assistant `www` path, for example:
+Copy the entire contents of `dist/` to a Home Assistant `www` directory, preserving
+the `chunks/` subdirectory. For example:
 
 ```text
 /config/www/dahuabridge/dahuabridge-surveillance-panel.js
+/config/www/dahuabridge/chunks/...
+/config/www/dahuabridge/logo-white.png
 ```
 
 Add this Lovelace resource:
@@ -38,6 +43,10 @@ Add this Lovelace resource:
 ```
 
 Then add either custom card type to a dashboard.
+
+Only the entry module is added as a Lovelace resource. The browser loads the
+other files relative to it. When upgrading, copy chunks and assets before the
+entry module; retain older hashed chunks until existing dashboard tabs reload.
 
 ## Requirements
 

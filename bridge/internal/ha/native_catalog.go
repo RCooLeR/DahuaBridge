@@ -27,8 +27,12 @@ type NativeCatalogDevice struct {
 
 func BuildNativeCatalog(results []*dahua.ProbeResult, entries []streams.Entry, baseURL ...string) NativeCatalog {
 	streamsByDeviceID := make(map[string]streams.Entry, len(entries))
+	relayCatalog := false
 	for _, entry := range entries {
 		streamsByDeviceID[entry.ID] = entry
+		for _, profile := range entry.Profiles {
+			relayCatalog = relayCatalog || strings.Contains(profile.StreamURL, "/api/v1/rtsp/live/")
+		}
 	}
 
 	devices := make([]NativeCatalogDevice, 0)
@@ -43,6 +47,21 @@ func BuildNativeCatalog(results []*dahua.ProbeResult, entries []streams.Entry, b
 		}
 	}
 
+	if relayCatalog {
+		for index := range devices {
+			record := &devices[index]
+			record.State.Info = withoutUpstreamRTSP(record.State.Info)
+			if record.Device.Attributes != nil {
+				attributes := make(map[string]string, len(record.Device.Attributes))
+				for key, value := range record.Device.Attributes {
+					if !isUpstreamRTSP(value) {
+						attributes[key] = value
+					}
+				}
+				record.Device.Attributes = attributes
+			}
+		}
+	}
 	sort.Slice(devices, func(i, j int) bool {
 		return devices[i].Device.ID < devices[j].Device.ID
 	})
@@ -76,6 +95,54 @@ func nativeCatalogDevice(device dahua.Device, state dahua.DeviceState, streamsBy
 		mergeIntercomState(&record.State, entryCopy.Intercom)
 	}
 	return record
+}
+
+func isUpstreamRTSP(value string) bool {
+	value = strings.ToLower(strings.TrimSpace(value))
+	return strings.HasPrefix(value, "rtsp://") || strings.HasPrefix(value, "rtsps://")
+}
+
+func withoutUpstreamRTSP(values map[string]any) map[string]any {
+	if values == nil {
+		return nil
+	}
+	clean := make(map[string]any, len(values))
+	for key, value := range values {
+		switch typed := value.(type) {
+		case string:
+			if !isUpstreamRTSP(typed) {
+				clean[key] = typed
+			}
+		case map[string]any:
+			clean[key] = withoutUpstreamRTSP(typed)
+		case []map[string]any:
+			items := make([]map[string]any, len(typed))
+			for index, item := range typed {
+				items[index] = withoutUpstreamRTSP(item)
+			}
+			clean[key] = items
+		case []any:
+			items := make([]any, 0, len(typed))
+			for _, item := range typed {
+				wrapped := withoutUpstreamRTSP(map[string]any{"value": item})
+				if value, ok := wrapped["value"]; ok {
+					items = append(items, value)
+				}
+			}
+			clean[key] = items
+		case map[string]string:
+			items := make(map[string]string, len(typed))
+			for name, item := range typed {
+				if !isUpstreamRTSP(item) {
+					items[name] = item
+				}
+			}
+			clean[key] = items
+		default:
+			clean[key] = value
+		}
+	}
+	return clean
 }
 
 func cloneNativeCatalogState(state dahua.DeviceState) dahua.DeviceState {

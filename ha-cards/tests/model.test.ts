@@ -1,11 +1,63 @@
 import { describe, expect, it } from "vitest";
 
 import { buildPanelModel, displayCameraLabel } from "../src/domain/model";
+import {liveSourceSelection} from "../src/domain/devices";
 import type { SurveillancePanelCardConfig } from "../src/types/card-config";
 import type { RegistrySnapshot } from "../src/ha/registry";
 import type { HomeAssistant } from "../src/types/home-assistant";
 
 describe("buildPanelModel", () => {
+  it("maps live source selection and retains recorder RTSP for archive behind a browser bridge URL", () => {
+    const now = new Date().toISOString();
+    const cameraUrl = "rtsp://ipc-user:ipc-pass@camera.local/cam/realmonitor?channel=1&subtype=0";
+    const recorderUrl = "rtsp://nvr-user:nvr-pass@nvr.local/cam/realmonitor?channel=5&subtype=0";
+    const entity = {
+      entity_id: "camera.west20_nvr_channel_05_camera",
+      state: "idle",
+      attributes: {
+        bridge_device_id: "west20_nvr_channel_05",
+        bridge_root_device_id: "west20_nvr",
+        bridge_device_kind: "nvr_channel",
+        bridge_base_url: "http://bridge.local:9020",
+        stream_source: cameraUrl,
+        bridge_live_source: {source: "camera", camera_available: true, url: "/api/v1/streams/west20_nvr_channel_05/live-source"},
+        bridge_profiles: {quality: {stream_url: cameraUrl, recorder_stream_url: recorderUrl, subtype: 0}},
+      } as Record<string, unknown>,
+      last_changed: now,
+      last_updated: now,
+    };
+    const hass: HomeAssistant = {states: {[entity.entity_id]: entity}, callService: async () => undefined};
+    const config: SurveillancePanelCardConfig = {type: "custom:dahuabridge-surveillance-panel", browser_bridge_url: "https://ha.example/bridge"};
+    const stream = buildPanelModel(hass, config, {kind: "overview"}).cameras[0]!.stream;
+    expect(stream.liveSource).toMatchObject({source: "camera", cameraAvailable: true});
+    expect(stream.source).toBe(cameraUrl);
+    expect(stream.profiles[0]?.streamUrl).toBe(cameraUrl);
+    expect(stream.profiles[0]?.recorderStreamUrl).toBe(recorderUrl);
+    expect(liveSourceSelection(stream.liveSource)).toBe("camera");
+    entity.attributes.bridge_live_source = {source: "camera", camera_available: false};
+    entity.attributes.stream_available = true;
+    const availabilityEntityId = "binary_sensor.west20_nvr_channel_05_stream_available";
+    hass.states[availabilityEntityId] = {...entity, entity_id: availabilityEntityId, attributes: {}, state: "on"};
+    expect(buildPanelModel(hass, config, {kind: "overview"}).cameras[0]!.stream.available).toBe(false);
+    entity.attributes.bridge_live_source = {source: "nvr", default_source: "camera", override_source: "", camera_available: false};
+    const inherited = buildPanelModel(hass, config, {kind: "overview"}).cameras[0]!.stream;
+    expect(inherited.liveSource).toMatchObject({source: "nvr", defaultSource: "camera", overrideSource: ""});
+    expect(liveSourceSelection(inherited.liveSource)).toBe("default");
+    expect(inherited.available).toBe(true);
+    entity.attributes.bridge_live_source = {source: "camera", preferred_source: "nvr", default_source: "nvr", override_source: "", camera_available: true, fallback_reason: "NVR unavailable"};
+    entity.attributes.stream_available = false;
+    hass.states[availabilityEntityId]!.state = "off";
+    const cameraFallback = buildPanelModel(hass, config, {kind: "overview"}).cameras[0]!.stream;
+    expect(cameraFallback.liveSource).toMatchObject({source: "camera", preferredSource: "nvr", fallbackReason: "NVR unavailable"});
+    expect(cameraFallback.available).toBe(true);
+    entity.attributes.bridge_live_source = {source: "nvr", default_source: "camera", override_source: "nvr", camera_available: false};
+    expect(liveSourceSelection(buildPanelModel(hass, config, {kind: "overview"}).cameras[0]!.stream.liveSource)).toBe("nvr");
+    delete entity.attributes.bridge_live_source;
+    expect(buildPanelModel(hass, config, {kind: "overview"}).cameras[0]!.stream.liveSource).toMatchObject({source: "nvr", cameraAvailable: false, url: null});
+    entity.attributes.restored = true;
+    expect(buildPanelModel(hass, config, {kind: "overview"}).cameras).toHaveLength(0);
+  });
+
   it("formats NVR channel display labels with the channel number first", () => {
     expect(
       displayCameraLabel({

@@ -10,6 +10,7 @@ import type {
 import { normalizeArchiveSearchUrlTemplate } from "../domain/archive";
 import { logCardInfo, redactUrlForLog } from "../utils/logging";
 import { rewriteBridgeUrl } from "./bridge-url";
+import { authenticatedBridgeResourceUrl } from "./bridge-resource";
 
 const optionalIntegerSchema = z.preprocess((value) => {
   if (value === null || value === undefined) {
@@ -231,6 +232,7 @@ export async function fetchArchiveRecordings(
           endTime: resultEndTime,
         },
         browserBridgeUrl,
+        url.toString(),
       ),
     ),
   };
@@ -271,7 +273,7 @@ export async function fetchBridgeRecordings(
   const browserBridgeUrl = browserBridgeUrlFromRequestUrl(url.toString());
   return {
     returnedCount: firstNumber(payload.returned_count, payload.items.length),
-    items: payload.items.map((item) => mapBridgeRecording(item, browserBridgeUrl)),
+    items: payload.items.map((item) => mapBridgeRecording(item, browserBridgeUrl, url.toString())),
   };
 }
 
@@ -283,7 +285,9 @@ function mapArchiveRecording(
     endTime: string;
   },
   browserBridgeUrl?: string | null,
+  requestUrl = browserBridgeUrl ?? "",
 ): NvrArchiveRecordingModel {
+  const resourceUrl = (target: string | null) => authenticatedBridgeResourceUrl(target, requestUrl, browserBridgeUrl);
   return {
     id: firstNullableString(item.id),
     recordKind: firstNullableString(item.record_kind, item.recordKind),
@@ -291,14 +295,14 @@ function mapArchiveRecording(
     channel: firstNumber(item.channel, item.Channel, fallback.channel),
     startTime: firstString(item.start_time, item.StartTime, fallback.startTime),
     endTime: firstString(item.end_time, item.EndTime, fallback.endTime),
-    downloadUrl: rewriteBridgeUrl(firstNullableString(item.download_url, item.DownloadURL), browserBridgeUrl),
-    exportUrl: rewriteBridgeUrl(firstNullableString(item.export_url, item.ExportURL), browserBridgeUrl),
+    downloadUrl: resourceUrl(firstNullableString(item.download_url, item.DownloadURL)),
+    exportUrl: resourceUrl(firstNullableString(item.export_url, item.ExportURL)),
     assetStatus: firstNullableString(item.asset_status, item.assetStatus),
     assetClipId: firstNullableString(item.asset_clip_id, item.assetClipId),
-    assetPlaybackUrl: rewriteBridgeUrl(firstNullableString(item.asset_playback_url, item.assetPlaybackURL), browserBridgeUrl),
-    assetDownloadUrl: rewriteBridgeUrl(firstNullableString(item.asset_download_url, item.assetDownloadURL), browserBridgeUrl),
-    assetSelfUrl: rewriteBridgeUrl(firstNullableString(item.asset_self_url, item.assetSelfUrl, item.assetSelfURL), browserBridgeUrl),
-    assetStopUrl: rewriteBridgeUrl(firstNullableString(item.asset_stop_url, item.assetStopUrl, item.assetStopURL), browserBridgeUrl),
+    assetPlaybackUrl: resourceUrl(firstNullableString(item.asset_playback_url, item.assetPlaybackURL)),
+    assetDownloadUrl: resourceUrl(firstNullableString(item.asset_download_url, item.assetDownloadURL)),
+    assetSelfUrl: resourceUrl(firstNullableString(item.asset_self_url, item.assetSelfUrl, item.assetSelfURL)),
+    assetStopUrl: resourceUrl(firstNullableString(item.asset_stop_url, item.assetStopUrl, item.assetStopURL)),
     assetError: firstNullableString(item.asset_error, item.assetError),
     rtspMainUrl: firstNullableString(item.rtsp_main_url, item.rtspMainUrl, item.RTSPMainURL),
     rtspSubUrl: firstNullableString(item.rtsp_sub_url, item.rtspSubUrl, item.RTSPSubURL),
@@ -320,8 +324,9 @@ export async function exportArchiveRecording(
   signal?: AbortSignal,
 ): Promise<NvrArchiveExportClipModel> {
   const started = performance.now();
-  logArchiveRequest("request", "POST", exportUrl);
-  const response = await fetch(exportUrl, {
+  const requestUrl = rewriteBridgeUrl(exportUrl, browserBridgeUrl) ?? exportUrl;
+  logArchiveRequest("request", "POST", requestUrl);
+  const response = await fetch(requestUrl, {
     method: "POST",
     headers: {
       Accept: "application/json",
@@ -338,7 +343,7 @@ export async function exportArchiveRecording(
   }
 
   const payload = archiveExportResponseSchema.parse(await response.json());
-  return mapArchiveExportClip(payload.clip, browserBridgeUrl);
+  return mapArchiveExportClip(payload.clip, browserBridgeUrl, exportUrl);
 }
 
 export async function waitForArchiveExportCompletion(
@@ -368,7 +373,7 @@ export async function waitForArchiveExportCompletion(
           `Bridge archive export status failed with status ${response.status}`,
       );
     }
-    current = mapArchiveExportClip(archiveExportClipSchema.parse(await response.json()), browserBridgeUrl);
+    current = mapArchiveExportClip(archiveExportClipSchema.parse(await response.json()), browserBridgeUrl, current.selfUrl);
   }
 
   if (current.status === "failed") {
@@ -383,13 +388,14 @@ export async function waitForArchiveExportCompletion(
 function mapArchiveExportClip(
   clip: z.infer<typeof archiveExportClipSchema>,
   browserBridgeUrl?: string | null,
+  requestUrl = browserBridgeUrl ?? "",
 ): NvrArchiveExportClipModel {
   return {
     id: clip.id,
     status: clip.status,
-    playbackUrl: rewriteBridgeUrl(clip.playback_url ?? null, browserBridgeUrl),
-    downloadUrl: rewriteBridgeUrl(clip.download_url ?? null, browserBridgeUrl),
-    selfUrl: rewriteBridgeUrl(clip.self_url ?? null, browserBridgeUrl),
+    playbackUrl: authenticatedBridgeResourceUrl(clip.playback_url, requestUrl, browserBridgeUrl),
+    downloadUrl: authenticatedBridgeResourceUrl(clip.download_url, requestUrl, browserBridgeUrl),
+    selfUrl: authenticatedBridgeResourceUrl(clip.self_url, requestUrl, browserBridgeUrl),
     durationMs: clip.duration_ms ?? null,
     error: clip.error ?? null,
   };
@@ -398,6 +404,7 @@ function mapArchiveExportClip(
 function mapBridgeRecording(
   item: z.infer<typeof bridgeRecordingSchema>,
   browserBridgeUrl?: string | null,
+  requestUrl = browserBridgeUrl ?? "",
 ): BridgeRecordingClipModel {
   return {
     id: item.id,
@@ -416,8 +423,8 @@ function mapBridgeRecording(
     durationMs: item.duration_ms ?? null,
     bytes: item.bytes ?? null,
     fileName: item.file_name ?? null,
-    playbackUrl: rewriteBridgeUrl(item.playback_url ?? null, browserBridgeUrl),
-    downloadUrl: rewriteBridgeUrl(item.download_url ?? null, browserBridgeUrl),
+    playbackUrl: authenticatedBridgeResourceUrl(item.playback_url, requestUrl, browserBridgeUrl),
+    downloadUrl: authenticatedBridgeResourceUrl(item.download_url, requestUrl, browserBridgeUrl),
     error: item.error ?? null,
   };
 }
@@ -455,15 +462,15 @@ function delay(ms: number, signal?: AbortSignal): Promise<void> {
     return Promise.reject(new DOMException("Aborted", "AbortError"));
   }
   return new Promise((resolve, reject) => {
-    const handle = window.setTimeout(resolve, ms);
-    signal?.addEventListener(
-      "abort",
-      () => {
-        window.clearTimeout(handle);
-        reject(new DOMException("Aborted", "AbortError"));
-      },
-      { once: true },
-    );
+    const onAbort = () => {
+      window.clearTimeout(handle);
+      reject(new DOMException("Aborted", "AbortError"));
+    };
+    const handle = window.setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    signal?.addEventListener("abort", onAbort, { once: true });
   });
 }
 

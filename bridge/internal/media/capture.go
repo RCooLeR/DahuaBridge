@@ -4,9 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -94,6 +92,9 @@ type ClipQuery struct {
 }
 
 type clipJob struct {
+	ctx                  context.Context
+	cancel               context.CancelFunc
+	stopping             bool
 	info                 ClipInfo
 	outputPath           string
 	metaPath             string
@@ -101,8 +102,7 @@ type clipJob struct {
 	parent               *Manager
 	includeAudio         bool
 	temporarySourcePaths []string
-	stdin                io.WriteCloser
-	cmd                  *exec.Cmd
+	processID            int
 	logger               zerolog.Logger
 
 	mu      sync.Mutex
@@ -206,6 +206,8 @@ func (m *Manager) StartDirectClip(ctx context.Context, request DirectClipStartRe
 }
 
 func (m *Manager) startClipJob(ctx context.Context, entry streams.Entry, profile streams.Profile, resolvedProfileName string, duration time.Duration, explicitSourceStartAt time.Time, explicitSourceEndAt time.Time, temporarySourcePaths []string) (ClipInfo, error) {
+	// A finite recording owns its original input across live viewer source changes.
+	profile.LiveRelayURL = ""
 	clipDir := strings.TrimSpace(m.cfg.ClipPath)
 	if clipDir == "" {
 		return ClipInfo{}, errClipStorageMissing
@@ -253,8 +255,13 @@ func (m *Manager) startClipJob(ctx context.Context, entry streams.Entry, profile
 	job.metaPath = filepath.Join(clipDir, job.info.ID+".json")
 
 	m.mu.Lock()
+	if m.closed {
+		m.mu.Unlock()
+		return ClipInfo{}, ErrManagerClosed
+	}
 	for _, existing := range m.clipJobs {
-		if existing.info.StreamID == entry.ID && existing.info.Status == ClipStatusRecording {
+		info := existing.snapshot()
+		if info.StreamID == entry.ID && info.Status == ClipStatusRecording {
 			m.mu.Unlock()
 			return ClipInfo{}, fmt.Errorf("%w: %s", ErrClipAlreadyActive, entry.ID)
 		}
@@ -268,6 +275,8 @@ func (m *Manager) startClipJob(ctx context.Context, entry streams.Entry, profile
 		return ClipInfo{}, err
 	}
 	m.clipJobs[job.info.ID] = job
+	job.ctx, job.cancel = context.WithCancel(m.context())
+	m.wg.Add(1)
 	m.setMediaWorkerCountLocked()
 	m.logWorkerInventoryLocked("added", job.status())
 	if m.metrics != nil {
@@ -280,13 +289,21 @@ func (m *Manager) startClipJob(ctx context.Context, entry streams.Entry, profile
 	}
 
 	started := make(chan error, 1)
-	go job.run(m, profile, duration, started)
+	go func() {
+		defer m.wg.Done()
+		job.run(m, profile, duration, started)
+	}()
 
 	select {
 	case <-ctx.Done():
+		// Failure leaves temporary input ownership with the caller. Finish all
+		// use of that input before they remove it on return.
+		job.cancel()
+		<-job.done
 		return ClipInfo{}, ctx.Err()
 	case err := <-started:
 		if err != nil {
+			<-job.done
 			return ClipInfo{}, err
 		}
 		return job.snapshot(), nil
@@ -309,8 +326,7 @@ func (m *Manager) StopClip(ctx context.Context, clipID string) (ClipInfo, error)
 }
 
 func (m *Manager) GetClip(clipID string) (ClipInfo, error) {
-	if job, info, err := m.clipJob(clipID); err == nil {
-		_ = job
+	if _, info, err := m.clipJob(clipID); err == nil {
 		return info, nil
 	}
 	return m.loadClip(clipID)
@@ -409,9 +425,6 @@ func (m *Manager) DeleteClip(ctx context.Context, clipID string) error {
 	if err != nil {
 		return err
 	}
-	if err := removeClipStorageFile(metaPath); err != nil {
-		return err
-	}
 	if strings.TrimSpace(info.FileName) != "" {
 		clipPath, err := clipFilePath(m.cfg.ClipPath, info.FileName)
 		if err != nil {
@@ -421,7 +434,8 @@ func (m *Manager) DeleteClip(ctx context.Context, clipID string) error {
 			return err
 		}
 	}
-	return nil
+	// Keep the filename available for a retry if removing the video fails.
+	return removeClipStorageFile(metaPath)
 }
 
 func (m *Manager) ActiveClip(streamID string) (ClipInfo, bool) {
@@ -429,8 +443,9 @@ func (m *Manager) ActiveClip(streamID string) (ClipInfo, bool) {
 	defer m.mu.Unlock()
 
 	for _, job := range m.clipJobs {
-		if job.info.StreamID == streamID && job.info.Status == ClipStatusRecording {
-			return job.snapshot(), true
+		info := job.snapshot()
+		if info.StreamID == streamID && info.Status == ClipStatusRecording {
+			return info, true
 		}
 	}
 	return ClipInfo{}, false

@@ -62,6 +62,14 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
         schema={},
         func="async_clear_native_playback_source",
     )
+    service.async_register_platform_entity_service(
+        hass,
+        DOMAIN,
+        "set_live_source",
+        entity_domain=CAMERA_DOMAIN,
+        schema={vol.Required("source"): vol.In({"default", "nvr", "camera"})},
+        func="async_set_live_source",
+    )
     async_register_timeframe_proxy_view(hass)
     return True
 

@@ -17,23 +17,37 @@
     },
     "error": {
       "cannot_connect": "The bridge could not be reached",
-      "invalid_url": "Enter a full http:// or https:// bridge URL"
+      "invalid_url": "Enter a full http:// or https:// bridge URL",
+      "invalid_auth": "The bridge API token was not accepted"
     }
   },
   "options": {
     "step": {
       "init": {
         "title": "DahuaBridge Options",
+        "data_description": {
+          "live_source": "Default for NVR channels. If the preferred source fails, the bridge tries the other source and returns when it recovers. Per-camera overrides take precedence. Recorded playback stays on the NVR.",
+          "live_preconnect": "Uses the preferred video profile above and the bridge-selected camera/NVR source. Reduces RTSP connection setup only; keyframes and player buffering can still delay video. Continuous mode receives video even without viewers. Home Assistant's separate Preload stream option also keeps its native playback pipeline ready."
+        },
         "data": {
           "bridge_url": "Bridge URL",
           "api_token": "Bridge API token",
           "scan_interval": "Poll interval in seconds",
           "preferred_video_profile": "Preferred video profile",
-          "preferred_video_source": "Preferred video source",
+          "live_source": "Preferred live source (default)",
+          "preferred_video_source": "Preferred playback format",
           "enable_video_fallbacks": "Enable video stream fallbacks",
-          "language": "Integration language"
+          "language": "Integration language",
+          "live_preconnect": "Live connection warm-up"
         }
       }
+    },
+    "error": {
+      "cannot_connect": "The bridge could not be reached",
+      "invalid_url": "Enter a full http:// or https:// bridge URL",
+      "cannot_set_live_source": "Could not save the live-source preference. Check the bridge connection and rebuild it with the updated code.",
+      "invalid_auth": "The bridge API token was not accepted",
+      "cannot_set_live_preconnect": "Could not save live connection warm-up. Check the bridge connection and update the bridge if this option is unavailable."
     }
   }
 }

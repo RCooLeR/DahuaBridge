@@ -12,6 +12,7 @@ import {
 } from "./surveillance-panel-inspector-shared";
 import { renderSegmentButton } from "./surveillance-panel-primitives";
 import type { Localizer } from "../localization";
+import { liveSourceSelection, type LiveSourceSelection } from "../domain/devices";
 
 export function renderCameraInspector(
   camera: CameraViewModel,
@@ -21,6 +22,8 @@ export function renderCameraInspector(
   archiveContent: TemplateResult | typeof nothing,
   mp4Content: TemplateResult | typeof nothing,
   onSelectDetailTab: (tab: DetailTab) => void,
+  liveSourceBusy: boolean,
+  onSelectLiveSource: (camera: CameraViewModel, source: LiveSourceSelection) => Promise<void>,
 ): TemplateResult {
   return html`
     <div class="detail-header">
@@ -47,6 +50,7 @@ export function renderCameraInspector(
       ${detailTab === "mp4" ? mp4Content : nothing}
       ${detailTab === "settings"
         ? html`
+            ${renderCameraLiveSource(camera, t, liveSourceBusy, onSelectLiveSource)}
             ${renderCameraStreamStatus(camera, t)}
             ${renderCameraStreamProfiles(camera, t)}
             ${renderCameraAudioBridge(camera, t)}
@@ -156,6 +160,56 @@ function renderCameraAudioBridge(
           ? html`<span class="badge info">${camera.audioCodec}</span>`
           : nothing}
       </div>
+    </div>
+  `;
+}
+
+function renderCameraLiveSource(
+  camera: CameraViewModel,
+  t: Localizer,
+  busy: boolean,
+  onSelect: (camera: CameraViewModel, source: LiveSourceSelection) => Promise<void>,
+): TemplateResult | typeof nothing {
+  if (camera.deviceKind !== "nvr_channel") {
+    return nothing;
+  }
+  const liveSource = camera.stream.liveSource;
+  const selected = liveSourceSelection(liveSource);
+  const defaultLabel = liveSource?.defaultSource === "camera" ? t("inspector.liveSourceCamera") : "NVR";
+  return html`
+    <div class="panel">
+      <label class="panel-title" for="camera-live-source">${t("inspector.liveSource")}</label>
+      <select
+        id="camera-live-source"
+        .value=${selected}
+        ?disabled=${busy || !liveSource?.url || !camera.cameraEntityId}
+        aria-label=${t("inspector.liveSource")}
+        @change=${(event: Event) => {
+          const input = event.currentTarget as HTMLSelectElement;
+          const source = input.value;
+          input.value = selected;
+          if (source === "default" || source === "nvr" || source === "camera") {
+            void onSelect(camera, source);
+          }
+        }}
+      >
+        ${liveSource?.overrideSource !== undefined
+          ? html`<option value="default">${t("inspector.liveSourceDefault", {source: defaultLabel})}</option>`
+          : nothing}
+        <option value="nvr">NVR</option>
+        <option value="camera">${t("inspector.liveSourceCamera")}</option>
+      </select>
+      <div class="muted">${t("inspector.liveSourceHint")}</div>
+      ${liveSource?.overrideSource !== undefined
+        ? html`<div class="muted">${t("inspector.liveSourceEffective", {source: liveSource?.source === "camera" ? t("inspector.liveSourceCamera") : "NVR"})}</div>`
+        : nothing}
+      ${!liveSource?.url
+        ? html`<div class="muted">${t("inspector.liveSourceUpdateRequired")}</div>`
+        : liveSource.fallbackReason
+          ? html`<div class="muted">${liveSource.fallbackReason}</div>`
+          : !liveSource.cameraAvailable
+          ? html`<div class="muted">${liveSource.cameraUnavailableReason || t("inspector.liveSourceCameraUnavailable")}</div>`
+            : nothing}
     </div>
   `;
 }

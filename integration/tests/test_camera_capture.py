@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import sys
 import unittest
+import asyncio
+from types import SimpleNamespace
 from pathlib import Path
 
 from ha_stubs import install
@@ -47,8 +49,10 @@ class FakeAPI:
         self.bytes_requests: list[str] = []
         self.mjpeg_requests: list[str] = []
         self.post_json_requests: list[tuple[str, dict]] = []
+        self.put_json_requests: list[tuple[str, dict]] = []
         self.post_action_requests: list[str] = []
         self.fail_snapshot = False
+        self.fail_put = False
 
     def bridge_resource_url(self, target: str) -> str:
         if target.startswith("http://") or target.startswith("https://"):
@@ -78,6 +82,12 @@ class FakeAPI:
         self.post_action_requests.append(target)
         return {"status": "ok"}
 
+    async def async_put_json(self, target: str, payload: dict) -> dict:
+        if self.fail_put:
+            raise DahuaBridgeAPIError("Source update failed")
+        self.put_json_requests.append((target, payload))
+        return {"live_source": {"source": payload["source"]}}
+
 
 class FakeCoordinator:
     def __init__(self, record: dict) -> None:
@@ -88,10 +98,13 @@ class FakeCoordinator:
         self.video_fallbacks_enabled = True
         self.integration_language = "en"
         self.refresh_count = 0
+        self.refresh_update = None
         self.last_update_success = True
 
     async def async_request_refresh(self) -> None:
         self.refresh_count += 1
+        if callable(self.refresh_update):
+            self.refresh_update()
 
 
 class FakeBridgeResponse:
@@ -126,6 +139,192 @@ class HeaderCaptureSession:
 
 
 class CameraCaptureTests(unittest.IsolatedAsyncioTestCase):
+    async def test_live_source_put_is_authenticated(self) -> None:
+        session = HeaderCaptureSession()
+        api = DahuaBridgeAPI(session, "https://bridge.local", "secret-token")
+        await api.async_put_json("/api/v1/streams/cam1/live-source", {"source": "camera"})
+        self.assertEqual(session.requests[0]["method"], "PUT")
+        self.assertEqual(session.requests[0]["json"], {"source": "camera"})
+        self.assertEqual(session.requests[0]["headers"]["Authorization"], "Bearer secret-token")
+
+    async def test_live_source_changes_refresh_catalog_without_resetting_stable_bridge_stream(self) -> None:
+        record = make_record()
+        record["stream"]["live_source"] = {
+            "source": "nvr", "camera_available": True,
+            "url": "/api/v1/streams/cam1/live-source",
+        }
+        camera = DahuaBridgeCamera(FakeCoordinator(record), "cam1")
+        old_stream = FakeCameraStream()
+        camera.stream = old_stream
+        camera.coordinator.refresh_update = lambda: record["stream"]["live_source"].update({"source": "camera"})
+
+        await camera.async_set_live_source("camera")
+
+        self.assertEqual(camera.coordinator.api.put_json_requests, [
+            ("http://bridge.local:8080/api/v1/streams/cam1/live-source", {"source": "camera"}),
+        ])
+        self.assertEqual(camera.coordinator.refresh_count, 1)
+        self.assertEqual(old_stream.stop_count, 0)
+        self.assertIs(camera.stream, old_stream)
+
+    async def test_clearing_override_uses_default_even_when_camera_unavailable_without_restarting_same_input(self) -> None:
+        record = make_record()
+        record["stream"]["live_source"] = {
+            "source": "nvr", "default_source": "camera", "override_source": "nvr",
+            "camera_available": False, "url": "/api/v1/streams/cam1/live-source",
+        }
+        camera = DahuaBridgeCamera(FakeCoordinator(record), "cam1")
+        stream = FakeCameraStream()
+        camera.stream = stream
+        camera.coordinator.refresh_update = lambda: record["stream"]["live_source"].update({"override_source": ""})
+
+        await camera.async_set_live_source("default")
+
+        self.assertEqual(camera.coordinator.api.put_json_requests, [
+            ("http://bridge.local:8080/api/v1/streams/cam1/live-source", {"source": "default"}),
+        ])
+        self.assertEqual(camera.extra_state_attributes["bridge_live_source"]["override_source"], "")
+        self.assertIs(camera.stream, stream)
+        self.assertEqual(stream.stop_count, 0)
+
+    def test_default_metadata_update_preserves_unchanged_effective_live_stream(self) -> None:
+        record = make_record()
+        record["stream"]["live_source"] = {
+            "source": "nvr", "default_source": "nvr", "override_source": "nvr",
+            "camera_available": True,
+        }
+        camera = DahuaBridgeCamera(FakeCoordinator(record), "cam1")
+        stream = FakeCameraStream()
+        camera.stream = stream
+        record["stream"]["live_source"]["default_source"] = "camera"
+        camera._handle_coordinator_update()
+        self.assertIs(camera.stream, stream)
+        self.assertEqual(stream.stop_count, 0)
+
+    async def test_camera_preference_is_saved_when_unavailable_but_old_bridge_rejects_setting(self) -> None:
+        record = make_record()
+        camera = DahuaBridgeCamera(FakeCoordinator(record), "cam1")
+        with self.assertRaisesRegex(HomeAssistantError, "not available"):
+            await camera.async_set_live_source("camera")
+        record["stream"]["live_source"] = {
+            "source": "nvr", "camera_available": False,
+            "camera_unavailable_reason": "Direct camera credentials are missing",
+            "url": "/api/v1/streams/cam1/live-source",
+        }
+        await camera.async_set_live_source("camera")
+        self.assertEqual(camera.coordinator.api.put_json_requests[0][1], {"source": "camera"})
+        await camera.async_set_live_source("nvr")
+        self.assertEqual(camera.coordinator.refresh_count, 2)
+
+    async def test_failed_source_change_keeps_current_native_stream(self) -> None:
+        record = make_record()
+        record["stream"]["live_source"] = {
+            "source": "nvr", "camera_available": True,
+            "url": "/api/v1/streams/cam1/live-source",
+        }
+        camera = DahuaBridgeCamera(FakeCoordinator(record), "cam1")
+        camera.coordinator.api.fail_put = True
+        stream = FakeCameraStream()
+        camera.stream = stream
+        with self.assertRaises(DahuaBridgeAPIError):
+            await camera.async_set_live_source("camera")
+        self.assertIs(camera.stream, stream)
+        self.assertEqual(stream.stop_count, 0)
+        self.assertEqual(camera.coordinator.refresh_count, 0)
+        self.assertEqual(camera.extra_state_attributes["bridge_live_source"]["source"], "nvr")
+
+    async def test_unavailable_camera_preference_uses_effective_nvr_fallback(self) -> None:
+        record = make_record()
+        record["state"]["info"] = {"stream_available": True}
+        record["stream"]["live_source"] = {"source": "nvr", "preferred_source": "camera", "camera_available": False, "fallback_reason": "Camera unavailable"}
+        recorder_url = "rtsp://nvr-user:nvr-pass@nvr.local/cam/realmonitor?channel=5"
+        record["stream"]["profiles"] = {
+            "quality": {
+                "stream_url": recorder_url,
+                "recorder_stream_url": recorder_url,
+                "local_hls_url": "/api/v1/media/hls/cam1/quality/index.m3u8",
+            },
+        }
+        coordinator = FakeCoordinator(record)
+        coordinator.preferred_video_source = "rtsp"
+        coordinator.video_fallbacks_enabled = True
+        camera = DahuaBridgeCamera(coordinator, "cam1")
+        self.assertEqual(camera._stream_source(), recorder_url)
+        self.assertTrue(camera.extra_state_attributes["stream_available"])
+
+    def test_effective_camera_fallback_is_available_when_nvr_probe_is_down(self) -> None:
+        record = make_record()
+        record["state"]["info"] = {"stream_available": False}
+        record["stream"]["live_source"] = {"source": "camera", "preferred_source": "nvr", "camera_available": True, "fallback_reason": "NVR unavailable"}
+        camera = DahuaBridgeCamera(FakeCoordinator(record), "cam1")
+        self.assertTrue(camera.extra_state_attributes["stream_available"])
+
+    async def test_catalog_source_change_resets_stream_but_preserves_archive_playback(self) -> None:
+        record = make_record()
+        record["stream"]["live_source"] = {"source": "nvr"}
+        record["stream"]["profiles"]["stable"]["stream_url"] = "rtsp://nvr.local/cam/realmonitor?channel=5"
+        coordinator = FakeCoordinator(record)
+        coordinator.preferred_video_source = "rtsp"
+        camera = DahuaBridgeCamera(coordinator, "cam1")
+        tasks = []
+        camera.hass = SimpleNamespace(async_create_task=lambda coroutine: tasks.append(asyncio.create_task(coroutine)))
+        old_stream = FakeCameraStream()
+        camera.stream = old_stream
+        record["stream"]["live_source"]["source"] = "camera"
+        record["stream"]["profiles"]["stable"]["stream_url"] = "rtsp://camera.local/cam/realmonitor?channel=1"
+
+        camera._handle_coordinator_update()
+        self.assertIsNone(camera.stream)
+        await asyncio.gather(*tasks)
+        self.assertEqual(old_stream.stop_count, 1)
+
+        await camera.async_set_native_playback_source("rtsp://nvr.local/cam/playback?channel=5")
+        playback_stream = FakeCameraStream()
+        camera.stream = playback_stream
+        record["stream"]["live_source"]["source"] = "nvr"
+        record["stream"]["profiles"]["stable"]["stream_url"] = "rtsp://nvr.local/cam/realmonitor?channel=5"
+        camera._handle_coordinator_update()
+        self.assertIs(camera.stream, playback_stream)
+        self.assertEqual(playback_stream.stop_count, 0)
+
+    def test_live_source_and_recorder_metadata_are_exposed_without_rewriting_rtsp(self) -> None:
+        record = make_record()
+        recorder_url = "rtsp://nvr-user:nvr-pass@nvr.local/cam/realmonitor?channel=5"
+        record["stream"]["profiles"]["stable"]["recorder_stream_url"] = recorder_url
+        record["stream"]["live_source"] = {
+            "source": "camera", "camera_available": True,
+            "url": "/api/v1/streams/cam1/live-source",
+        }
+        camera = DahuaBridgeCamera(FakeCoordinator(record), "cam1")
+        attrs = camera.extra_state_attributes
+        self.assertEqual(attrs["bridge_live_source"]["source"], "camera")
+        self.assertEqual(attrs["bridge_live_source"]["url"], "http://bridge.local:8080/api/v1/streams/cam1/live-source")
+        self.assertEqual(attrs["bridge_profiles"]["stable"]["recorder_stream_url"], recorder_url)
+        del record["stream"]["live_source"]
+        self.assertEqual(camera.extra_state_attributes["bridge_live_source"], {"source": "nvr", "camera_available": False})
+
+    def test_bridge_relay_camera_does_not_request_upstream_archive_credentials(self) -> None:
+        record = make_record()
+        record["stream"]["profiles"]["stable"]["stream_url"] = "rtsp://bridge.local:8554/api/v1/rtsp/live/cam1/stable"
+        coordinator = FakeCoordinator(record)
+        coordinator.preferred_video_source = "rtsp"
+        camera = DahuaBridgeCamera(coordinator, "cam1")
+        self.assertNotIn("include_credentials=true", camera.extra_state_attributes["bridge_archive_smd_ivs_url_template"])
+
+    def test_all_profile_relay_urls_use_configured_host_and_bridge_auth(self) -> None:
+        record = make_record()
+        record["stream"]["profiles"] = {
+            key: {"stream_url": f"rtsp://advertised.local:8554/api/v1/rtsp/live/cam1/{key}"}
+            for key in ("quality", "stable")
+        }
+        coordinator = FakeCoordinator(record)
+        coordinator.preferred_video_source = "rtsp"
+        coordinator.api = DahuaBridgeAPI(object(), "http://internal.local:9020/prefix", "bridge-token")
+        attrs = DahuaBridgeCamera(coordinator, "cam1").extra_state_attributes
+        for key in ("quality", "stable"):
+            self.assertEqual(attrs["bridge_profiles"][key]["stream_url"], f"rtsp://dahuabridge:bridge-token@internal.local:8554/api/v1/rtsp/live/cam1/{key}")
+        self.assertEqual(attrs["stream_source"], attrs["bridge_profiles"]["stable"]["stream_url"])
+
     def test_bridge_api_preserves_rtsp_targets(self) -> None:
         api = DahuaBridgeAPI(object(), "http://bridge.local:8080")
         self.assertEqual(

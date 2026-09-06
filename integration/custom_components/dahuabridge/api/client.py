@@ -4,11 +4,11 @@ import json
 import logging
 import time
 from typing import Any
-from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
 
 from aiohttp import ClientError, ClientSession
 
-from ..const import CATALOG_PATH, STATUS_PATH
+from ..const import CATALOG_PATH, LIVE_PRECONNECT_PATH, LIVE_SOURCE_PATH, STATUS_PATH
 from .errors import DahuaBridgeAPIError
 from .urls import (
     apply_base_path,
@@ -31,10 +31,22 @@ class DahuaBridgeAPI:
         return self._base_url
 
     def absolute_url(self, target: str) -> str:
+        """Build a browser resource URL, preserving an advertised absolute host."""
         return self._with_query_token(self._absolute_url(target))
 
     def bridge_resource_url(self, target: str) -> str:
+        """Address a bridge-owned resource through HA's configured bridge host."""
         parsed_target = urlsplit(target)
+        if parsed_target.scheme == "rtsp" and parsed_target.path.startswith("/api/v1/rtsp/live/"):
+            # Relay addresses use the same host HA uses for bridge API calls.
+            # The RTSP listener has its own port and no HTTP reverse-proxy prefix.
+            host = urlsplit(self._base_url).hostname or parsed_target.hostname or "localhost"
+            if ":" in host:
+                host = f"[{host}]"
+            authority = f"{host}:{parsed_target.port or 8554}"
+            if self._api_token:
+                authority = f"dahuabridge:{quote(self._api_token, safe='')}@{authority}"
+            return urlunsplit(("rtsp", authority, parsed_target.path, "", ""))
         if parsed_target.scheme and parsed_target.scheme not in {"http", "https"}:
             return self._with_query_token(self._absolute_url(target))
 
@@ -57,14 +69,47 @@ class DahuaBridgeAPI:
     async def async_get_status(self) -> dict[str, Any]:
         return await self._async_request_json("GET", STATUS_PATH)
 
+    async def async_get_live_source(self) -> dict[str, Any]:
+        result = await self._async_request_json("GET", LIVE_SOURCE_PATH)
+        if result.get("source") not in {"nvr", "camera"}:
+            raise DahuaBridgeAPIError("Bridge returned an invalid live-source preference")
+        return result
+
+    async def async_set_live_source(self, source: str) -> dict[str, Any]:
+        if source not in {"nvr", "camera"}:
+            raise DahuaBridgeAPIError("Live-source preference must be nvr or camera")
+        result = await self._async_request_json("PUT", LIVE_SOURCE_PATH, {"source": source})
+        if result.get("source") != source:
+            raise DahuaBridgeAPIError("Bridge did not confirm the live-source preference")
+        return result
+
+    async def async_get_live_preconnect(self) -> dict[str, Any]:
+        result = await self._async_request_json("GET", LIVE_PRECONNECT_PATH)
+        if result.get("mode") not in {"off", "recent", "always"} or result.get("profile") not in {"auto", "quality", "stable"}:
+            raise DahuaBridgeAPIError("Bridge returned invalid live preconnect settings")
+        return result
+
+    async def async_set_live_preconnect(self, mode: str, profile: str) -> dict[str, Any]:
+        """Configure bridge transport warm-up, independently of HA camera preload."""
+        if mode not in {"off", "recent", "always"} or profile not in {"auto", "quality", "stable"}:
+            raise DahuaBridgeAPIError("Invalid live preconnect mode or video profile")
+        settings = {"mode": mode, "profile": profile}
+        result = await self._async_request_json("PUT", LIVE_PRECONNECT_PATH, settings)
+        if any(result.get(key) != value for key, value in settings.items()):
+            raise DahuaBridgeAPIError("Bridge did not confirm the live preconnect settings")
+        return result
+
     async def async_get_catalog(self, include_credentials: bool = False) -> dict[str, Any]:
         target = CATALOG_PATH
         if include_credentials:
             target = f"{CATALOG_PATH}?include_credentials=true"
-        return await self._async_request_json("GET", target)
+        result = await self._async_request_json("GET", target)
+        if not isinstance(result.get("devices"), list):
+            raise DahuaBridgeAPIError("Bridge returned an invalid camera catalog")
+        return result
 
     async def async_get_bytes(self, target: str) -> bytes:
-        url = self._absolute_url(target)
+        url = self._bridge_request_url(target)
         started = time.monotonic()
         try:
             _LOGGER.debug("Requesting bridge bytes from %s", redact_url_for_log(url))
@@ -94,7 +139,7 @@ class DahuaBridgeAPI:
             raise DahuaBridgeAPIError(f"GET {redact_url_for_log(url)} failed: {err}") from err
 
     async def async_get_mjpeg_frame(self, target: str) -> bytes:
-        url = self._absolute_url(target)
+        url = self._bridge_request_url(target)
         started = time.monotonic()
         jpeg_start = b"\xff\xd8"
         jpeg_end = b"\xff\xd9"
@@ -151,10 +196,15 @@ class DahuaBridgeAPI:
     ) -> dict[str, Any]:
         return await self._async_request_json("POST", target, payload)
 
+    async def async_put_json(
+        self, target: str, payload: dict[str, Any]
+    ) -> dict[str, Any]:
+        return await self._async_request_json("PUT", target, payload)
+
     async def _async_request_json(
         self, method: str, target: str, payload: dict[str, Any] | None = None
     ) -> dict[str, Any]:
-        url = self._absolute_url(target)
+        url = self._bridge_request_url(target)
         started = time.monotonic()
         status = 0
         try:
@@ -175,7 +225,8 @@ class DahuaBridgeAPI:
                         body,
                     )
                     raise DahuaBridgeAPIError(
-                        f"{method} {redact_url_for_log(url)} returned {response.status}: {body}"
+                        f"{method} {redact_url_for_log(url)} returned {response.status}: {body}",
+                        status=response.status,
                     )
         except ClientError as err:
             _LOGGER.warning(
@@ -233,6 +284,17 @@ class DahuaBridgeAPI:
             target = "/" + target
         return self._base_url + target
 
+    def _bridge_request_url(self, target: str) -> str:
+        """Rebase advertised API actions before attaching HA's Bearer token."""
+        parsed = urlsplit(target)
+        path = canonical_bridge_api_path(parsed.path)
+        if parsed.scheme not in {"", "http", "https"} or not (
+            path == "/api/v1" or path.startswith("/api/v1/")
+        ):
+            raise DahuaBridgeAPIError("Request target is not a bridge API resource")
+        base = urlsplit(self._base_url)
+        return urlunsplit((base.scheme, base.netloc, apply_base_path(base.path, path), parsed.query, ""))
+
     def _auth_headers(self) -> dict[str, str] | None:
         if not self._api_token:
             return None
@@ -242,6 +304,8 @@ class DahuaBridgeAPI:
         if not self._api_token:
             return target
         parsed = urlsplit(target)
+        if parsed.scheme not in {"http", "https"}:
+            return target
         query_items = parse_qsl(parsed.query, keep_blank_values=True)
         existing_keys = {key.lower() for key, _ in query_items}
         if "auth_token" not in existing_keys and "token" not in existing_keys:
@@ -259,8 +323,9 @@ class DahuaBridgeAPI:
 
 def redact_url_for_log(value: str) -> str:
     parsed = urlsplit(value)
-    if not parsed.query:
-        return value
+    authority = parsed.netloc
+    if parsed.username is not None:
+        authority = "**REDACTED**@" + authority.rsplit("@", 1)[-1]
     redacted_items: list[tuple[str, str]] = []
     for key, item in parse_qsl(parsed.query, keep_blank_values=True):
         lowered = key.lower()
@@ -271,7 +336,7 @@ def redact_url_for_log(value: str) -> str:
     return urlunsplit(
         (
             parsed.scheme,
-            parsed.netloc,
+            authority,
             parsed.path,
             urlencode(redacted_items),
             parsed.fragment,

@@ -3,18 +3,15 @@ import { repeat } from "lit/directives/repeat.js";
 
 import type {
   BridgeRecordingClipModel,
-  BridgeRecordingClipListModel,
   NvrArchiveRecordingModel,
-  NvrArchiveSearchResultModel,
 } from "../domain/archive";
 import type { CameraViewModel, PanelModel } from "../domain/model";
 import type { Localizer } from "../localization";
 import { renderControlButton } from "./surveillance-panel-primitives";
-import { EVENT_FILTER_ALL, type EventFilterOption } from "./surveillance-panel-state";
+import type { EventFilterOption } from "./surveillance-panel-state";
 
 interface RenderArchiveRecordingsArgs {
   t: Localizer;
-  archiveRecordings: NvrArchiveSearchResultModel | null;
   archiveLoading: boolean;
   archiveError: string;
   archiveDate: string;
@@ -37,7 +34,6 @@ interface RenderArchiveRecordingsArgs {
 
 interface RenderBridgeRecordingsArgs {
   t: Localizer;
-  recordings: BridgeRecordingClipListModel | null;
   recordingsLoading: boolean;
   recordingsError: string;
   recordingsDate: string;
@@ -64,7 +60,6 @@ const archiveDateTimeFormatter = new Intl.DateTimeFormat(undefined, {
 
 export function renderArchiveRecordings({
   t,
-  archiveRecordings,
   archiveLoading,
   archiveError,
   archiveDate,
@@ -227,7 +222,6 @@ export function renderArchiveRecordings({
 
 export function renderBridgeRecordings({
   t,
-  recordings,
   recordingsLoading,
   recordingsError,
   recordingsDate,

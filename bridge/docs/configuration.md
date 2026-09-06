@@ -50,6 +50,9 @@ uses the direct TCP peer address and ignores forwarded-IP headers.
 ## `media`
 
 - `enabled`: enables bridge-hosted media.
+- `rtsp_listen_address`: live RTSP relay listener, default `:8554`; TCP transport,
+  shared upstreams, no video re-encoding. HA must reach this port directly or
+  over the shared Docker network. It uses the HTTP API token for RTSP authentication.
 - `ffmpeg_path`: ffmpeg executable.
 - `ffmpeg_log_level`: child ffmpeg log verbosity.
 - `input_preset`: RTSP input flags, `low_latency` or `stable`.
@@ -141,7 +144,7 @@ NVR-specific fields:
 - `channel_ptz_control_overrides`: hide/show PTZ when firmware reports it incorrectly.
 - `channel_recording_control_overrides`: override recorder-mode capability/state metadata.
 - `channel_imou_overrides`: map NVR channels to Imou cloud devices for events/lights/siren.
-- `direct_ipc_credentials`: call the real IPC directly for controls behind an NVR.
+- `direct_ipc_credentials`: call the real IPC directly for controls behind an NVR; also supplies the camera login for the optional **Camera** live-source setting. Select the live source in the UI; the selection is persisted in the state store rather than this YAML.
 - `allow_config_writes`: permit NVR recorder-mode config mutations; default is false.
 
 VTO-specific fields:
