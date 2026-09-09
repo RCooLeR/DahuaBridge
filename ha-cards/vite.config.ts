@@ -3,6 +3,9 @@ import { gzipSync } from "node:zlib";
 import { defineConfig } from "vite";
 
 export default defineConfig({
+  // HA can install the module in any www subdirectory. Keep emitted assets
+  // relative to that module instead of resolving them from the HA host root.
+  base: "./",
   plugins: [{
     name: "initial-bundle-budget",
     generateBundle(_options, bundle) {
