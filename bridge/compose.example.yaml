@@ -16,6 +16,8 @@ services:
     cap_add:
       - SETGID
       - SETUID
+      # The init process forwards signals after the bridge drops its root UID.
+      - KILL
     security_opt:
       - no-new-privileges:true
     ports:
