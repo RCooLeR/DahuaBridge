@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { access, mkdtemp, readFile, rm } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
@@ -17,11 +18,13 @@ for (const candidate of candidates) {
 assert(browser, "Pass a Chromium executable path or set DAHUABRIDGE_BROWSER.");
 await access(join(root, "dahuabridge-surveillance-panel.js"));
 const requests = [];
+const pendingResults = new Map();
 const scenarios = [
   { name: "standard install", documentPath: "/lovelace/security", installPrefix: "/local/dahua/" },
   { name: "relocated install", documentPath: "/dashboards/cameras/overview", installPrefix: "/local/custom/cards/dahua/" },
-];
-const pageHtml = (installPrefix) => String.raw`<!doctype html><html><body><script type="module">
+].map(scenario => ({ ...scenario, resultPath: "/result/" + randomUUID() }));
+const pageHtml = ({ installPrefix, resultPath }) => String.raw`<!doctype html><html><body><script type="module">
+let result = 'PASS';
 try {
   const installPrefix = ${JSON.stringify(installPrefix)};
   await import(installPrefix+'dahuabridge-surveillance-panel.js');
@@ -54,14 +57,34 @@ try {
     }
     player.remove();
   }
-  document.body.dataset.result='PASS';
-} catch(error) { document.body.dataset.result='FAIL: '+error.message; }
+} catch(error) { result='FAIL: '+error.message; }
+document.body.dataset.result=result;
+await fetch(${JSON.stringify(resultPath)}, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({result})});
 </script></body></html>`;
 const server = createServer(async (request, response) => {
   const path = new URL(request.url, "http://localhost").pathname;
   requests.push(path);
   const scenario = scenarios.find(item => item.documentPath === path);
-  if (scenario) { response.setHeader("Content-Type", "text/html"); response.end(pageHtml(scenario.installPrefix)); return; }
+  if (scenario) { response.setHeader("Content-Type", "text/html"); response.end(pageHtml(scenario)); return; }
+  const reportResult = pendingResults.get(path);
+  if (reportResult && request.method === "POST") {
+    try {
+      let body = "";
+      for await (const chunk of request) {
+        body += chunk;
+        if (Buffer.byteLength(body) > 8192) throw Error("Result exceeds 8 KiB");
+      }
+      const { result } = JSON.parse(body);
+      if (typeof result !== "string") throw Error("Missing result string");
+      pendingResults.delete(path);
+      response.writeHead(204).end();
+      reportResult({ kind: "result", result });
+    } catch (error) {
+      response.writeHead(400).end();
+      reportResult({ kind: "result", result: "FAIL: Invalid browser result: " + error.message });
+    }
+    return;
+  }
   if (path === "/requests") { response.setHeader("Content-Type", "application/json"); response.end(JSON.stringify(requests)); return; }
   const installPrefix = scenarios.find(item => path.startsWith(item.installPrefix))?.installPrefix;
   if (!installPrefix) { response.writeHead(404).end(); return; }
@@ -78,29 +101,56 @@ const profile = await mkdtemp(join(temporaryRoot, "dahuabridge-browser-"));
 try {
   const address = server.address();
   for (const scenario of scenarios) {
+    // Arm a unique completion endpoint before launch so neither fast nor stale pages can win a race.
+    const resultReady = new Promise(resolve => pendingResults.set(scenario.resultPath, resolve));
     const args = ["--headless=new", "--disable-gpu"];
     // Windows needs this workaround; Linux must retain its normal GPU process isolation.
     if (process.platform === "win32") args.push("--in-process-gpu");
-    args.push("--disable-background-networking", "--disable-component-update", "--disable-sync", "--no-first-run", "--no-default-browser-check", `--user-data-dir=${profile}`, "--dump-dom", "--virtual-time-budget=10000", `http://127.0.0.1:${address.port}${scenario.documentPath}`);
+    args.push("--disable-background-networking", "--disable-component-update", "--disable-sync", "--no-first-run", "--no-default-browser-check", `--user-data-dir=${profile}`, `http://127.0.0.1:${address.port}${scenario.documentPath}`);
     const child = spawn(browser, args, { windowsHide: true });
-    let output = "";
     let errors = "";
-    child.stdout.on("data", chunk => { output += chunk; });
+    child.stdout.resume();
     child.stderr.on("data", chunk => { errors += chunk; });
-    let timedOut = false;
-    const timeout = setTimeout(() => { timedOut = true; child.kill(); }, 30000);
-    try {
-      const { code, signal } = await new Promise((resolve, reject) => {
-        child.on("error", reject);
-        child.on("close", (code, signal) => resolve({ code, signal }));
+    let exitState;
+    let launchError;
+    const exited = new Promise(resolve => {
+      child.on("error", error => { launchError = error.message; });
+      child.on("close", (code, signal) => {
+        exitState = { kind: "exit", code, signal, error: launchError };
+        resolve(exitState);
       });
+    });
+    let timeout;
+    const deadline = new Promise(resolve => { timeout = setTimeout(() => resolve({ kind: "timeout" }), 30000); });
+    try {
+      // Real async work (including image.decode and module imports) decides completion, not virtual time.
+      const outcome = await Promise.race([resultReady, exited, deadline]);
       // Startup failures often put the cause before crashpad's final diagnostics.
-      const diagnostics = `${scenario.name}: browser exited with code=${code}, signal=${signal}, timedOut=${timedOut}\n${errors}\nRequests: ${JSON.stringify(requests)}`;
-      assert(!timedOut && code === 0, diagnostics);
-      const result = /<body[^>]*data-result="([^"]*)"/.exec(output)?.[1] ?? output.slice(-2500);
-      assert.equal(result, "PASS", `${scenario.name}: ${result}\n${diagnostics}`);
+      const diagnostics = `${scenario.name}: ${JSON.stringify(outcome)}\n${errors}\nRequests: ${JSON.stringify(requests)}`;
+      assert.equal(outcome.kind, "result", diagnostics);
+      assert.equal(outcome.result, "PASS", diagnostics);
       console.log(`Browser smoke passed (${scenario.name}): installed logo loads; cards render; editor, HLS and DASH load on demand.`);
-    } finally { clearTimeout(timeout); }
+    } finally {
+      clearTimeout(timeout);
+      pendingResults.delete(scenario.resultPath);
+      if (!exitState) {
+        child.kill();
+        const forceKill = setTimeout(() => child.kill("SIGKILL"), 2000);
+        let stopTimeout;
+        try {
+          const stopped = await Promise.race([
+            exited.then(() => true),
+            new Promise(resolve => { stopTimeout = setTimeout(() => resolve(false), 5000); }),
+          ]);
+          assert(stopped, `${scenario.name}: browser did not stop after termination\n${errors}`);
+        } finally {
+          clearTimeout(forceKill);
+          clearTimeout(stopTimeout);
+          child.stdout.destroy();
+          child.stderr.destroy();
+        }
+      }
+    }
   }
 } finally {
   server.closeAllConnections();
