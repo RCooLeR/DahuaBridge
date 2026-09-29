@@ -9,8 +9,9 @@ RUN apk add --no-cache git ca-certificates
 WORKDIR /app
 
 COPY go.mod go.sum ./
-RUN --mount=type=cache,target=/go/pkg/mod,sharing=locked \
-    go mod download && go mod verify
+# Keep dependencies in the layer: remote layer caches do not restore cache mounts,
+# and the compilation step must also work offline on a fresh builder.
+RUN go mod download && go mod verify
 
 COPY --link cmd ./cmd
 COPY --link internal ./internal
@@ -22,7 +23,6 @@ ARG TARGETOS=linux
 ARG TARGETARCH=amd64
 
 RUN --network=none \
-    --mount=type=cache,target=/go/pkg/mod,sharing=locked \
     --mount=type=cache,target=/root/.cache/go-build,sharing=locked \
     set -eux; \
     MODULE="$(go list -m)"; \

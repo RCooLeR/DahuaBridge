@@ -78,17 +78,27 @@ const profile = await mkdtemp(join(temporaryRoot, "dahuabridge-browser-"));
 try {
   const address = server.address();
   for (const scenario of scenarios) {
-    const child = spawn(browser, ["--headless=new", "--disable-gpu", "--in-process-gpu", "--disable-background-networking", "--disable-component-update", "--disable-sync", "--no-first-run", "--no-default-browser-check", `--user-data-dir=${profile}`, "--dump-dom", "--virtual-time-budget=10000", `http://127.0.0.1:${address.port}${scenario.documentPath}`], { windowsHide: true });
+    const args = ["--headless=new", "--disable-gpu"];
+    // Windows needs this workaround; Linux must retain its normal GPU process isolation.
+    if (process.platform === "win32") args.push("--in-process-gpu");
+    args.push("--disable-background-networking", "--disable-component-update", "--disable-sync", "--no-first-run", "--no-default-browser-check", `--user-data-dir=${profile}`, "--dump-dom", "--virtual-time-budget=10000", `http://127.0.0.1:${address.port}${scenario.documentPath}`);
+    const child = spawn(browser, args, { windowsHide: true });
     let output = "";
     let errors = "";
     child.stdout.on("data", chunk => { output += chunk; });
     child.stderr.on("data", chunk => { errors += chunk; });
-    const timeout = setTimeout(() => child.kill(), 30000);
+    let timedOut = false;
+    const timeout = setTimeout(() => { timedOut = true; child.kill(); }, 30000);
     try {
-      const code = await new Promise((resolve, reject) => { child.on("error", reject); child.on("close", resolve); });
-      assert.equal(code, 0, `${errors.slice(-1000)}\nRequests: ${JSON.stringify(requests)}`);
+      const { code, signal } = await new Promise((resolve, reject) => {
+        child.on("error", reject);
+        child.on("close", (code, signal) => resolve({ code, signal }));
+      });
+      // Startup failures often put the cause before crashpad's final diagnostics.
+      const diagnostics = `${scenario.name}: browser exited with code=${code}, signal=${signal}, timedOut=${timedOut}\n${errors}\nRequests: ${JSON.stringify(requests)}`;
+      assert(!timedOut && code === 0, diagnostics);
       const result = /<body[^>]*data-result="([^"]*)"/.exec(output)?.[1] ?? output.slice(-2500);
-      assert.equal(result, "PASS", `${scenario.name}: ${result}\nRequests: ${JSON.stringify(requests)}`);
+      assert.equal(result, "PASS", `${scenario.name}: ${result}\n${diagnostics}`);
       console.log(`Browser smoke passed (${scenario.name}): installed logo loads; cards render; editor, HLS and DASH load on demand.`);
     } finally { clearTimeout(timeout); }
   }
