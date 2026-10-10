@@ -2,6 +2,8 @@ package archive
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"slices"
@@ -55,45 +57,64 @@ func (s *SQLiteStore) UpsertClipAsset(ctx context.Context, recordKind string, re
 		return err
 	}
 	defer tx.Rollback()
+	clipID := strings.TrimSpace(clip.ID)
 	var queued int
-	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM archive_clip_retention WHERE clip_id = ? AND queued = 1`, strings.TrimSpace(clip.ID)).Scan(&queued); err != nil {
+	if s.dialect == archiveDialectMySQL {
+		if recordKind == "smd_ivs" {
+			// Pruning examines/removes event rows before it queues retention rows.
+			// Take locks in the same order so concurrent prune/reattach operations
+			// serialize instead of deadlocking after the retention lock is held.
+			var lockedEventID string
+			err := tx.QueryRowContext(ctx,
+				`SELECT event_id FROM smd_ivs_events WHERE event_id = ? AND device_id = ? FOR UPDATE`,
+				recordID,
+				deviceID,
+			).Scan(&lockedEventID)
+			if err != nil && !errors.Is(err, sql.ErrNoRows) {
+				return err
+			}
+		}
+		// Serialize reattachment with retention queueing. A consistent (non-locking)
+		// read under InnoDB's default REPEATABLE READ can miss a concurrent queued=1
+		// commit and reattach a clip while cleanup is deleting it. The unique-key
+		// locking read also protects the absent-row gap until ownership is inserted.
+		err := tx.QueryRowContext(ctx,
+			`SELECT queued FROM archive_clip_retention WHERE clip_id = ? FOR UPDATE`,
+			clipID,
+		).Scan(&queued)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return err
+		}
+	} else if err := tx.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM archive_clip_retention WHERE clip_id = ? AND queued = 1`,
+		clipID,
+	).Scan(&queued); err != nil {
 		return err
 	}
 	if queued != 0 {
 		// Queueing quarantines the ID until deletion is acknowledged. A reader
-		// must not reattach it while filesystem cleanup runs outside SQLite.
+		// must not reattach it while filesystem cleanup runs outside the database transaction.
 		return fmt.Errorf("archive clip is pending retention cleanup")
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	clipPath := filepath.ToSlash(strings.TrimSpace(clip.FileName))
-	if _, err := tx.ExecContext(ctx, `INSERT INTO bridge_mp4_clips (
-		clip_id, device_id, channel, stream_id, start_time, end_time, file_path, status, error_text, created_at, updated_at
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	ON CONFLICT(clip_id) DO UPDATE SET
-		device_id=excluded.device_id,
-		channel=excluded.channel,
-		stream_id=excluded.stream_id,
-		start_time=excluded.start_time,
-		end_time=excluded.end_time,
-		file_path=excluded.file_path,
-		status=excluded.status,
-		error_text=excluded.error_text,
-		updated_at=excluded.updated_at`,
-		strings.TrimSpace(clip.ID),
+	clipStatus := strings.ToLower(strings.TrimSpace(string(clip.Status)))
+	if _, err := tx.ExecContext(ctx, s.upsertClipAssetSQL(),
+		clipID,
 		deviceID,
 		clip.Channel,
 		strings.TrimSpace(clip.StreamID),
 		formatOptionalClipTime(clip.SourceStartAt),
 		formatOptionalClipTime(clip.SourceEndAt),
 		clipPath,
-		string(clip.Status),
+		clipStatus,
 		strings.TrimSpace(clip.Error),
 		now,
 		now,
 	); err != nil {
 		return err
 	}
-	if err := rememberArchiveClipOwnership(ctx, tx, recordKind, recordID, deviceID, clip); err != nil {
+	if err := rememberArchiveClipOwnership(ctx, tx, s.dialect, recordKind, recordID, deviceID, clip); err != nil {
 		return err
 	}
 	if recordKind == "smd_ivs" {
@@ -109,7 +130,7 @@ func (s *SQLiteStore) UpsertClipAsset(ctx context.Context, recordKind string, re
 			WHERE device_id = ? AND event_id = ?`,
 			strings.TrimSpace(clip.ID),
 			clipPath,
-			string(clip.Status),
+			clipStatus,
 			strings.TrimSpace(clip.Error),
 			strings.TrimSpace(sourceFilePath),
 			strings.TrimSpace(sourceFilePath),
@@ -121,6 +142,37 @@ func (s *SQLiteStore) UpsertClipAsset(ctx context.Context, recordKind string, re
 		}
 	}
 	return tx.Commit()
+}
+
+func (s *SQLiteStore) upsertClipAssetSQL() string {
+	if s.dialect == archiveDialectMySQL {
+		return `INSERT INTO bridge_mp4_clips (
+			clip_id, device_id, channel, stream_id, start_time, end_time, file_path, status, error_text, created_at, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) AS new
+		ON DUPLICATE KEY UPDATE
+			device_id=new.device_id,
+			channel=new.channel,
+			stream_id=new.stream_id,
+			start_time=new.start_time,
+			end_time=new.end_time,
+			file_path=new.file_path,
+			status=new.status,
+			error_text=new.error_text,
+			updated_at=new.updated_at`
+	}
+	return `INSERT INTO bridge_mp4_clips (
+		clip_id, device_id, channel, stream_id, start_time, end_time, file_path, status, error_text, created_at, updated_at
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	ON CONFLICT(clip_id) DO UPDATE SET
+		device_id=excluded.device_id,
+		channel=excluded.channel,
+		stream_id=excluded.stream_id,
+		start_time=excluded.start_time,
+		end_time=excluded.end_time,
+		file_path=excluded.file_path,
+		status=excluded.status,
+		error_text=excluded.error_text,
+		updated_at=excluded.updated_at`
 }
 
 func (s *SQLiteStore) LoadClipAssets(ctx context.Context, deviceID string, items []dahua.NVRRecording) (map[string]storedClipAsset, error) {
@@ -136,15 +188,14 @@ func (s *SQLiteStore) LoadClipAssets(ctx context.Context, deviceID string, items
 	for _, item := range items {
 		recordKind := normalizeArchiveRecordKind(item.RecordKind)
 		recordID := strings.TrimSpace(item.ID)
-		if recordKind == "" || recordID == "" {
+		if recordKind != "smd_ivs" || recordID == "" {
 			continue
 		}
-		key := archiveRecordKey(recordKind, recordID)
-		if _, ok := seen[key]; ok {
+		if _, ok := seen[recordID]; ok {
 			continue
 		}
-		seen[key] = struct{}{}
-		args = append(args, key)
+		seen[recordID] = struct{}{}
+		args = append(args, recordID)
 		placeholders = append(placeholders, "?")
 	}
 	if len(placeholders) == 0 {
@@ -158,7 +209,7 @@ func (s *SQLiteStore) LoadClipAssets(ctx context.Context, deviceID string, items
 		mp4_status,
 		mp4_error
 	FROM smd_ivs_events
-	WHERE device_id = ? AND ('smd_ivs|' || event_id) IN (` + strings.Join(placeholders, ",") + `)
+	WHERE device_id = ? AND event_id IN (` + strings.Join(placeholders, ",") + `)
 		AND mp4_clip_id <> ''`
 
 	rows, err := s.db.QueryContext(ctx, query, args...)
@@ -203,7 +254,7 @@ func (s *SQLiteStore) DeleteClipAsset(ctx context.Context, recordKind string, re
 func (s *SQLiteStore) CountActiveClipJobs(ctx context.Context) (int, error) {
 	var count int
 	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM smd_ivs_events
-		WHERE LOWER(COALESCE(mp4_status, '')) IN ('recording', 'transcoding', 'queued', 'downloading')`).Scan(&count); err != nil {
+		WHERE mp4_status IN ('recording', 'transcoding', 'queued', 'downloading')`).Scan(&count); err != nil {
 		return 0, err
 	}
 	return count, nil
@@ -217,7 +268,7 @@ func (s *SQLiteStore) LoadPendingEventClipCandidates(ctx context.Context, cutoff
 			AND end_time <= ?
 			AND (
 				mp4_clip_id = ''
-				OR LOWER(COALESCE(mp4_status, '')) NOT IN ('completed', 'ready', 'recording', 'transcoding', 'queued', 'downloading')
+				OR mp4_status NOT IN ('completed', 'ready', 'recording', 'transcoding', 'queued', 'downloading')
 			)`
 	args := []any{
 		cutoff.In(time.Local).Format(archiveTimeLayout),
@@ -334,7 +385,7 @@ func (s *SQLiteStore) LoadEventClipAssetsForReconciliation(ctx context.Context, 
 		e.device_id, e.event_id, e.source_file_path, e.mp4_clip_id
 		FROM smd_ivs_events e LEFT JOIN bridge_mp4_clips c ON c.clip_id=e.mp4_clip_id
 		WHERE e.mp4_clip_id <> ''
-			AND LOWER(COALESCE(e.mp4_status, '')) IN ('recording', 'transcoding', 'queued', 'downloading', 'completed', 'ready')
+			AND e.mp4_status IN ('recording', 'transcoding', 'queued', 'downloading', 'completed', 'ready')
 		ORDER BY CASE WHEN e.mp4_status IN ('ready','completed') THEN 1 ELSE 0 END,
 			COALESCE(c.updated_at, '') ASC, e.event_id
 		LIMIT ?`,

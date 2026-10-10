@@ -48,8 +48,12 @@ func (s *SQLiteStore) SearchRecordings(ctx context.Context, deviceID string, que
 }
 
 func (s *SQLiteStore) searchFileRows(ctx context.Context, deviceID string, query dahua.NVRRecordingQuery) ([]dahua.NVRRecording, error) {
+	partitionColumn := "partition"
+	if s.dialect == archiveDialectMySQL {
+		partitionColumn = "partition_number"
+	}
 	rows, err := s.db.QueryContext(ctx, `SELECT
-		chunk_id, channel, start_time, end_time, file_path, video_stream, disk, partition, cluster,
+		chunk_id, channel, start_time, end_time, file_path, video_stream, disk, `+partitionColumn+`, cluster,
 		length_bytes, cut_length_bytes, flags_json
 		FROM nvr_recording_chunks
 		WHERE device_id = ? AND channel = ? AND end_time >= ? AND start_time <= ?

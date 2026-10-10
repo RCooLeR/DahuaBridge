@@ -182,8 +182,8 @@ scan window has a two-minute deadline and a 100,000-row bound; an incomplete or
 stalled scan returns an error and its checkpoint remains unchanged. An SMD reply
 claiming results without a valid cursor is an error, rather than an empty scan.
 
-SMD/IVS polling runs every five minutes. SQLite persists a separate recent cursor
-and historical cursor for each device, channel, and event type in
+SMD/IVS polling runs every five minutes. The archive database persists a
+separate recent cursor and historical cursor for each device, channel, and event type in
 `archive_event_scan_progress`. Recent scans overlap by 15 minutes to pick up late
 events. Each pass also scans at most two older hourly windows per event type and
 channel until `prefetch_days` is covered. Restart resumes those cursors; a long
@@ -194,8 +194,8 @@ cron schedule. The checkpoint table is added without replacing existing version-
 event, recording, or clip tables.
 
 Archive shutdown cancels and joins scheduled and manual syncs before closing
-SQLite. Recording-search responses use a cache capped at 128 distinct queries,
-with five-second expiry.
+the configured archive database. Recording-search responses use a cache capped
+at 128 distinct queries, with five-second expiry.
 
 Automatic event MP4 export waits for `archive.export_delay` after the event ends
 before creating the clip. Set `archive.export_event_mp4: false` for DB-only SMD/IVS
@@ -207,7 +207,10 @@ while still keeping those events in the index.
 For example, `export_smd_transport: [1, 3, 7]` keeps Dahua transport/vehicle event
 videos only on channels 1, 3, and 7. Empty channel lists mean all channels.
 
-API reads use SQLite only. SMD/IVS list requests do not call the NVR, and recording chunk list requests do not call the NVR. Event filters are applied in SQLite before `LIMIT`, then checked again in Go against the normalized Dahua event names.
+API reads use the configured archive database only. SMD/IVS list requests do
+not call the NVR, and recording chunk list requests do not call the NVR. Event
+filters are applied in SQL before `LIMIT`, then checked again in Go against the
+normalized Dahua event names.
 
 ## Native Historical Playback
 
@@ -258,7 +261,7 @@ missing files, and orphaned recording metadata are retried. Background asset
 reconciliation checks active jobs first and rotates through completed files in
 bounded batches. Reading or reconciling an MP4 does not extend event retention.
 
-SQLite also keeps `archive_clip_retention` ownership for every archive export
+The archive database also keeps `archive_clip_retention` ownership for every archive export
 attempt, including failed attempts replaced by a retry. Its retention clock uses
 the original source window, so retries do not extend it. After retention expires
 and no retained event references an export, cleanup processes at most 128 clips

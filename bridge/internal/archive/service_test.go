@@ -33,6 +33,22 @@ type stubClipPrefetcher struct {
 	ensure func(context.Context, string, dahua.NVRRecording) (mediaapi.ClipInfo, error)
 }
 
+func TestNewWithContextCancelsDatabaseInitialization(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	_, err := NewWithContext(ctx, config.ArchiveConfig{
+		Enabled:  true,
+		DBDriver: "sqlite",
+		DBPath:   filepath.Join(t.TempDir(), "archive.db"),
+		TempDir:  filepath.Join(t.TempDir(), "archive-tmp"),
+	}, nil, stubSearcher{find: func(context.Context, string, dahua.NVRRecordingQuery) (dahua.NVRRecordingSearchResult, error) {
+		return dahua.NVRRecordingSearchResult{}, nil
+	}}, store.NewProbeStore(), zerolog.Nop())
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("NewWithContext error = %v, want context cancellation", err)
+	}
+}
+
 func (s stubSearcher) NVRRecordings(ctx context.Context, deviceID string, query dahua.NVRRecordingQuery) (dahua.NVRRecordingSearchResult, error) {
 	return s.find(ctx, deviceID, query)
 }

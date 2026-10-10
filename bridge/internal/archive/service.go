@@ -21,6 +21,7 @@ import (
 	mediaapi "RCooLeR/DahuaBridge/internal/media"
 	"RCooLeR/DahuaBridge/internal/store"
 
+	mysql "github.com/go-sql-driver/mysql"
 	"github.com/robfig/cron/v3"
 	"github.com/rs/zerolog"
 	_ "modernc.org/sqlite"
@@ -119,27 +120,40 @@ func (stats *archiveChunkSyncStats) add(other archiveChunkSyncStats) {
 }
 
 func New(cfg config.ArchiveConfig, devices []config.DeviceConfig, searcher Searcher, probes *store.ProbeStore, logger zerolog.Logger) (*Service, error) {
+	return NewWithContext(context.Background(), cfg, devices, searcher, probes, logger)
+}
+
+// NewWithContext builds the archive service while honoring caller cancellation
+// during database readiness checks and schema migration. New remains available
+// for callers without a lifecycle context.
+func NewWithContext(ctx context.Context, cfg config.ArchiveConfig, devices []config.DeviceConfig, searcher Searcher, probes *store.ProbeStore, logger zerolog.Logger) (*Service, error) {
 	if !cfg.Enabled {
 		return nil, nil
 	}
 	if searcher == nil {
 		return nil, errors.New("archive searcher is required")
 	}
-	if err := os.MkdirAll(filepath.Dir(cfg.DBPath), 0o755); err != nil {
-		return nil, fmt.Errorf("create archive db directory: %w", err)
+	dbDriver := strings.ToLower(strings.TrimSpace(cfg.DBDriver))
+	if dbDriver == "" {
+		dbDriver = "sqlite"
+	}
+	cfg.DBDriver = dbDriver
+	if dbDriver == "sqlite" {
+		if err := os.MkdirAll(filepath.Dir(cfg.DBPath), 0o755); err != nil {
+			return nil, fmt.Errorf("create archive db directory: %w", err)
+		}
 	}
 	if err := os.MkdirAll(cfg.TempDir, 0o755); err != nil {
 		return nil, fmt.Errorf("create archive temp directory: %w", err)
 	}
 
-	db, err := openArchiveSQLiteDB(context.Background(), cfg.DBPath)
+	db, store, err := openArchiveDB(ctx, cfg, dbDriver)
 	if err != nil {
-		return nil, fmt.Errorf("open archive sqlite db: %w", err)
+		return nil, err
 	}
-	store := NewSQLiteStore(db)
-	if err := store.InitSchema(context.Background()); err != nil {
+	if err := store.InitSchema(ctx); err != nil {
 		_ = db.Close()
-		return nil, fmt.Errorf("init archive sqlite schema: %w", err)
+		return nil, fmt.Errorf("init archive %s schema: %w", dbDriver, err)
 	}
 
 	serviceCtx, cancel := context.WithCancel(context.Background())
@@ -157,6 +171,25 @@ func New(cfg config.ArchiveConfig, devices []config.DeviceConfig, searcher Searc
 		trigger:  make(chan syncRequest, 4),
 		ctx:      serviceCtx, cancel: cancel, closeDone: make(chan struct{}),
 	}, nil
+}
+
+func openArchiveDB(ctx context.Context, cfg config.ArchiveConfig, dbDriver string) (*sql.DB, *SQLiteStore, error) {
+	switch dbDriver {
+	case "sqlite":
+		db, err := openArchiveSQLiteDB(ctx, cfg.DBPath)
+		if err != nil {
+			return nil, nil, fmt.Errorf("open archive sqlite db: %w", err)
+		}
+		return db, NewSQLiteStore(db), nil
+	case "mysql":
+		db, err := openArchiveMySQLDB(ctx, cfg)
+		if err != nil {
+			return nil, nil, fmt.Errorf("open archive mysql db: %w", err)
+		}
+		return db, newMySQLStore(db), nil
+	default:
+		return nil, nil, fmt.Errorf("unsupported archive database driver %q", dbDriver)
+	}
 }
 
 func openArchiveSQLiteDB(ctx context.Context, dbPath string) (*sql.DB, error) {
@@ -196,6 +229,205 @@ func configureArchiveSQLiteDB(ctx context.Context, db *sql.DB) error {
 	return rows.Err()
 }
 
+func openArchiveMySQLDB(ctx context.Context, cfg config.ArchiveConfig) (*sql.DB, error) {
+	dsn, err := prepareArchiveMySQLConfig(cfg)
+	if err != nil {
+		return nil, err
+	}
+	connector, err := mysql.NewConnector(dsn)
+	if err != nil {
+		return nil, err
+	}
+	db := sql.OpenDB(connector)
+	maxOpen := cfg.DBMaxOpenConns
+	if maxOpen <= 0 {
+		maxOpen = 8
+	}
+	maxIdle := cfg.DBMaxIdleConns
+	if maxIdle < 0 {
+		maxIdle = 0
+	}
+	if maxIdle > maxOpen {
+		maxIdle = maxOpen
+	}
+	db.SetMaxOpenConns(maxOpen)
+	db.SetMaxIdleConns(maxIdle)
+	if cfg.DBConnMaxLifetime > 0 {
+		db.SetConnMaxLifetime(cfg.DBConnMaxLifetime)
+	}
+	if cfg.DBConnMaxIdleTime > 0 {
+		db.SetConnMaxIdleTime(cfg.DBConnMaxIdleTime)
+	}
+	connectTimeout := cfg.DBConnectTimeout
+	if connectTimeout <= 0 {
+		connectTimeout = time.Minute
+	}
+	pingCtx, cancel := context.WithTimeout(ctx, connectTimeout)
+	defer cancel()
+	var lastErr error
+	for delay := 250 * time.Millisecond; ; delay = min(delay*2, 5*time.Second) {
+		if err := db.PingContext(pingCtx); err == nil {
+			break
+		} else {
+			lastErr = err
+			if !isTransientMySQLConnectError(err) {
+				_ = db.Close()
+				return nil, err
+			}
+		}
+		timer := time.NewTimer(delay)
+		select {
+		case <-pingCtx.Done():
+			timer.Stop()
+			_ = db.Close()
+			return nil, fmt.Errorf("connect to mysql within %s: %w (last connection error: %v)", connectTimeout, pingCtx.Err(), lastErr)
+		case <-timer.C:
+		}
+	}
+	return db, nil
+}
+
+func prepareArchiveMySQLConfig(cfg config.ArchiveConfig) (*mysql.Config, error) {
+	dsn, err := archiveMySQLConfig(cfg)
+	if err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(dsn.DBName) == "" {
+		return nil, errors.New("mysql DSN must select a database")
+	}
+	// MySQL 9.x supports row aliases used by our upserts. Parameter
+	// interpolation avoids an extra prepare round-trip per archive batch while
+	// the driver still performs type-aware escaping.
+	hardenArchiveMySQLConfig(dsn)
+	if dsn.Collation == "" {
+		// The protocol handshake only has one byte for the collation ID, so
+		// MySQL 8+/9 collations such as utf8mb4_0900_bin cannot be selected
+		// here (their IDs are greater than 255). Use the compatible binary
+		// utf8mb4 handshake collation; the schema itself still uses
+		// utf8mb4_0900_bin for stored identifiers.
+		dsn.Collation = "utf8mb4_bin"
+	}
+	if dsn.Timeout <= 0 {
+		dsn.Timeout = 5 * time.Second
+	}
+	if dsn.ReadTimeout <= 0 {
+		dsn.ReadTimeout = 30 * time.Second
+	}
+	if dsn.WriteTimeout <= 0 {
+		dsn.WriteTimeout = 30 * time.Second
+	}
+	if strings.TrimSpace(dsn.ConnectionAttributes) == "" {
+		dsn.ConnectionAttributes = "program_name:dahuabridge"
+	}
+	return dsn, nil
+}
+
+func isTransientMySQLConnectError(err error) bool {
+	var serverErr *mysql.MySQLError
+	if errors.As(err, &serverErr) {
+		switch serverErr.Number {
+		case 1040, // Too many connections.
+			1203: // Per-user connection limit reached.
+			return true
+		default:
+			return false
+		}
+	}
+	var networkErr net.Error
+	return errors.As(err, &networkErr)
+}
+
+func hardenArchiveMySQLConfig(dsn *mysql.Config) {
+	dsn.InterpolateParams = true
+	dsn.MultiStatements = false
+	dsn.AllowAllFiles = false
+	dsn.AllowCleartextPasswords = false
+	dsn.AllowFallbackToPlaintext = false
+	dsn.AllowOldPasswords = false
+	dsn.CheckConnLiveness = true
+	dsn.RejectReadOnly = true
+}
+
+func archiveMySQLConfig(cfg config.ArchiveConfig) (*mysql.Config, error) {
+	tlsMode, err := normalizeArchiveMySQLTLSMode(cfg.DBTLS)
+	if err != nil {
+		return nil, err
+	}
+	var dsn *mysql.Config
+	rawDSN := strings.TrimSpace(cfg.DBDSN)
+	if rawDSN != "" {
+		dsn, err = mysql.ParseDSN(rawDSN)
+		if err != nil {
+			return nil, fmt.Errorf("parse mysql DSN: %w", err)
+		}
+		// ParseDSN deliberately finds the database/query boundary after the last
+		// slash, so it remains correct when a password contains '?' or '/'. Its
+		// normalized TLSConfig also preserves an explicit tls=false. Do not parse
+		// the raw DSN a second time: doing so can mistake password text for query
+		// parameters and weaken or reject the requested transport policy.
+		if strings.TrimSpace(dsn.TLSConfig) == "" {
+			applyArchiveMySQLTLSMode(dsn, tlsMode)
+		} else {
+			dsnTLSMode, err := normalizeArchiveMySQLTLSMode(dsn.TLSConfig)
+			if err != nil {
+				return nil, fmt.Errorf("invalid tls parameter in archive.db_dsn: %w", err)
+			}
+			if dsnTLSMode != tlsMode {
+				return nil, fmt.Errorf("archive.db_tls %q conflicts with the tls parameter in archive.db_dsn", tlsMode)
+			}
+			applyArchiveMySQLTLSMode(dsn, dsnTLSMode)
+		}
+	} else {
+		if strings.TrimSpace(cfg.DBHost) == "" {
+			return nil, errors.New("archive.db_host is required for mysql")
+		}
+		if strings.TrimSpace(cfg.DBName) == "" {
+			return nil, errors.New("archive.db_name is required for mysql")
+		}
+		if strings.TrimSpace(cfg.DBUser) == "" {
+			return nil, errors.New("archive.db_user is required for mysql")
+		}
+		if cfg.DBPassword == "" {
+			return nil, errors.New("archive mysql password is required")
+		}
+		port := cfg.DBPort
+		if port <= 0 {
+			port = 3306
+		}
+		dsn = mysql.NewConfig()
+		dsn.User = strings.TrimSpace(cfg.DBUser)
+		dsn.Passwd = cfg.DBPassword
+		dsn.Net = "tcp"
+		dsn.Addr = net.JoinHostPort(strings.TrimSpace(cfg.DBHost), strconv.Itoa(port))
+		dsn.DBName = strings.TrimSpace(cfg.DBName)
+		applyArchiveMySQLTLSMode(dsn, tlsMode)
+	}
+	return dsn, nil
+}
+
+func normalizeArchiveMySQLTLSMode(value string) (string, error) {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "", "true":
+		return "true", nil
+	case "false":
+		return "false", nil
+	case "skip-verify":
+		return "skip-verify", nil
+	case "preferred":
+		return "", errors.New("archive.db_tls=preferred is unsafe because it permits plaintext fallback; use true, skip-verify, or false")
+	default:
+		return "", errors.New("archive.db_tls must be one of: false, true, skip-verify")
+	}
+}
+
+func applyArchiveMySQLTLSMode(dsn *mysql.Config, mode string) {
+	if mode == "false" {
+		dsn.TLSConfig = ""
+		return
+	}
+	dsn.TLSConfig = mode
+}
+
 func (s *Service) Start(ctx context.Context) error {
 	if s == nil {
 		return nil
@@ -218,6 +450,7 @@ func (s *Service) Start(ctx context.Context) error {
 		return fmt.Errorf("configure archive cron %q: %w", s.cfg.Cron, err)
 	}
 	s.logger.Info().
+		Str("db_driver", s.cfg.DBDriver).
 		Str("db_path", s.cfg.DBPath).
 		Str("temp_dir", s.cfg.TempDir).
 		Int("device_count", len(s.devices)).
@@ -241,7 +474,7 @@ func (s *Service) Start(ctx context.Context) error {
 	return nil
 }
 
-// Close joins both scheduled jobs and manual syncs before closing SQLite.
+// Close joins both scheduled jobs and manual syncs before closing the archive database.
 // beginSync registers under s.mu, which also guards the transition to closed.
 func (s *Service) Close() error {
 	if s == nil {
@@ -371,7 +604,7 @@ func (s *Service) SearchRecordings(
 	if covered {
 		result, err := s.store.SearchRecordings(ctx, deviceID, query)
 		if err != nil {
-			s.logger.Warn().Err(err).Str("device_id", deviceID).Int("channel", query.Channel).Str("scope", scope).Msg("archive sqlite search failed")
+			s.logger.Warn().Err(err).Str("device_id", deviceID).Int("channel", query.Channel).Str("scope", scope).Msg("archive database search failed")
 			return dahua.NVRRecordingSearchResult{}, err
 		}
 		for index := range result.Items {
@@ -653,6 +886,7 @@ func (s *Service) SyncSMDIVSNow(ctx context.Context) error {
 		Bool("prefetch_ivs", s.cfg.PrefetchIVS).
 		Bool("export_event_mp4", s.cfg.ExportEventMP4Enabled()).
 		Dur("export_delay", s.cfg.ExportDelay).
+		Str("db_driver", s.cfg.DBDriver).
 		Str("db_path", s.cfg.DBPath).
 		Msg("archive smd_ivs sync started")
 

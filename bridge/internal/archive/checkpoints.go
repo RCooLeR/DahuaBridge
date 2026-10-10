@@ -30,8 +30,13 @@ func (s *SQLiteStore) loadEventScanProgress(ctx context.Context, deviceID string
 }
 
 func (s *SQLiteStore) saveEventScanProgress(ctx context.Context, deviceID string, channel int, code string, state eventScanProgress) error {
-	_, err := s.db.ExecContext(ctx, `INSERT INTO archive_event_scan_progress(device_id,channel,event_code,recent_end,backfill_before) VALUES(?,?,?,?,?)
-		ON CONFLICT(device_id,channel,event_code) DO UPDATE SET recent_end=excluded.recent_end,backfill_before=excluded.backfill_before`,
+	statement := `INSERT INTO archive_event_scan_progress(device_id,channel,event_code,recent_end,backfill_before) VALUES(?,?,?,?,?)
+		ON CONFLICT(device_id,channel,event_code) DO UPDATE SET recent_end=excluded.recent_end,backfill_before=excluded.backfill_before`
+	if s.dialect == archiveDialectMySQL {
+		statement = `INSERT INTO archive_event_scan_progress(device_id,channel,event_code,recent_end,backfill_before) VALUES(?,?,?,?,?) AS new
+			ON DUPLICATE KEY UPDATE recent_end=new.recent_end,backfill_before=new.backfill_before`
+	}
+	_, err := s.db.ExecContext(ctx, statement,
 		deviceID, channel, code, state.recentEnd.UTC().Format(time.RFC3339Nano), state.backfillBefore.UTC().Format(time.RFC3339Nano))
 	return err
 }

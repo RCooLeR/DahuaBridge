@@ -12,7 +12,7 @@ import (
 
 // Only bridge archive exports belong to automatic archive retention. A manual
 // live recording can match an event window without transferring its ownership.
-func rememberArchiveClipOwnership(ctx context.Context, tx *sql.Tx, kind, recordID, deviceID string, clip mediaapi.ClipInfo) error {
+func rememberArchiveClipOwnership(ctx context.Context, tx *sql.Tx, dialect archiveDialect, kind, recordID, deviceID string, clip mediaapi.ClipInfo) error {
 	if !strings.HasPrefix(strings.TrimSpace(clip.StreamID), "nvr_export_") {
 		return nil
 	}
@@ -38,7 +38,14 @@ func rememberArchiveClipOwnership(ctx context.Context, tx *sql.Tx, kind, recordI
 	}
 	// The first association records the source window. Retry/reconciliation
 	// updates must not restart the retention clock.
-	_, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO archive_clip_retention(clip_id, retain_from) VALUES (?, ?)`,
+	insert := `INSERT OR IGNORE INTO archive_clip_retention(clip_id, retain_from) VALUES (?, ?)`
+	if dialect == archiveDialectMySQL {
+		// ON DUPLICATE handles only the idempotent ownership case. INSERT IGNORE
+		// would also hide truncation and other invalid data errors.
+		insert = `INSERT INTO archive_clip_retention(clip_id, retain_from) VALUES (?, ?)
+			ON DUPLICATE KEY UPDATE clip_id = archive_clip_retention.clip_id`
+	}
+	_, err := tx.ExecContext(ctx, insert,
 		strings.TrimSpace(clip.ID), retainFrom.UTC().Format(time.RFC3339Nano))
 	return err
 }

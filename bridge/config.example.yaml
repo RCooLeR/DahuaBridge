@@ -123,8 +123,30 @@ media:
 archive:
   # Enable or disable the background archive indexer.
   enabled: false
-  # SQLite database path for normalized archive file and event metadata. Prefer SSD because SQLite does small random reads/writes.
+  # Archive metadata backend: "sqlite" keeps the single-host default; "mysql" supports a separately managed production database.
+  # Run only one active bridge writer per archive database; MySQL is not an active-active coordination mode.
+  db_driver: sqlite
+  # SQLite database path. Ignored when db_driver is mysql. Prefer SSD because SQLite does small random reads/writes.
   db_path: /data/archive/archive.db
+  # MySQL connection settings. Keep the password in a read-only Docker secret, not this YAML.
+  # db_host: mysql
+  # db_port: 3306
+  # db_name: dahuabridge
+  # db_user: dahuabridge
+  # db_password_file: /run/secrets/dahuabridge-db-password
+  # Optional password environment fallback. Environment values are visible through container metadata on some runtimes.
+  # db_password_env: DAHUABRIDGE_ARCHIVE_DB_PASSWORD
+  # TLS mode: true (verified, default), skip-verify, or false. Use skip-verify only temporarily on a private network.
+  # db_tls: true
+  # Advanced alternatives: a DSN file takes precedence over db_dsn and db_dsn_env.
+  # db_dsn_file: /run/secrets/dahuabridge-db-dsn
+  # db_dsn_env: DAHUABRIDGE_ARCHIVE_DB_DSN
+  # Startup retries cover cross-Compose MySQL readiness without relying on depends_on.
+  db_connect_timeout: 1m
+  db_max_open_conns: 8
+  db_max_idle_conns: 4
+  db_conn_max_lifetime: 30m
+  db_conn_max_idle_time: 5m
   # Temporary staging directory for direct recorder exports before ffmpeg remux/transcode. Prefer SSD or other fast local disk.
   temp_dir: /data/archive/tmp
   # Number of recent days to keep indexed and rescan.
@@ -178,8 +200,8 @@ imou:
 state_store:
   # Enable or disable on-disk state persistence.
   enabled: true
-  # File path where the bridge writes persistent state. Relative paths are relative to the process working directory.
-  path: ./var/dahuabridge-state.json
+  # File path where the bridge writes persistent state. /data is the writable persistent mount in compose.example.yaml.
+  path: /data/dahuabridge-state.json
   # Flush interval for writing in-memory state changes to disk.
   flush_interval: 5s
 

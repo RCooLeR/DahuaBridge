@@ -527,6 +527,7 @@ func (r *runtimeServices) AdminSettings() map[string]any {
 		},
 		"archive": map[string]any{
 			"enabled":              cfg.Archive.Enabled,
+			"db_driver":            cfg.Archive.DBDriver,
 			"db_path":              cfg.Archive.DBPath,
 			"temp_dir":             cfg.Archive.TempDir,
 			"prefetch_days":        cfg.Archive.PrefetchDays,

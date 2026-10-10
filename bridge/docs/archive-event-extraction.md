@@ -9,7 +9,7 @@ The bridge keeps SMD/IVS detections separate from normal NVR recording chunks:
 - SMD/IVS rows are used for event Play and MP4 export.
 - Recording chunks are used for direct original DAV download and optional MP4 export.
 
-API reads come from SQLite. The UI does not call the NVR when listing SMD/IVS or recording chunks.
+API reads come from the configured SQLite or MySQL archive store. The UI does not call the NVR when listing SMD/IVS or recording chunks.
 
 ## Tables
 
@@ -57,7 +57,7 @@ Stores bridge-owned MP4 export metadata:
 - `status`
 - `error_text`
 
-The current schema is recreated without migration when the schema version changes.
+SQLite retains its existing schema-version behavior. MySQL uses resumable, forward-only schema migrations and never drops archive tables during startup.
 
 ## NVR APIs Used
 

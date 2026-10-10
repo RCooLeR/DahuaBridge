@@ -3,7 +3,7 @@ name: CI
 "on":
   push:
     branches:
-      - "**"
+      - master
   pull_request:
   workflow_dispatch:
 
@@ -19,6 +19,25 @@ jobs:
     name: Bridge Go Tests
     runs-on: ubuntu-24.04
     timeout-minutes: 20
+
+    services:
+      mysql:
+        image: mysql:9.7.2@sha256:e2bde46db6563855d7177adb5f0b57b9dc663f5a20927a90f4259d3312068497
+        env:
+          MYSQL_ROOT_PASSWORD: ci-root-password
+          MYSQL_DATABASE: dahuabridge_ci
+          MYSQL_USER: dahuabridge_ci
+          MYSQL_PASSWORD: ci-password
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -pci-root-password --silent"
+          --health-interval=5s
+          --health-timeout=3s
+          --health-retries=30
+
+    env:
+      DAHUABRIDGE_TEST_MYSQL_DSN: dahuabridge_ci:ci-password@tcp(127.0.0.1:3306)/dahuabridge_ci?tls=skip-verify
 
     defaults:
       run:
@@ -39,8 +58,22 @@ jobs:
       - name: Verify modules
         run: go mod verify
 
+      - name: Require TLS for MySQL integration tests
+        working-directory: .
+        run: |
+          docker exec -e MYSQL_PWD=ci-root-password "${{ job.services.mysql.id }}" \
+            mysql --user=root \
+            -e "ALTER USER 'dahuabridge_ci'@'%' REQUIRE SSL"
+          docker exec -e MYSQL_PWD=ci-password "${{ job.services.mysql.id }}" \
+            mysql --host=127.0.0.1 --user=dahuabridge_ci --ssl-mode=REQUIRED -e "SELECT 1"
+          if docker exec -e MYSQL_PWD=ci-password "${{ job.services.mysql.id }}" \
+            mysql --host=127.0.0.1 --user=dahuabridge_ci --ssl-mode=DISABLED -e "SELECT 1"; then
+            echo "MySQL application user unexpectedly accepted plaintext authentication" >&2
+            exit 1
+          fi
+
       - name: Set up Node for embedded browser tests
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "24"
 
@@ -90,6 +123,7 @@ jobs:
 
       - name: Smoke test container
         run: |
+          docker run --rm dahuabridge:ci --help >/dev/null
           cat > /tmp/dahuabridge-config.yaml <<'YAML'
           log:
             level: error
@@ -199,7 +233,7 @@ jobs:
           persist-credentials: false
 
       - name: Set up Node
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "24"
           check-latest: true

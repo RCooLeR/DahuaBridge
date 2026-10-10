@@ -1,6 +1,8 @@
 package config
 
 import (
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -94,6 +96,9 @@ func TestMediaDefaults(t *testing.T) {
 
 func TestArchiveDefaults(t *testing.T) {
 	cfg := defaultConfig()
+	if cfg.Archive.DBDriver != "sqlite" {
+		t.Fatalf("unexpected default archive db_driver %q", cfg.Archive.DBDriver)
+	}
 	if cfg.Archive.DBPath != "/data/archive/archive.db" {
 		t.Fatalf("unexpected default archive db_path %q", cfg.Archive.DBPath)
 	}
@@ -105,6 +110,15 @@ func TestArchiveDefaults(t *testing.T) {
 	}
 	if cfg.Archive.ExportDelay != time.Hour {
 		t.Fatalf("unexpected default archive export_delay %s", cfg.Archive.ExportDelay)
+	}
+	if cfg.Archive.DBMaxOpenConns != 8 || cfg.Archive.DBMaxIdleConns != 4 {
+		t.Fatalf("unexpected archive connection pool defaults: open=%d idle=%d", cfg.Archive.DBMaxOpenConns, cfg.Archive.DBMaxIdleConns)
+	}
+	if cfg.Archive.DBConnectTimeout != time.Minute {
+		t.Fatalf("unexpected archive db connect timeout %s", cfg.Archive.DBConnectTimeout)
+	}
+	if cfg.Archive.DBTLS != "true" {
+		t.Fatalf("unexpected archive db_tls default %q", cfg.Archive.DBTLS)
 	}
 	if !cfg.Archive.ExportEventMP4Enabled() {
 		t.Fatal("expected default archive event MP4 export to be enabled")
@@ -119,6 +133,69 @@ func TestArchiveDefaults(t *testing.T) {
 			cfg.Archive.ExportSMDTransport,
 			cfg.Archive.ExportSMDAnimal,
 		)
+	}
+}
+
+func TestNormalizeMySQLArchiveSecretsFromFiles(t *testing.T) {
+	t.Setenv("DAHUABRIDGE_TEST_DSN", "env-user:env-password@tcp(env:3306)/env_db")
+	t.Setenv("DAHUABRIDGE_TEST_PASSWORD", "env-password")
+	dsnPath := filepath.Join(t.TempDir(), "dsn")
+	passwordPath := filepath.Join(t.TempDir(), "password")
+	if err := os.WriteFile(dsnPath, []byte("file-user:file-password@tcp(mysql:3306)/file_db\n"), 0o600); err != nil {
+		t.Fatalf("write dsn secret: %v", err)
+	}
+	if err := os.WriteFile(passwordPath, []byte("file-password\n"), 0o600); err != nil {
+		t.Fatalf("write password secret: %v", err)
+	}
+	cfg := defaultConfig()
+	cfg.Archive.DBDriver = "mysql"
+	cfg.Archive.DBDSN = "yaml-user:yaml-password@tcp(yaml:3306)/yaml_db"
+	cfg.Archive.DBDSNEnv = "DAHUABRIDGE_TEST_DSN"
+	cfg.Archive.DBDSNFile = dsnPath
+	cfg.Archive.DBPassword = "yaml-password"
+	cfg.Archive.DBPasswordEnv = "DAHUABRIDGE_TEST_PASSWORD"
+	cfg.Archive.DBPasswordFile = passwordPath
+	if err := cfg.normalize(); err != nil {
+		t.Fatalf("normalize returned error: %v", err)
+	}
+	if cfg.Archive.DBDSN != "file-user:file-password@tcp(mysql:3306)/file_db" {
+		t.Fatalf("dsn file did not take precedence")
+	}
+	passwordCfg := defaultConfig()
+	passwordCfg.Archive.DBDriver = "mysql"
+	passwordCfg.Archive.DBPassword = "yaml-password"
+	passwordCfg.Archive.DBPasswordEnv = "DAHUABRIDGE_TEST_PASSWORD"
+	passwordCfg.Archive.DBPasswordFile = passwordPath
+	if err := passwordCfg.normalize(); err != nil {
+		t.Fatalf("normalize password config returned error: %v", err)
+	}
+	if passwordCfg.Archive.DBPassword != "file-password" {
+		t.Fatalf("password file did not take precedence")
+	}
+}
+
+func TestValidateMySQLArchiveDiscreteConnection(t *testing.T) {
+	cfg := defaultConfig()
+	cfg.Archive.Enabled = true
+	cfg.Archive.DBDriver = "mysql"
+	cfg.Archive.DBDSN = ""
+	cfg.Archive.DBHost = "mysql"
+	cfg.Archive.DBName = "dahuabridge"
+	cfg.Archive.DBUser = "dahuabridge"
+	cfg.Archive.DBPassword = "secret"
+	cfg.Devices.NVR = []DeviceConfig{{
+		ID: "nvr", BaseURL: "http://127.0.0.1", Username: "admin", Password: "secret", Enabled: ptr.Bool(true),
+	}}
+	if err := cfg.normalize(); err != nil {
+		t.Fatalf("normalize returned error: %v", err)
+	}
+	if err := cfg.validate(); err != nil {
+		t.Fatalf("validate returned error: %v", err)
+	}
+	cfg.Archive.DBPassword = ""
+	err := cfg.validate()
+	if err == nil || !strings.Contains(err.Error(), "db_password") {
+		t.Fatalf("expected mysql password validation error, got %v", err)
 	}
 }
 

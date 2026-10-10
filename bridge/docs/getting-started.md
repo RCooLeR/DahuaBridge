@@ -9,7 +9,7 @@ You need:
 
 - network access from the bridge host to the Dahua NVR, IPC, or VTO devices
 - Docker, or Go plus a local `ffmpeg`
-- writable storage for bridge state, archive SQLite data, temporary HLS files, and MP4 clips
+- writable storage for bridge state, SQLite archive data when selected, temporary HLS files, and MP4 clips
 - a browser/HA-reachable URL for the bridge, usually through a reverse proxy
 
 ## Configure

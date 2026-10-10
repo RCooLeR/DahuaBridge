@@ -11,7 +11,7 @@ Unknown legacy YAML keys are ignored by the loader. Remove old keys from local c
 | `log` | process logging |
 | `http` | built-in API/admin/metrics server and rate limits |
 | `media` | bridge-hosted snapshots, MJPEG, HLS, WebRTC, and bridge-owned MP4 clips |
-| `archive` | SQLite archive/event index, archive export, and background SMD/IVS sync |
+| `archive` | SQLite/MySQL archive-event index, archive export, and background SMD/IVS sync |
 | `home_assistant` | bridge-generated URLs consumed by the native HA integration |
 | `imou` | optional Imou Open Platform channel overrides |
 | `state_store` | persisted probe state and Imou auth state |
@@ -80,7 +80,16 @@ Legacy note: `hls_temp_path` is still accepted as an alias for `hls_tmp_dir`, bu
 ## `archive`
 
 - `enabled`: starts the archive service.
-- `db_path`: SQLite database for `smd_ivs_events`, `nvr_recording_chunks`, and export metadata.
+- `db_driver`: `sqlite` (default) or `mysql`.
+- `db_path`: SQLite database for `smd_ivs_events`, `nvr_recording_chunks`, and export metadata; ignored by MySQL.
+- `db_host`, `db_port`, `db_name`, `db_user`: discrete MySQL connection settings.
+- `db_password_file`: preferred MySQL password source. Mount it read-only from Docker secrets. It takes precedence over `db_password` and `db_password_env`.
+- `db_password_env`: password environment fallback (`DAHUABRIDGE_ARCHIVE_DB_PASSWORD` by default).
+- `db_tls`: MySQL TLS mode: verified `true` (default), `skip-verify`, or `false`. Use `skip-verify` only as a transitional private-network setting, ideally with a MySQL account configured with `REQUIRE SSL`; it encrypts traffic but does not authenticate the server certificate.
+- `db_dsn_file`: advanced full-DSN secret file; takes precedence over `db_dsn` and `db_dsn_env`.
+- A full DSN inherits `db_tls` when it has no `tls` parameter. If both are present they must select the same mode; conflicting values are rejected instead of silently weakening transport security.
+- `db_connect_timeout`: total startup retry window while MySQL becomes ready.
+- `db_max_open_conns`, `db_max_idle_conns`, `db_conn_max_lifetime`, `db_conn_max_idle_time`: MySQL pool limits and connection recycling.
 - `temp_dir`: staging directory for recorder DAV downloads and iframe-prefix work.
 - `prefetch_days`: recent history window to index.
 - `retain_days`: indexed row retention window.
@@ -95,7 +104,9 @@ Legacy note: `hls_temp_path` is still accepted as an alias for `hls_tmp_dir`, bu
 - `export_smd_animal`: SMD animal event channels allowed for automatic MP4 export. Empty means all channels.
 - `cron`: 5-field cron schedule for chunk sync.
 
-SMD/IVS list APIs read from SQLite first. Event filters match normalized event codes and Dahua event-type strings stored in the database, including values such as `Event.smdTypeHuman`.
+SMD/IVS list APIs read from the configured archive database first. Event filters match normalized event codes and Dahua event-type strings stored in the database, including values such as `Event.smdTypeHuman`.
+
+MySQL uses InnoDB, native JSON validation for event flags, current row-alias upserts (rather than deprecated `VALUES()` references), a binary UTF-8 collation for stable identifiers, and forward-only schema migrations serialized with a server advisory lock. See [SQLite to MySQL Migration](mysql-migration.md) before changing an existing deployment.
 
 ## `home_assistant`
 

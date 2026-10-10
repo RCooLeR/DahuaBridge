@@ -14,16 +14,31 @@ import (
 )
 
 type SQLiteStore struct {
-	db *sql.DB
+	db      *sql.DB
+	dialect archiveDialect
 }
+
+type archiveDialect string
+
+const (
+	archiveDialectSQLite archiveDialect = "sqlite"
+	archiveDialectMySQL  archiveDialect = "mysql"
+)
 
 const sqliteArchiveSchemaVersion = 2
 
 func NewSQLiteStore(db *sql.DB) *SQLiteStore {
-	return &SQLiteStore{db: db}
+	return &SQLiteStore{db: db, dialect: archiveDialectSQLite}
+}
+
+func newMySQLStore(db *sql.DB) *SQLiteStore {
+	return &SQLiteStore{db: db, dialect: archiveDialectMySQL}
 }
 
 func (s *SQLiteStore) InitSchema(ctx context.Context) error {
+	if s.dialect == archiveDialectMySQL {
+		return s.initMySQLSchema(ctx)
+	}
 	var currentVersion int
 	if err := s.db.QueryRowContext(ctx, `PRAGMA user_version`).Scan(&currentVersion); err != nil {
 		return err
@@ -59,10 +74,18 @@ func (s *SQLiteStore) InitSchema(ctx context.Context) error {
 			first_seen_at TEXT NOT NULL,
 			last_seen_at TEXT NOT NULL
 		)`,
+		`UPDATE smd_ivs_events SET mp4_status = LOWER(TRIM(mp4_status))
+			WHERE mp4_status <> LOWER(TRIM(mp4_status))`,
 		`CREATE INDEX IF NOT EXISTS idx_smd_ivs_events_device_channel_time
 			ON smd_ivs_events(device_id, channel, start_time, end_time)`,
 		`CREATE INDEX IF NOT EXISTS idx_smd_ivs_events_type
 			ON smd_ivs_events(device_id, event_type, start_time)`,
+		`CREATE INDEX IF NOT EXISTS idx_smd_ivs_events_last_seen
+			ON smd_ivs_events(last_seen_at)`,
+		`CREATE INDEX IF NOT EXISTS idx_smd_ivs_events_status
+			ON smd_ivs_events(mp4_status)`,
+		`CREATE INDEX IF NOT EXISTS idx_smd_ivs_events_pending_export
+			ON smd_ivs_events(start_time, end_time, mp4_status, mp4_clip_id)`,
 		`CREATE TABLE IF NOT EXISTS nvr_recording_chunks (
 			chunk_id TEXT PRIMARY KEY,
 			device_id TEXT NOT NULL,
@@ -82,6 +105,8 @@ func (s *SQLiteStore) InitSchema(ctx context.Context) error {
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_nvr_recording_chunks_device_channel_time
 			ON nvr_recording_chunks(device_id, channel, start_time, end_time)`,
+		`CREATE INDEX IF NOT EXISTS idx_nvr_recording_chunks_last_seen
+			ON nvr_recording_chunks(last_seen_at)`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_nvr_recording_chunks_path
 			ON nvr_recording_chunks(device_id, file_path)`,
 		`CREATE TABLE IF NOT EXISTS bridge_mp4_clips (
@@ -155,19 +180,7 @@ func (s *SQLiteStore) UpsertArchiveFiles(ctx context.Context, deviceID string, i
 		}
 	}()
 
-	statement, err := tx.PrepareContext(ctx, `INSERT INTO nvr_recording_chunks (
-		chunk_id, device_id, channel, start_time, end_time, file_path, video_stream, disk, partition, cluster,
-		length_bytes, cut_length_bytes, flags_json, first_seen_at, last_seen_at
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	ON CONFLICT(chunk_id) DO UPDATE SET
-		video_stream=excluded.video_stream,
-		disk=excluded.disk,
-		partition=excluded.partition,
-		cluster=excluded.cluster,
-		length_bytes=excluded.length_bytes,
-		cut_length_bytes=excluded.cut_length_bytes,
-		flags_json=excluded.flags_json,
-		last_seen_at=excluded.last_seen_at`)
+	statement, err := tx.PrepareContext(ctx, s.upsertArchiveFilesSQL())
 	if err != nil {
 		return err
 	}
@@ -202,6 +215,37 @@ func (s *SQLiteStore) UpsertArchiveFiles(ctx context.Context, deviceID string, i
 	return err
 }
 
+func (s *SQLiteStore) upsertArchiveFilesSQL() string {
+	if s.dialect == archiveDialectMySQL {
+		return `INSERT INTO nvr_recording_chunks (
+			chunk_id, device_id, channel, start_time, end_time, file_path, video_stream, disk, partition_number, cluster,
+			length_bytes, cut_length_bytes, flags_json, first_seen_at, last_seen_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) AS new
+		ON DUPLICATE KEY UPDATE
+			video_stream=new.video_stream,
+			disk=new.disk,
+			partition_number=new.partition_number,
+			cluster=new.cluster,
+			length_bytes=new.length_bytes,
+			cut_length_bytes=new.cut_length_bytes,
+			flags_json=new.flags_json,
+			last_seen_at=new.last_seen_at`
+	}
+	return `INSERT INTO nvr_recording_chunks (
+		chunk_id, device_id, channel, start_time, end_time, file_path, video_stream, disk, partition, cluster,
+		length_bytes, cut_length_bytes, flags_json, first_seen_at, last_seen_at
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	ON CONFLICT(chunk_id) DO UPDATE SET
+		video_stream=excluded.video_stream,
+		disk=excluded.disk,
+		partition=excluded.partition,
+		cluster=excluded.cluster,
+		length_bytes=excluded.length_bytes,
+		cut_length_bytes=excluded.cut_length_bytes,
+		flags_json=excluded.flags_json,
+		last_seen_at=excluded.last_seen_at`
+}
+
 func (s *SQLiteStore) UpsertArchiveEvents(ctx context.Context, deviceID string, items []dahua.NVRRecording, seenAt time.Time) (err error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -213,18 +257,7 @@ func (s *SQLiteStore) UpsertArchiveEvents(ctx context.Context, deviceID string, 
 		}
 	}()
 
-	eventStatement, err := tx.PrepareContext(ctx, `INSERT INTO smd_ivs_events (
-		event_id, device_id, channel, event_type, start_time, end_time, rtsp_main_url, rtsp_sub_url,
-		source_file_path, video_stream, flags_json, first_seen_at, last_seen_at
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	ON CONFLICT(event_id) DO UPDATE SET
-		event_type=excluded.event_type,
-		video_stream=excluded.video_stream,
-		rtsp_main_url=excluded.rtsp_main_url,
-		rtsp_sub_url=excluded.rtsp_sub_url,
-		source_file_path=excluded.source_file_path,
-		flags_json=excluded.flags_json,
-		last_seen_at=excluded.last_seen_at`)
+	eventStatement, err := tx.PrepareContext(ctx, s.upsertArchiveEventsSQL())
 	if err != nil {
 		return err
 	}
@@ -260,6 +293,35 @@ func (s *SQLiteStore) UpsertArchiveEvents(ctx context.Context, deviceID string, 
 	return err
 }
 
+func (s *SQLiteStore) upsertArchiveEventsSQL() string {
+	if s.dialect == archiveDialectMySQL {
+		return `INSERT INTO smd_ivs_events (
+			event_id, device_id, channel, event_type, start_time, end_time, rtsp_main_url, rtsp_sub_url,
+			source_file_path, video_stream, flags_json, first_seen_at, last_seen_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) AS new
+		ON DUPLICATE KEY UPDATE
+			event_type=new.event_type,
+			video_stream=new.video_stream,
+			rtsp_main_url=new.rtsp_main_url,
+			rtsp_sub_url=new.rtsp_sub_url,
+			source_file_path=new.source_file_path,
+			flags_json=new.flags_json,
+			last_seen_at=new.last_seen_at`
+	}
+	return `INSERT INTO smd_ivs_events (
+		event_id, device_id, channel, event_type, start_time, end_time, rtsp_main_url, rtsp_sub_url,
+		source_file_path, video_stream, flags_json, first_seen_at, last_seen_at
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	ON CONFLICT(event_id) DO UPDATE SET
+		event_type=excluded.event_type,
+		video_stream=excluded.video_stream,
+		rtsp_main_url=excluded.rtsp_main_url,
+		rtsp_sub_url=excluded.rtsp_sub_url,
+		source_file_path=excluded.source_file_path,
+		flags_json=excluded.flags_json,
+		last_seen_at=excluded.last_seen_at`
+}
+
 // PruneOlderThan removes expired index rows and returns a bounded batch of
 // pending export cleanups. Clip metadata remains until finishClipCleanup;
 // returned IDs can therefore recur after an interrupted or failed deletion.
@@ -278,7 +340,7 @@ func (s *SQLiteStore) PruneOlderThan(ctx context.Context, cutoff time.Time) (cli
 	statements := []string{
 		`DELETE FROM smd_ivs_events
 			WHERE last_seen_at < ?
-				AND LOWER(COALESCE(mp4_status, '')) NOT IN ('recording', 'transcoding', 'queued', 'downloading')`,
+				AND mp4_status NOT IN ('recording', 'transcoding', 'queued', 'downloading')`,
 		`DELETE FROM nvr_recording_chunks WHERE last_seen_at < ?`,
 	}
 	args := [][]any{

@@ -85,7 +85,24 @@ type MediaConfig struct {
 
 type ArchiveConfig struct {
 	Enabled            bool          `yaml:"enabled"`
+	DBDriver           string        `yaml:"db_driver"`
 	DBPath             string        `yaml:"db_path"`
+	DBDSN              string        `yaml:"db_dsn"`
+	DBDSNEnv           string        `yaml:"db_dsn_env"`
+	DBDSNFile          string        `yaml:"db_dsn_file"`
+	DBHost             string        `yaml:"db_host"`
+	DBPort             int           `yaml:"db_port"`
+	DBName             string        `yaml:"db_name"`
+	DBUser             string        `yaml:"db_user"`
+	DBPassword         string        `yaml:"db_password"`
+	DBPasswordEnv      string        `yaml:"db_password_env"`
+	DBPasswordFile     string        `yaml:"db_password_file"`
+	DBTLS              string        `yaml:"db_tls"`
+	DBConnectTimeout   time.Duration `yaml:"db_connect_timeout"`
+	DBMaxOpenConns     int           `yaml:"db_max_open_conns"`
+	DBMaxIdleConns     int           `yaml:"db_max_idle_conns"`
+	DBConnMaxLifetime  time.Duration `yaml:"db_conn_max_lifetime"`
+	DBConnMaxIdleTime  time.Duration `yaml:"db_conn_max_idle_time"`
 	TempDir            string        `yaml:"temp_dir"`
 	PrefetchDays       int           `yaml:"prefetch_days"`
 	RetainDays         int           `yaml:"retain_days"`
@@ -270,17 +287,27 @@ func defaultConfig() Config {
 			HLSKeepAfterExit:  6 * time.Hour,
 		},
 		Archive: ArchiveConfig{
-			Enabled:         false,
-			DBPath:          "/data/archive/archive.db",
-			TempDir:         "/data/archive/tmp",
-			PrefetchDays:    7,
-			RetainDays:      7,
-			MaxParallelJobs: 2,
-			PrefetchSMD:     true,
-			PrefetchIVS:     true,
-			ExportEventMP4:  ptr.Bool(true),
-			ExportDelay:     time.Hour,
-			Cron:            "5,35 * * * *",
+			Enabled:           false,
+			DBDriver:          "sqlite",
+			DBPath:            "/data/archive/archive.db",
+			DBDSNEnv:          "DAHUABRIDGE_ARCHIVE_DB_DSN",
+			DBPort:            3306,
+			DBPasswordEnv:     "DAHUABRIDGE_ARCHIVE_DB_PASSWORD",
+			DBTLS:             "true",
+			DBConnectTimeout:  time.Minute,
+			DBMaxOpenConns:    8,
+			DBMaxIdleConns:    4,
+			DBConnMaxLifetime: 30 * time.Minute,
+			DBConnMaxIdleTime: 5 * time.Minute,
+			TempDir:           "/data/archive/tmp",
+			PrefetchDays:      7,
+			RetainDays:        7,
+			MaxParallelJobs:   2,
+			PrefetchSMD:       true,
+			PrefetchIVS:       true,
+			ExportEventMP4:    ptr.Bool(true),
+			ExportDelay:       time.Hour,
+			Cron:              "5,35 * * * *",
 		},
 		StateStore: StateStoreConfig{
 			FlushInterval: 5 * time.Second,
@@ -420,9 +447,69 @@ func (c *Config) normalize() error {
 	if c.Media.HLSListSize <= 0 {
 		c.Media.HLSListSize = 6
 	}
+	c.Archive.DBDriver = strings.ToLower(strings.TrimSpace(c.Archive.DBDriver))
+	if c.Archive.DBDriver == "" {
+		c.Archive.DBDriver = "sqlite"
+	}
 	c.Archive.DBPath = strings.TrimSpace(c.Archive.DBPath)
-	if c.Archive.DBPath == "" {
+	if c.Archive.DBDriver == "sqlite" && c.Archive.DBPath == "" {
 		c.Archive.DBPath = "/data/archive/archive.db"
+	}
+	c.Archive.DBDSNEnv = strings.TrimSpace(c.Archive.DBDSNEnv)
+	if c.Archive.DBDSNEnv == "" {
+		c.Archive.DBDSNEnv = "DAHUABRIDGE_ARCHIVE_DB_DSN"
+	}
+	c.Archive.DBDSNFile = strings.TrimSpace(c.Archive.DBDSNFile)
+	c.Archive.DBDSN = firstNonEmpty(strings.TrimSpace(c.Archive.DBDSN), strings.TrimSpace(os.Getenv(c.Archive.DBDSNEnv)))
+	c.Archive.DBHost = strings.TrimSpace(c.Archive.DBHost)
+	if c.Archive.DBPort <= 0 {
+		c.Archive.DBPort = 3306
+	}
+	c.Archive.DBName = strings.TrimSpace(c.Archive.DBName)
+	c.Archive.DBUser = strings.TrimSpace(c.Archive.DBUser)
+	c.Archive.DBPasswordEnv = strings.TrimSpace(c.Archive.DBPasswordEnv)
+	if c.Archive.DBPasswordEnv == "" {
+		c.Archive.DBPasswordEnv = "DAHUABRIDGE_ARCHIVE_DB_PASSWORD"
+	}
+	c.Archive.DBPasswordFile = strings.TrimSpace(c.Archive.DBPasswordFile)
+	c.Archive.DBPassword = firstNonEmpty(strings.TrimSpace(c.Archive.DBPassword), strings.TrimSpace(os.Getenv(c.Archive.DBPasswordEnv)))
+	c.Archive.DBTLS = strings.TrimSpace(c.Archive.DBTLS)
+	if c.Archive.DBTLS == "" {
+		c.Archive.DBTLS = "true"
+	}
+	if c.Archive.DBConnectTimeout <= 0 {
+		c.Archive.DBConnectTimeout = time.Minute
+	}
+	if c.Archive.DBDriver == "mysql" {
+		if c.Archive.DBDSNFile != "" {
+			secret, err := readConfigSecret(c.Archive.DBDSNFile)
+			if err != nil {
+				return fmt.Errorf("read archive.db_dsn_file: %w", err)
+			}
+			c.Archive.DBDSN = secret
+		}
+		if c.Archive.DBDSN == "" && c.Archive.DBPasswordFile != "" {
+			secret, err := readConfigSecret(c.Archive.DBPasswordFile)
+			if err != nil {
+				return fmt.Errorf("read archive.db_password_file: %w", err)
+			}
+			c.Archive.DBPassword = secret
+		}
+	}
+	if c.Archive.DBMaxOpenConns <= 0 {
+		c.Archive.DBMaxOpenConns = 8
+	}
+	if c.Archive.DBMaxIdleConns < 0 {
+		c.Archive.DBMaxIdleConns = 0
+	}
+	if c.Archive.DBMaxIdleConns > c.Archive.DBMaxOpenConns {
+		c.Archive.DBMaxIdleConns = c.Archive.DBMaxOpenConns
+	}
+	if c.Archive.DBConnMaxLifetime <= 0 {
+		c.Archive.DBConnMaxLifetime = 30 * time.Minute
+	}
+	if c.Archive.DBConnMaxIdleTime <= 0 {
+		c.Archive.DBConnMaxIdleTime = 5 * time.Minute
 	}
 	c.Archive.TempDir = strings.TrimSpace(c.Archive.TempDir)
 	if c.Archive.TempDir == "" {
@@ -507,8 +594,36 @@ func (c *Config) normalize() error {
 
 func (c Config) validate() error {
 	if c.Archive.Enabled {
-		if c.Archive.DBPath == "" {
-			return errors.New("archive.db_path is required when archive.enabled=true")
+		switch c.Archive.DBDriver {
+		case "sqlite":
+			if c.Archive.DBPath == "" {
+				return errors.New("archive.db_path is required when archive.enabled=true and archive.db_driver=sqlite")
+			}
+		case "mysql":
+			if c.Archive.DBDSN == "" {
+				if c.Archive.DBHost == "" {
+					return errors.New("archive.db_host is required for mysql when archive.db_dsn is empty")
+				}
+				if c.Archive.DBName == "" {
+					return errors.New("archive.db_name is required for mysql when archive.db_dsn is empty")
+				}
+				if c.Archive.DBUser == "" {
+					return errors.New("archive.db_user is required for mysql when archive.db_dsn is empty")
+				}
+				if c.Archive.DBPassword == "" {
+					return fmt.Errorf("archive.db_password_file, archive.db_password, or environment variable %s is required for mysql when archive.db_dsn is empty", c.Archive.DBPasswordEnv)
+				}
+				if c.Archive.DBPort > 65535 {
+					return errors.New("archive.db_port must be between 1 and 65535")
+				}
+			}
+			switch strings.ToLower(c.Archive.DBTLS) {
+			case "false", "true", "skip-verify":
+			default:
+				return errors.New("archive.db_tls must be one of: false, true, skip-verify")
+			}
+		default:
+			return errors.New("archive.db_driver must be one of: sqlite, mysql")
 		}
 		if c.Archive.TempDir == "" {
 			return errors.New("archive.temp_dir is required when archive.enabled=true")
@@ -598,6 +713,18 @@ func (c Config) validate() error {
 	}
 
 	return nil
+}
+
+func readConfigSecret(path string) (string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	value := strings.TrimSpace(string(data))
+	if value == "" {
+		return "", errors.New("secret file is empty")
+	}
+	return value, nil
 }
 
 func normalizeDevice(dev *DeviceConfig) error {
