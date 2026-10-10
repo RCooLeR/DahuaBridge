@@ -33,7 +33,11 @@ archive:
 /app/dahuabridge --config /config/config.yaml migrate-archive --source-sqlite /data/archive/archive.db
 ```
 
-The source is opened read-only and includes committed WAL contents. The importer initializes the MySQL schema, requires an empty first-use target, copies all five data tables in one serializable transaction, and compares exact row counts plus canonical SHA-256 digests of every field before committing. The same transaction records a source-schema/content fingerprint in MySQL. A rerun with the identical SQLite snapshot is a read-only success and cannot overwrite newer MySQL rows; a changed source is rejected.
+The source is opened with SQLite `mode=ro` and `query_only=1`; the importer never changes its tables. Stop every writer before copying or importing it. If `archive.db-wal` or `archive.db-shm` exists, preserve and mount those files together with `archive.db`: committed rows may exist only in the WAL. SQLite must either receive the complete readable WAL/SHM pair or have write access to their directory for lock and shared-memory bookkeeping. Never delete sidecars merely to make the importer start.
+
+After a clean shutdown and checkpoint, SQLite normally removes the WAL/SHM sidecars while retaining WAL mode in the database header. When no WAL, SHM, or rollback-journal sidecar exists, the importer opens that stable snapshot with SQLite `immutable=1`. This safely supports a read-only source mount without creating lock or SHM files. The importer deliberately does not enable immutable mode when any sidecar exists, because immutable SQLite would ignore later file changes and could omit committed WAL-only rows.
+
+The importer includes committed WAL contents, initializes the MySQL schema, requires an empty first-use target, copies all five data tables in one serializable transaction, and compares exact row counts plus canonical SHA-256 digests of every field before committing. The same transaction records a source-schema/content fingerprint in MySQL. A rerun with the identical SQLite snapshot is a read-only success and cannot overwrite newer MySQL rows; a changed source is rejected.
 
 Use verified `db_tls: true` whenever the MySQL certificate matches its service name. `skip-verify` is suitable only as a transitional option on a trusted private network when an automatically generated certificate lacks the required SAN; configure the MySQL application account with `REQUIRE SSL`. Do not use `false` outside an explicitly accepted plaintext deployment.
 

@@ -138,7 +138,7 @@ func MigrateSQLiteToMySQL(ctx context.Context, sourcePath string, cfg config.Arc
 	}
 	defer source.Close()
 	if err := configureArchiveSQLiteDB(ctx, source); err != nil {
-		return stats, fmt.Errorf("validate source sqlite database: %w", err)
+		return stats, fmt.Errorf("validate source sqlite database (stop all writers; preserve any WAL/SHM sidecars and provide a complete readable pair or allow SQLite write access to their directory for lock bookkeeping): %w", err)
 	}
 	var sourceVersion int
 	if err := source.QueryRowContext(ctx, `PRAGMA user_version`).Scan(&sourceVersion); err != nil {
@@ -341,6 +341,20 @@ func openArchiveSQLiteReadOnly(sourcePath string) (*sql.DB, error) {
 	} else if !info.Mode().IsRegular() {
 		return nil, fmt.Errorf("sqlite source %q is not a regular file", absPath)
 	}
+	dsn, err := archiveSQLiteReadOnlyDSN(absPath)
+	if err != nil {
+		return nil, err
+	}
+	db, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		return nil, fmt.Errorf("open sqlite source: %w", err)
+	}
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
+	return db, nil
+}
+
+func archiveSQLiteReadOnlyDSN(absPath string) (string, error) {
 	uriPath := filepath.ToSlash(absPath)
 	if volume := filepath.VolumeName(absPath); volume != "" && !strings.HasPrefix(uriPath, "/") {
 		uriPath = "/" + uriPath
@@ -351,13 +365,24 @@ func openArchiveSQLiteReadOnly(sourcePath string) (*sql.DB, error) {
 	query.Set("_busy_timeout", "5000")
 	query.Set("_query_only", "1")
 	uri.RawQuery = query.Encode()
-	db, err := sql.Open("sqlite", uri.String())
-	if err != nil {
-		return nil, fmt.Errorf("open sqlite source: %w", err)
+
+	// SQLite normally needs to create or update shared-memory state before it
+	// can read a WAL database, even when every SQL statement is read-only. A
+	// cleanly stopped database without journal sidecars is safe to open as an
+	// immutable snapshot, which also permits a read-only filesystem mount. Do
+	// not use immutable mode when any sidecar exists: doing so could silently
+	// omit committed transactions that are present only in the WAL.
+	for _, suffix := range []string{"-wal", "-shm", "-journal"} {
+		sidecarPath := absPath + suffix
+		if _, err := os.Lstat(sidecarPath); err == nil {
+			return uri.String(), nil
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return "", fmt.Errorf("stat sqlite source sidecar %q: %w", sidecarPath, err)
+		}
 	}
-	db.SetMaxOpenConns(1)
-	db.SetMaxIdleConns(1)
-	return db, nil
+	query.Set("immutable", "1")
+	uri.RawQuery = query.Encode()
+	return uri.String(), nil
 }
 
 func copyArchiveMigrationTable(ctx context.Context, source *sql.Tx, target *sql.Tx, table archiveMigrationTable) (int64, error) {
