@@ -39,6 +39,11 @@ updates:
         update-types:
           - minor
           - patch
+    # Home Assistant installs these platform requirements dynamically and the
+    # real-HA harness must use the exact versions from its camera/stream manifests.
+    ignore:
+      - dependency-name: PyTurboJPEG
+      - dependency-name: av
 
   - package-ecosystem: docker
     directory: /bridge
