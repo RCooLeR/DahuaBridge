@@ -27,6 +27,19 @@ updates:
           - minor
           - patch
 
+  - package-ecosystem: pip
+    directory: /integration
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      python-non-major:
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch
+
   - package-ecosystem: docker
     directory: /bridge
     schedule:

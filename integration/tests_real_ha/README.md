@@ -11,7 +11,7 @@ python -m pip install -r integration/requirements-test-ha.txt
 python -m pytest -c integration/pytest-ha.ini integration/tests_real_ha
 ```
 
-The pinned test package selects Home Assistant 2026.9.1. Camera and stream
+The pinned test package selects Home Assistant 2026.10.1. Camera and stream
 requirements are pinned separately because HA normally installs platform
 dependencies dynamically, while the test fixtures disable that installation.
 

@@ -212,15 +212,25 @@ jobs:
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.14"
+          cache: pip
+          cache-dependency-path: integration/requirements-test-ha.txt
       - name: Install real HA test dependencies
         run: python -m pip install -r integration/requirements-test-ha.txt
       - name: Exercise real integration setup, options and unload
         run: python -m pytest -c integration/pytest-ha.ini integration/tests_real_ha
 
   ha-cards:
-    name: HA Cards Checks
+    name: HA Cards Checks (Node ${{ matrix.node-version }})
     runs-on: ubuntu-24.04
     timeout-minutes: 15
+
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version:
+          - "22.22.2"
+          - "24"
+          - "26"
 
     defaults:
       run:
@@ -235,13 +245,20 @@ jobs:
       - name: Set up Node
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: "24"
+          node-version: ${{ matrix.node-version }}
           check-latest: true
           cache: npm
           cache-dependency-path: ha-cards/package-lock.json
 
+      - name: Use pinned npm
+        run: |
+          npm install --global --prefix "$RUNNER_TEMP/npm12" npm@12.2.0
+          echo "$RUNNER_TEMP/npm12/bin" >> "$GITHUB_PATH"
+
       - name: Install
-        run: npm ci
+        run: |
+          test "$(npm --version)" = "12.2.0"
+          npm ci
 
       - name: Typecheck
         run: npm run lint
@@ -253,4 +270,5 @@ jobs:
         run: npm run build
 
       - name: Browser smoke
+        if: matrix.node-version == '24'
         run: npm run test:browser -- "$(command -v google-chrome)"
