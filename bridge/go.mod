@@ -4,7 +4,7 @@ go 1.27.2
 
 require (
 	github.com/bluenviron/gortsplib/v5 v5.6.7
-	github.com/go-chi/chi/v5 v5.3.2
+	github.com/go-chi/chi/v5 v5.4.0
 	github.com/go-sql-driver/mysql v1.10.1
 	github.com/pion/rtp v1.10.5
 	github.com/pion/webrtc/v4 v4.2.23
