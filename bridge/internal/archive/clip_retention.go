@@ -52,7 +52,7 @@ func rememberArchiveClipOwnership(ctx context.Context, tx *sql.Tx, dialect archi
 
 // Acknowledge only after filesystem deletion succeeds. Keeping ownership and
 // clip metadata until then makes failed deletions retryable across restarts.
-func (s *SQLiteStore) finishClipCleanup(ctx context.Context, clipID string) error {
+func (s *sqlStore) finishClipCleanup(ctx context.Context, clipID string) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -70,7 +70,7 @@ func (s *SQLiteStore) finishClipCleanup(ctx context.Context, clipID string) erro
 	return tx.Commit()
 }
 
-func (s *SQLiteStore) clipForCleanup(ctx context.Context, clipID string) (mediaapi.ClipInfo, error) {
+func (s *sqlStore) clipForCleanup(ctx context.Context, clipID string) (mediaapi.ClipInfo, error) {
 	var clip mediaapi.ClipInfo
 	err := s.db.QueryRowContext(ctx, `SELECT c.clip_id, c.stream_id, c.file_path
 		FROM bridge_mp4_clips c JOIN archive_clip_retention r ON c.clip_id = r.clip_id

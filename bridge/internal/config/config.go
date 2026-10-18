@@ -10,7 +10,6 @@ import (
 	"strings"
 	"time"
 
-	"RCooLeR/DahuaBridge/internal/ptr"
 	"go.yaml.in/yaml/v3"
 )
 
@@ -305,7 +304,7 @@ func defaultConfig() Config {
 			MaxParallelJobs:   2,
 			PrefetchSMD:       true,
 			PrefetchIVS:       true,
-			ExportEventMP4:    ptr.Bool(true),
+			ExportEventMP4:    new(true),
 			ExportDelay:       time.Hour,
 			Cron:              "5,35 * * * *",
 		},
@@ -525,7 +524,7 @@ func (c *Config) normalize() error {
 		c.Archive.MaxParallelJobs = 2
 	}
 	if c.Archive.ExportEventMP4 == nil {
-		c.Archive.ExportEventMP4 = ptr.Bool(true)
+		c.Archive.ExportEventMP4 = new(true)
 	}
 	if c.Archive.ExportDelay <= 0 {
 		c.Archive.ExportDelay = time.Hour
@@ -756,7 +755,7 @@ func normalizeDevice(dev *DeviceConfig) error {
 	}
 
 	if dev.Enabled == nil {
-		dev.Enabled = ptr.Bool(true)
+		dev.Enabled = new(true)
 	}
 	dev.OnvifUsername = strings.TrimSpace(dev.OnvifUsername)
 	dev.OnvifPassword = strings.TrimSpace(dev.OnvifPassword)

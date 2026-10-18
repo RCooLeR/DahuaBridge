@@ -45,7 +45,7 @@ type activeEventClipAsset struct {
 	ClipID         string
 }
 
-func (s *SQLiteStore) UpsertClipAsset(ctx context.Context, recordKind string, recordID string, deviceID string, sourceFilePath string, clip mediaapi.ClipInfo) error {
+func (s *sqlStore) UpsertClipAsset(ctx context.Context, recordKind string, recordID string, deviceID string, sourceFilePath string, clip mediaapi.ClipInfo) error {
 	recordKind = normalizeArchiveRecordKind(recordKind)
 	recordID = strings.TrimSpace(recordID)
 	deviceID = strings.TrimSpace(deviceID)
@@ -144,7 +144,7 @@ func (s *SQLiteStore) UpsertClipAsset(ctx context.Context, recordKind string, re
 	return tx.Commit()
 }
 
-func (s *SQLiteStore) upsertClipAssetSQL() string {
+func (s *sqlStore) upsertClipAssetSQL() string {
 	if s.dialect == archiveDialectMySQL {
 		return `INSERT INTO bridge_mp4_clips (
 			clip_id, device_id, channel, stream_id, start_time, end_time, file_path, status, error_text, created_at, updated_at
@@ -175,7 +175,7 @@ func (s *SQLiteStore) upsertClipAssetSQL() string {
 		updated_at=excluded.updated_at`
 }
 
-func (s *SQLiteStore) LoadClipAssets(ctx context.Context, deviceID string, items []dahua.NVRRecording) (map[string]storedClipAsset, error) {
+func (s *sqlStore) LoadClipAssets(ctx context.Context, deviceID string, items []dahua.NVRRecording) (map[string]storedClipAsset, error) {
 	deviceID = strings.TrimSpace(deviceID)
 	if deviceID == "" || len(items) == 0 {
 		return map[string]storedClipAsset{}, nil
@@ -231,7 +231,7 @@ func (s *SQLiteStore) LoadClipAssets(ctx context.Context, deviceID string, items
 	return result, rows.Err()
 }
 
-func (s *SQLiteStore) DeleteClipAsset(ctx context.Context, recordKind string, recordID string, deviceID string) error {
+func (s *sqlStore) DeleteClipAsset(ctx context.Context, recordKind string, recordID string, deviceID string) error {
 	recordKind = normalizeArchiveRecordKind(recordKind)
 	recordID = strings.TrimSpace(recordID)
 	deviceID = strings.TrimSpace(deviceID)
@@ -251,7 +251,7 @@ func (s *SQLiteStore) DeleteClipAsset(ctx context.Context, recordKind string, re
 	return nil
 }
 
-func (s *SQLiteStore) CountActiveClipJobs(ctx context.Context) (int, error) {
+func (s *sqlStore) CountActiveClipJobs(ctx context.Context) (int, error) {
 	var count int
 	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM smd_ivs_events
 		WHERE mp4_status IN ('recording', 'transcoding', 'queued', 'downloading')`).Scan(&count); err != nil {
@@ -260,7 +260,7 @@ func (s *SQLiteStore) CountActiveClipJobs(ctx context.Context) (int, error) {
 	return count, nil
 }
 
-func (s *SQLiteStore) LoadPendingEventClipCandidates(ctx context.Context, cutoff time.Time, readyBefore time.Time, limit int, allowlists map[string][]int) ([]eventClipCandidate, error) {
+func (s *sqlStore) LoadPendingEventClipCandidates(ctx context.Context, cutoff time.Time, readyBefore time.Time, limit int, allowlists map[string][]int) ([]eventClipCandidate, error) {
 	if limit <= 0 {
 		limit = archiveQueryLimit
 	}
@@ -377,7 +377,7 @@ func archiveEventVideoChannelSQLList(channels []int) (string, []any) {
 	return "channel IN (" + strings.Join(placeholders, ",") + ")", args
 }
 
-func (s *SQLiteStore) LoadEventClipAssetsForReconciliation(ctx context.Context, limit int) ([]activeEventClipAsset, error) {
+func (s *sqlStore) LoadEventClipAssetsForReconciliation(ctx context.Context, limit int) ([]activeEventClipAsset, error) {
 	if limit <= 0 {
 		limit = archiveQueryLimit
 	}

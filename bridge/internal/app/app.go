@@ -117,7 +117,7 @@ func Run(ctx context.Context, cfg config.Config, info buildinfo.BuildInfo) error
 		}
 		attachRelayDiagnostics(mediaManager, metricsRegistry, relay)
 	}
-	adminServer = httpserver.New(cfg.HTTP, cfg.Archive, logger, metricsRegistry, probeStore, services, mediaManager, adminActions, nil)
+	adminServer = httpserver.New(cfg.HTTP, cfg.Archive, logger, metricsRegistry, probeStore, services, mediaManager, adminActions)
 
 	serverErrors := make(chan error, 1)
 	serverWG.Go(func() {

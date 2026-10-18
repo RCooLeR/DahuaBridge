@@ -3,17 +3,222 @@ package archive
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
+	"net"
+	"strconv"
 	"strings"
 	"time"
+
+	"RCooLeR/DahuaBridge/internal/config"
+
+	mysql "github.com/go-sql-driver/mysql"
 )
 
 const mysqlArchiveSchemaVersion = 3
 
+func openArchiveMySQLDB(ctx context.Context, cfg config.ArchiveConfig) (*sql.DB, error) {
+	dsn, err := prepareArchiveMySQLConfig(cfg)
+	if err != nil {
+		return nil, err
+	}
+	connector, err := mysql.NewConnector(dsn)
+	if err != nil {
+		return nil, err
+	}
+	db := sql.OpenDB(connector)
+	maxOpen := cfg.DBMaxOpenConns
+	if maxOpen <= 0 {
+		maxOpen = 8
+	}
+	maxIdle := cfg.DBMaxIdleConns
+	if maxIdle < 0 {
+		maxIdle = 0
+	}
+	if maxIdle > maxOpen {
+		maxIdle = maxOpen
+	}
+	db.SetMaxOpenConns(maxOpen)
+	db.SetMaxIdleConns(maxIdle)
+	if cfg.DBConnMaxLifetime > 0 {
+		db.SetConnMaxLifetime(cfg.DBConnMaxLifetime)
+	}
+	if cfg.DBConnMaxIdleTime > 0 {
+		db.SetConnMaxIdleTime(cfg.DBConnMaxIdleTime)
+	}
+	connectTimeout := cfg.DBConnectTimeout
+	if connectTimeout <= 0 {
+		connectTimeout = time.Minute
+	}
+	pingCtx, cancel := context.WithTimeout(ctx, connectTimeout)
+	defer cancel()
+	var lastErr error
+	for delay := 250 * time.Millisecond; ; delay = min(delay*2, 5*time.Second) {
+		if err := db.PingContext(pingCtx); err == nil {
+			break
+		} else {
+			lastErr = err
+			if !isTransientMySQLConnectError(err) {
+				_ = db.Close()
+				return nil, err
+			}
+		}
+		timer := time.NewTimer(delay)
+		select {
+		case <-pingCtx.Done():
+			timer.Stop()
+			_ = db.Close()
+			return nil, fmt.Errorf("connect to mysql within %s: %w (last connection error: %v)", connectTimeout, pingCtx.Err(), lastErr)
+		case <-timer.C:
+		}
+	}
+	return db, nil
+}
+
+func prepareArchiveMySQLConfig(cfg config.ArchiveConfig) (*mysql.Config, error) {
+	dsn, err := archiveMySQLConfig(cfg)
+	if err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(dsn.DBName) == "" {
+		return nil, errors.New("mysql DSN must select a database")
+	}
+	// MySQL 9.x supports row aliases used by our upserts. Parameter
+	// interpolation avoids an extra prepare round-trip per archive batch while
+	// the driver still performs type-aware escaping.
+	hardenArchiveMySQLConfig(dsn)
+	if dsn.Collation == "" {
+		// The protocol handshake only has one byte for the collation ID, so
+		// MySQL 8+/9 collations such as utf8mb4_0900_bin cannot be selected
+		// here (their IDs are greater than 255). Use the compatible binary
+		// utf8mb4 handshake collation; the schema itself still uses
+		// utf8mb4_0900_bin for stored identifiers.
+		dsn.Collation = "utf8mb4_bin"
+	}
+	if dsn.Timeout <= 0 {
+		dsn.Timeout = 5 * time.Second
+	}
+	if dsn.ReadTimeout <= 0 {
+		dsn.ReadTimeout = 30 * time.Second
+	}
+	if dsn.WriteTimeout <= 0 {
+		dsn.WriteTimeout = 30 * time.Second
+	}
+	if strings.TrimSpace(dsn.ConnectionAttributes) == "" {
+		dsn.ConnectionAttributes = "program_name:dahuabridge"
+	}
+	return dsn, nil
+}
+
+func isTransientMySQLConnectError(err error) bool {
+	if serverErr, ok := errors.AsType[*mysql.MySQLError](err); ok {
+		switch serverErr.Number {
+		case 1040, // Too many connections.
+			1203: // Per-user connection limit reached.
+			return true
+		default:
+			return false
+		}
+	}
+	_, ok := errors.AsType[net.Error](err)
+	return ok
+}
+
+func hardenArchiveMySQLConfig(dsn *mysql.Config) {
+	dsn.InterpolateParams = true
+	dsn.MultiStatements = false
+	dsn.AllowAllFiles = false
+	dsn.AllowCleartextPasswords = false
+	dsn.AllowFallbackToPlaintext = false
+	dsn.AllowOldPasswords = false
+	dsn.CheckConnLiveness = true
+	dsn.RejectReadOnly = true
+}
+
+func archiveMySQLConfig(cfg config.ArchiveConfig) (*mysql.Config, error) {
+	tlsMode, err := normalizeArchiveMySQLTLSMode(cfg.DBTLS)
+	if err != nil {
+		return nil, err
+	}
+	var dsn *mysql.Config
+	rawDSN := strings.TrimSpace(cfg.DBDSN)
+	if rawDSN != "" {
+		dsn, err = mysql.ParseDSN(rawDSN)
+		if err != nil {
+			return nil, fmt.Errorf("parse mysql DSN: %w", err)
+		}
+		// ParseDSN deliberately finds the database/query boundary after the last
+		// slash, so it remains correct when a password contains '?' or '/'. Its
+		// normalized TLSConfig also preserves an explicit tls=false. Do not parse
+		// the raw DSN a second time: doing so can mistake password text for query
+		// parameters and weaken or reject the requested transport policy.
+		if strings.TrimSpace(dsn.TLSConfig) == "" {
+			applyArchiveMySQLTLSMode(dsn, tlsMode)
+		} else {
+			dsnTLSMode, err := normalizeArchiveMySQLTLSMode(dsn.TLSConfig)
+			if err != nil {
+				return nil, fmt.Errorf("invalid tls parameter in archive.db_dsn: %w", err)
+			}
+			if dsnTLSMode != tlsMode {
+				return nil, fmt.Errorf("archive.db_tls %q conflicts with the tls parameter in archive.db_dsn", tlsMode)
+			}
+			applyArchiveMySQLTLSMode(dsn, dsnTLSMode)
+		}
+	} else {
+		if strings.TrimSpace(cfg.DBHost) == "" {
+			return nil, errors.New("archive.db_host is required for mysql")
+		}
+		if strings.TrimSpace(cfg.DBName) == "" {
+			return nil, errors.New("archive.db_name is required for mysql")
+		}
+		if strings.TrimSpace(cfg.DBUser) == "" {
+			return nil, errors.New("archive.db_user is required for mysql")
+		}
+		if cfg.DBPassword == "" {
+			return nil, errors.New("archive mysql password is required")
+		}
+		port := cfg.DBPort
+		if port <= 0 {
+			port = 3306
+		}
+		dsn = mysql.NewConfig()
+		dsn.User = strings.TrimSpace(cfg.DBUser)
+		dsn.Passwd = cfg.DBPassword
+		dsn.Net = "tcp"
+		dsn.Addr = net.JoinHostPort(strings.TrimSpace(cfg.DBHost), strconv.Itoa(port))
+		dsn.DBName = strings.TrimSpace(cfg.DBName)
+		applyArchiveMySQLTLSMode(dsn, tlsMode)
+	}
+	return dsn, nil
+}
+
+func normalizeArchiveMySQLTLSMode(value string) (string, error) {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "", "true":
+		return "true", nil
+	case "false":
+		return "false", nil
+	case "skip-verify":
+		return "skip-verify", nil
+	case "preferred":
+		return "", errors.New("archive.db_tls=preferred is unsafe because it permits plaintext fallback; use true, skip-verify, or false")
+	default:
+		return "", errors.New("archive.db_tls must be one of: false, true, skip-verify")
+	}
+}
+
+func applyArchiveMySQLTLSMode(dsn *mysql.Config, mode string) {
+	if mode == "false" {
+		dsn.TLSConfig = ""
+		return
+	}
+	dsn.TLSConfig = mode
+}
+
 // initMySQLSchema applies forward-only, idempotent schema migrations. MySQL
 // auto-commits DDL, so a named lock serializes startup across bridge replicas
 // and every migration is safe to resume after an interrupted deployment.
-func (s *SQLiteStore) initMySQLSchema(ctx context.Context) error {
+func (s *sqlStore) initMySQLSchema(ctx context.Context) error {
 	conn, err := s.db.Conn(ctx)
 	if err != nil {
 		return err

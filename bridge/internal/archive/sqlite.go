@@ -11,9 +11,11 @@ import (
 	"time"
 
 	"RCooLeR/DahuaBridge/internal/dahua"
+
+	_ "modernc.org/sqlite"
 )
 
-type SQLiteStore struct {
+type sqlStore struct {
 	db      *sql.DB
 	dialect archiveDialect
 }
@@ -27,15 +29,52 @@ const (
 
 const sqliteArchiveSchemaVersion = 2
 
-func NewSQLiteStore(db *sql.DB) *SQLiteStore {
-	return &SQLiteStore{db: db, dialect: archiveDialectSQLite}
+func openArchiveSQLiteDB(ctx context.Context, dbPath string) (*sql.DB, error) {
+	// DSN pragmas are applied to every physical connection the pool opens.
+	// Defensive mode prevents ordinary SQL from deliberately corrupting the
+	// database file. Disabling double-quoted strings also turns misspelled
+	// identifiers into errors instead of silently treating them as literals.
+	dsn := dbPath + "?_defensive=1&_dqs=0&_error_rc=1&_busy_timeout=5000&_journal_mode=WAL&_synchronous=NORMAL&_foreign_keys=1"
+	db, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		return nil, err
+	}
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
+	if err := configureArchiveSQLiteDB(ctx, db); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	return db, nil
 }
 
-func newMySQLStore(db *sql.DB) *SQLiteStore {
-	return &SQLiteStore{db: db, dialect: archiveDialectMySQL}
+func configureArchiveSQLiteDB(ctx context.Context, db *sql.DB) error {
+	rows, err := db.QueryContext(ctx, `PRAGMA quick_check`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var result string
+		if err := rows.Scan(&result); err != nil {
+			return err
+		}
+		if strings.TrimSpace(strings.ToLower(result)) != "ok" {
+			return fmt.Errorf("sqlite quick_check failed: %s", result)
+		}
+	}
+	return rows.Err()
 }
 
-func (s *SQLiteStore) InitSchema(ctx context.Context) error {
+func newSQLiteStore(db *sql.DB) *sqlStore {
+	return &sqlStore{db: db, dialect: archiveDialectSQLite}
+}
+
+func newMySQLStore(db *sql.DB) *sqlStore {
+	return &sqlStore{db: db, dialect: archiveDialectMySQL}
+}
+
+func (s *sqlStore) InitSchema(ctx context.Context) error {
 	if s.dialect == archiveDialectMySQL {
 		return s.initMySQLSchema(ctx)
 	}
@@ -149,7 +188,7 @@ func (s *SQLiteStore) InitSchema(ctx context.Context) error {
 	return nil
 }
 
-func (s *SQLiteStore) dropSchema(ctx context.Context) error {
+func (s *sqlStore) dropSchema(ctx context.Context) error {
 	for _, table := range []string{
 		"archive_event_files",
 		"archive_events",
@@ -169,7 +208,7 @@ func (s *SQLiteStore) dropSchema(ctx context.Context) error {
 	return nil
 }
 
-func (s *SQLiteStore) UpsertArchiveFiles(ctx context.Context, deviceID string, items []dahua.NVRRecording, seenAt time.Time) (err error) {
+func (s *sqlStore) UpsertArchiveFiles(ctx context.Context, deviceID string, items []dahua.NVRRecording, seenAt time.Time) (err error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -215,7 +254,7 @@ func (s *SQLiteStore) UpsertArchiveFiles(ctx context.Context, deviceID string, i
 	return err
 }
 
-func (s *SQLiteStore) upsertArchiveFilesSQL() string {
+func (s *sqlStore) upsertArchiveFilesSQL() string {
 	if s.dialect == archiveDialectMySQL {
 		return `INSERT INTO nvr_recording_chunks (
 			chunk_id, device_id, channel, start_time, end_time, file_path, video_stream, disk, partition_number, cluster,
@@ -246,7 +285,7 @@ func (s *SQLiteStore) upsertArchiveFilesSQL() string {
 		last_seen_at=excluded.last_seen_at`
 }
 
-func (s *SQLiteStore) UpsertArchiveEvents(ctx context.Context, deviceID string, items []dahua.NVRRecording, seenAt time.Time) (err error) {
+func (s *sqlStore) UpsertArchiveEvents(ctx context.Context, deviceID string, items []dahua.NVRRecording, seenAt time.Time) (err error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -293,7 +332,7 @@ func (s *SQLiteStore) UpsertArchiveEvents(ctx context.Context, deviceID string, 
 	return err
 }
 
-func (s *SQLiteStore) upsertArchiveEventsSQL() string {
+func (s *sqlStore) upsertArchiveEventsSQL() string {
 	if s.dialect == archiveDialectMySQL {
 		return `INSERT INTO smd_ivs_events (
 			event_id, device_id, channel, event_type, start_time, end_time, rtsp_main_url, rtsp_sub_url,
@@ -325,7 +364,7 @@ func (s *SQLiteStore) upsertArchiveEventsSQL() string {
 // PruneOlderThan removes expired index rows and returns a bounded batch of
 // pending export cleanups. Clip metadata remains until finishClipCleanup;
 // returned IDs can therefore recur after an interrupted or failed deletion.
-func (s *SQLiteStore) PruneOlderThan(ctx context.Context, cutoff time.Time) (clipIDs []string, err error) {
+func (s *sqlStore) PruneOlderThan(ctx context.Context, cutoff time.Time) (clipIDs []string, err error) {
 	formatted := cutoff.UTC().Format(time.RFC3339Nano)
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {

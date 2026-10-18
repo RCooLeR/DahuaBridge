@@ -199,12 +199,6 @@ type stubActionReader struct {
 	refreshNVR    func(context.Context, string) (*dahua.ProbeResult, error)
 }
 
-type stubEventReader struct {
-	list  func(string, string, dahua.DeviceKind, string, string, int) []dahua.Event
-	stats func() map[string]any
-	clear func() int
-}
-
 func (s stubMediaReader) Enabled() bool {
 	return s.enabled
 }
@@ -496,40 +490,19 @@ func (s stubActionReader) RefreshNVRInventory(ctx context.Context, deviceID stri
 	return s.refreshNVR(ctx, deviceID)
 }
 
-func (s stubEventReader) ListEvents(deviceID string, childID string, deviceKind dahua.DeviceKind, code string, action string, limit int) []dahua.Event {
-	if s.list == nil {
-		return nil
-	}
-	return s.list(deviceID, childID, deviceKind, code, action, limit)
-}
-
-func (s stubEventReader) EventStats() map[string]any {
-	if s.stats == nil {
-		return map[string]any{"capacity": 0, "count": 0}
-	}
-	return s.stats()
-}
-
-func (s stubEventReader) ClearEvents() int {
-	if s.clear == nil {
-		return 0
-	}
-	return s.clear()
-}
-
-func newTestServer(actions ActionReader, events EventReader) *Server {
+func newTestServer(actions ActionReader) *Server {
 	return newTestServerWithConfig(config.HTTPConfig{
 		ListenAddress: ":0",
 		MetricsPath:   "/metrics",
 		HealthPath:    "/healthz",
-	}, stubSnapshotReader{}, nil, actions, events)
+	}, stubSnapshotReader{}, nil, actions)
 }
 
-func newTestServerWithConfig(cfg config.HTTPConfig, snapshots SnapshotReader, media MediaReader, actions ActionReader, events EventReader) *Server {
-	return newTestServerWithReaders(cfg, stubProbeReader{}, snapshots, media, actions, events)
+func newTestServerWithConfig(cfg config.HTTPConfig, snapshots SnapshotReader, media MediaReader, actions ActionReader) *Server {
+	return newTestServerWithReaders(cfg, stubProbeReader{}, snapshots, media, actions)
 }
 
-func newTestServerWithReaders(cfg config.HTTPConfig, probes ProbeReader, snapshots SnapshotReader, media MediaReader, actions ActionReader, events EventReader) *Server {
+func newTestServerWithReaders(cfg config.HTTPConfig, probes ProbeReader, snapshots SnapshotReader, media MediaReader, actions ActionReader) *Server {
 	return New(
 		cfg,
 		config.ArchiveConfig{},
@@ -539,7 +512,6 @@ func newTestServerWithReaders(cfg config.HTTPConfig, probes ProbeReader, snapsho
 		snapshots,
 		media,
 		actions,
-		events,
 	)
 }
 
@@ -554,7 +526,7 @@ func TestUnlockVTOLockEndpoint(t *testing.T) {
 			}
 			return nil
 		},
-	}, stubEventReader{})
+	})
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/vto/front_vto/locks/0/unlock", nil)
 	rec := httptest.NewRecorder()
@@ -581,7 +553,7 @@ func TestUnlockVTOLockEndpoint(t *testing.T) {
 }
 
 func TestAPICORSPrefightRequest(t *testing.T) {
-	server := newTestServer(stubActionReader{}, stubEventReader{})
+	server := newTestServer(stubActionReader{})
 
 	req := httptest.NewRequest(http.MethodOptions, "/api/v1/nvr/west20_nvr/channels/11/ptz", nil)
 	req.Header.Set("Origin", "http://homeassistant.local:8123")
@@ -606,7 +578,7 @@ func TestAPICORSPrefightRequest(t *testing.T) {
 }
 
 func TestAPIResponsesIncludeCORSHeaders(t *testing.T) {
-	server := newTestServer(stubActionReader{}, stubEventReader{})
+	server := newTestServer(stubActionReader{})
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/status", nil)
 	req.Header.Set("Origin", "http://homeassistant.local:8123")
@@ -633,7 +605,7 @@ func TestAPICORSCanRestrictAllowedOrigins(t *testing.T) {
 		AllowedOrigins: []string{"https://ha.example.com"},
 		AuthQueryToken: true,
 		AuthTokenEnv:   "DAHUABRIDGE_HTTP_AUTH_TOKEN",
-	}, stubSnapshotReader{}, nil, stubActionReader{}, stubEventReader{})
+	}, stubSnapshotReader{}, nil, stubActionReader{})
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/status", nil)
 	req.Header.Set("Origin", "https://other.example.com")
@@ -663,7 +635,7 @@ func TestAPIAuthProtectsControlRoutesWhenConfigured(t *testing.T) {
 			unlocked = true
 			return nil
 		},
-	}, stubEventReader{})
+	})
 
 	unauthenticated := httptest.NewRequest(http.MethodPost, "/api/v1/vto/front_vto/locks/0/unlock", nil)
 	unauthenticatedRec := httptest.NewRecorder()
@@ -696,7 +668,7 @@ func TestAPIAuthKeepsStatusAndMetricsOpen(t *testing.T) {
 		HealthPath:    "/healthz",
 		AuthToken:     "secret-token",
 		AuthTokenEnv:  "DAHUABRIDGE_HTTP_AUTH_TOKEN",
-	}, stubSnapshotReader{}, nil, stubActionReader{}, stubEventReader{})
+	}, stubSnapshotReader{}, nil, stubActionReader{})
 
 	for _, path := range []string{"/healthz", "/readyz", "/api/v1/status", "/metrics"} {
 		req := httptest.NewRequest(http.MethodGet, path, nil)
@@ -720,7 +692,7 @@ func TestAPIAuthAcceptsQueryTokenWhenEnabled(t *testing.T) {
 		listStreams: func(bool) []streams.Entry {
 			return nil
 		},
-	}, nil, stubActionReader{}, stubEventReader{})
+	}, nil, stubActionReader{})
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/streams?auth_token=secret-token", nil)
 	rec := httptest.NewRecorder()
@@ -743,7 +715,7 @@ func TestAPIAuthRejectsQueryTokenWhenDisabled(t *testing.T) {
 		listStreams: func(bool) []streams.Entry {
 			return nil
 		},
-	}, nil, stubActionReader{}, stubEventReader{})
+	}, nil, stubActionReader{})
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/streams?auth_token=secret-token", nil)
 	rec := httptest.NewRecorder()
@@ -774,7 +746,7 @@ func TestMaxRequestBodyMiddlewareCapsBodySize(t *testing.T) {
 }
 
 func TestUnlockVTOLockEndpointRejectsInvalidIndex(t *testing.T) {
-	server := newTestServer(stubActionReader{}, stubEventReader{})
+	server := newTestServer(stubActionReader{})
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/vto/front_vto/locks/not-a-number/unlock", nil)
 	rec := httptest.NewRecorder()
@@ -791,7 +763,7 @@ func TestUnlockVTOLockEndpointReturnsBadGatewayForDeviceError(t *testing.T) {
 		unlock: func(_ context.Context, _ string, _ int) error {
 			return errors.New("rpc failure")
 		},
-	}, stubEventReader{})
+	})
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/vto/front_vto/locks/0/unlock", nil)
 	rec := httptest.NewRecorder()
@@ -815,7 +787,7 @@ func TestUnlockVTOLockEndpointDetectsTypedNotFound(t *testing.T) {
 		unlock: func(_ context.Context, _ string, _ int) error {
 			return fmt.Errorf("lookup failed: %w", dahua.ErrDeviceNotFound)
 		},
-	}, stubEventReader{})
+	})
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/vto/front_vto/locks/0/unlock", nil)
 	rec := httptest.NewRecorder()
@@ -835,7 +807,7 @@ func TestHangupVTOCallEndpoint(t *testing.T) {
 			}
 			return nil
 		},
-	}, stubEventReader{})
+	})
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/vto/front_vto/call/hangup", nil)
 	rec := httptest.NewRecorder()
@@ -858,7 +830,7 @@ func TestAnswerVTOCallEndpoint(t *testing.T) {
 			}
 			return nil
 		},
-	}, stubEventReader{})
+	})
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/vto/front_vto/call/answer", nil)
 	rec := httptest.NewRecorder()
@@ -900,7 +872,7 @@ func TestVTOControlsEndpoint(t *testing.T) {
 				ValidationNotes:             []string{"vto_audio_control_surface_not_exposed"},
 			}, nil
 		},
-	}, stubEventReader{})
+	})
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/vto/front_vto/controls", nil)
 	rec := httptest.NewRecorder()
@@ -925,7 +897,7 @@ func TestVTORecordingEndpoint(t *testing.T) {
 			}
 			return nil
 		},
-	}, stubEventReader{})
+	})
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/vto/front_vto/recording", strings.NewReader(`{"auto_record_enabled":true}`))
 	rec := httptest.NewRecorder()
@@ -945,7 +917,7 @@ func TestAnswerVTOCallEndpointDetectsTypedNotFound(t *testing.T) {
 		answer: func(_ context.Context, _ string) error {
 			return fmt.Errorf("lookup failed: %w", dahua.ErrDeviceNotFound)
 		},
-	}, stubEventReader{})
+	})
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/vto/front_vto/call/answer", nil)
 	rec := httptest.NewRecorder()
@@ -962,7 +934,7 @@ func TestHangupVTOCallEndpointDetectsTypedNotFound(t *testing.T) {
 		hangup: func(_ context.Context, _ string) error {
 			return fmt.Errorf("lookup failed: %w", dahua.ErrDeviceNotFound)
 		},
-	}, stubEventReader{})
+	})
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/vto/front_vto/call/hangup", nil)
 	rec := httptest.NewRecorder()
@@ -988,7 +960,7 @@ func TestProbeDeviceEndpoint(t *testing.T) {
 				},
 			}, nil
 		},
-	}, stubEventReader{})
+	})
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/devices/front_vto/probe", nil)
 	rec := httptest.NewRecorder()
@@ -1036,7 +1008,7 @@ func TestProbeAllDevicesEndpoint(t *testing.T) {
 				},
 			}
 		},
-	}, stubEventReader{})
+	})
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/devices/probe-all", nil)
 	rec := httptest.NewRecorder()
@@ -1084,7 +1056,7 @@ func TestProbeAllDevicesEndpointPartialFailure(t *testing.T) {
 				},
 			}
 		},
-	}, stubEventReader{})
+	})
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/devices/probe-all", nil)
 	rec := httptest.NewRecorder()
@@ -1115,7 +1087,7 @@ func TestProbeDeviceEndpointDetectsTypedNotFound(t *testing.T) {
 		probe: func(_ context.Context, _ string) (*dahua.ProbeResult, error) {
 			return nil, fmt.Errorf("probe lookup: %w", dahua.ErrDeviceNotFound)
 		},
-	}, stubEventReader{})
+	})
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/devices/front_vto/probe", nil)
 	rec := httptest.NewRecorder()
@@ -1150,7 +1122,7 @@ func TestRotateDeviceCredentialsEndpoint(t *testing.T) {
 				},
 			}, nil
 		},
-	}, stubEventReader{})
+	})
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/devices/yard_ipc/credentials", strings.NewReader(`{"username":"service","password":"new-secret","onvif_enabled":true}`))
 	req.Header.Set("Content-Type", "application/json")
@@ -1172,7 +1144,7 @@ func TestRotateDeviceCredentialsEndpoint(t *testing.T) {
 }
 
 func TestRotateDeviceCredentialsEndpointRejectsInvalidJSON(t *testing.T) {
-	server := newTestServer(stubActionReader{}, stubEventReader{})
+	server := newTestServer(stubActionReader{})
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/devices/yard_ipc/credentials", strings.NewReader("{"))
 	req.Header.Set("Content-Type", "application/json")
@@ -1190,7 +1162,7 @@ func TestRotateDeviceCredentialsEndpointDetectsTypedNotFound(t *testing.T) {
 		rotate: func(_ context.Context, _ string, _ dahua.DeviceConfigUpdate) (*dahua.ProbeResult, error) {
 			return nil, fmt.Errorf("rotate lookup: %w", dahua.ErrDeviceNotFound)
 		},
-	}, stubEventReader{})
+	})
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/devices/missing_ipc/credentials", strings.NewReader(`{"password":"new-secret"}`))
 	req.Header.Set("Content-Type", "application/json")
@@ -1217,7 +1189,7 @@ func TestRefreshNVRInventoryEndpoint(t *testing.T) {
 				},
 			}, nil
 		},
-	}, stubEventReader{})
+	})
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/nvr/west20_nvr/inventory/refresh", nil)
 	rec := httptest.NewRecorder()
@@ -1242,7 +1214,7 @@ func TestRefreshNVRInventoryEndpointDetectsTypedNotFound(t *testing.T) {
 		refreshNVR: func(_ context.Context, _ string) (*dahua.ProbeResult, error) {
 			return nil, fmt.Errorf("refresh lookup: %w", dahua.ErrDeviceNotFound)
 		},
-	}, stubEventReader{})
+	})
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/nvr/missing_nvr/inventory/refresh", nil)
 	rec := httptest.NewRecorder()
@@ -1265,7 +1237,7 @@ func TestProbeDeviceEndpointRateLimited(t *testing.T) {
 		probe: func(_ context.Context, _ string) (*dahua.ProbeResult, error) {
 			return &dahua.ProbeResult{Root: dahua.Device{ID: "front_vto"}}, nil
 		},
-	}, stubEventReader{})
+	})
 
 	req1 := httptest.NewRequest(http.MethodPost, "/api/v1/devices/front_vto/probe", nil)
 	req1.RemoteAddr = "192.168.1.10:1234"
@@ -1300,7 +1272,7 @@ func TestRateLimiterOnlyTrustsForwardedHeadersFromTrustedProxies(t *testing.T) {
 		probe: func(_ context.Context, _ string) (*dahua.ProbeResult, error) {
 			return &dahua.ProbeResult{Root: dahua.Device{ID: "front_vto"}}, nil
 		},
-	}, stubEventReader{})
+	})
 
 	first := httptest.NewRequest(http.MethodPost, "/api/v1/devices/front_vto/probe", nil)
 	first.RemoteAddr = "10.0.0.1:1234"
@@ -1353,7 +1325,6 @@ func TestServerClampsWriteTimeoutForLongAdminActions(t *testing.T) {
 		stubSnapshotReader{},
 		nil,
 		stubActionReader{},
-		nil,
 	)
 
 	if server.httpServer.WriteTimeout != 60*time.Second {
@@ -1391,7 +1362,7 @@ func TestIPCSnapshotEndpointRateLimited(t *testing.T) {
 		HealthPath:                 "/healthz",
 		SnapshotRateLimitPerMinute: 1,
 		SnapshotRateLimitBurst:     1,
-	}, stubSnapshotReader{}, nil, stubActionReader{}, stubEventReader{})
+	}, stubSnapshotReader{}, nil, stubActionReader{})
 
 	req1 := httptest.NewRequest(http.MethodGet, "/api/v1/ipc/yard_ipc/snapshot", nil)
 	req1.RemoteAddr = "192.168.1.20:2222"
@@ -1420,7 +1391,7 @@ func TestVTOSnapshotEndpointServesLogoPlaceholderWhenUnavailable(t *testing.T) {
 		vtoSnapshot: func(context.Context, string) ([]byte, string, error) {
 			return nil, "", errors.New("snapshot unavailable")
 		},
-	}, nil, stubActionReader{}, stubEventReader{})
+	}, nil, stubActionReader{})
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/vto/front_vto/snapshot", nil)
 	rec := httptest.NewRecorder()
@@ -1447,7 +1418,7 @@ func TestSnapshotEndpointServesLogoPlaceholderForEmptyBody(t *testing.T) {
 		ipcSnapshot: func(context.Context, string) ([]byte, string, error) {
 			return nil, "", nil
 		},
-	}, nil, stubActionReader{}, stubEventReader{})
+	}, nil, stubActionReader{})
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/ipc/yard_ipc/snapshot", nil)
 	rec := httptest.NewRecorder()
@@ -1482,7 +1453,7 @@ func TestMediaMjpegEndpointRateLimited(t *testing.T) {
 		MediaRateLimitBurst:     1,
 	}, stubSnapshotReader{}, stubMediaReader{
 		enabled: true,
-	}, stubActionReader{}, stubEventReader{})
+	}, stubActionReader{})
 
 	req1 := httptest.NewRequest(http.MethodGet, "/api/v1/media/mjpeg/front_vto?profile=stable", nil)
 	req1.RemoteAddr = "192.168.1.30:3333"
@@ -1524,7 +1495,7 @@ func TestMediaMjpegEndpointPassesRequestedWidth(t *testing.T) {
 			close(ch)
 			return ch, func() {}, nil
 		},
-	}, stubActionReader{}, stubEventReader{})
+	}, stubActionReader{})
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/media/mjpeg/front_vto?profile=stable&width=498&height=0", nil)
 	rec := httptest.NewRecorder()
@@ -1552,7 +1523,7 @@ func TestMediaHLSPlaylistEndpoint(t *testing.T) {
 			}
 			return []byte("#EXTM3U\n#EXTINF:2.0,\nsegment_000.ts\n"), nil
 		},
-	}, stubActionReader{}, stubEventReader{})
+	}, stubActionReader{})
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/media/hls/front_vto/stable/index.m3u8", nil)
 	rec := httptest.NewRecorder()
@@ -1611,7 +1582,7 @@ func TestMediaPreviewEndpoint(t *testing.T) {
 				Credential: "secret",
 			}}
 		},
-	}, stubActionReader{}, stubEventReader{})
+	}, stubActionReader{})
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/media/preview/front_vto?profile=stable", nil)
 	rec := httptest.NewRecorder()
@@ -1723,11 +1694,7 @@ func TestAdminPageEndpoint(t *testing.T) {
 				StreamID: "front_vto",
 			}}
 		},
-	}, stubActionReader{}, stubEventReader{
-		stats: func() map[string]any {
-			return map[string]any{"count": 2, "capacity": 128}
-		},
-	})
+	}, stubActionReader{})
 
 	req := httptest.NewRequest(http.MethodGet, "/admin", nil)
 	rec := httptest.NewRecorder()
@@ -1814,7 +1781,7 @@ func TestAdminTestBridgePageEndpoint(t *testing.T) {
 				},
 			}}
 		},
-	}, stubMediaReader{enabled: true}, stubActionReader{}, stubEventReader{})
+	}, stubMediaReader{enabled: true}, stubActionReader{})
 
 	req := httptest.NewRequest(http.MethodGet, "/admin/test-bridge", nil)
 	rec := httptest.NewRecorder()
@@ -1841,7 +1808,7 @@ func TestAdminAssetEndpoint(t *testing.T) {
 		ListenAddress: ":0",
 		MetricsPath:   "/metrics",
 		HealthPath:    "/healthz",
-	}, stubSnapshotReader{}, stubMediaReader{}, stubActionReader{}, stubEventReader{})
+	}, stubSnapshotReader{}, stubMediaReader{}, stubActionReader{})
 
 	req := httptest.NewRequest(http.MethodGet, "/admin/assets/bootstrap.min.css", nil)
 	rec := httptest.NewRecorder()
@@ -1912,7 +1879,7 @@ func TestStreamsEndpointIncludesVTOIntercomSummary(t *testing.T) {
 				},
 			}
 		},
-	}, stubMediaReader{enabled: true}, stubActionReader{}, stubEventReader{})
+	}, stubMediaReader{enabled: true}, stubActionReader{})
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/streams", nil)
 	rec := httptest.NewRecorder()
@@ -2010,7 +1977,6 @@ func TestHomeAssistantNativeCatalogEndpoint(t *testing.T) {
 		},
 		nil,
 		nil,
-		nil,
 	)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/home-assistant/native/catalog", nil)
@@ -2065,7 +2031,7 @@ func TestMediaWebRTCPageEndpoint(t *testing.T) {
 				Credential: "secret",
 			}}
 		},
-	}, stubActionReader{}, stubEventReader{})
+	}, stubActionReader{})
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/media/webrtc/front_vto/stable", nil)
 	rec := httptest.NewRecorder()
@@ -2170,7 +2136,7 @@ func TestVTOIntercomPageEndpoint(t *testing.T) {
 				ExternalUplinkEnabled: enabled,
 			}
 		},
-	}, stubActionReader{}, stubEventReader{})
+	}, stubActionReader{})
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/vto/front_vto/intercom?profile=stable", nil)
 	rec := httptest.NewRecorder()
@@ -2276,7 +2242,7 @@ func TestVTOIntercomStatusEndpoint(t *testing.T) {
 				UplinkForwardErrors:    1,
 			}
 		},
-	}, stubActionReader{}, stubEventReader{})
+	}, stubActionReader{})
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/vto/front_vto/intercom/status", nil)
 	rec := httptest.NewRecorder()
@@ -2324,7 +2290,7 @@ func TestVTOIntercomResetEndpoint(t *testing.T) {
 			requestedStreamID = streamID
 			return mediaapi.IntercomStatus{StreamID: streamID}
 		},
-	}, stubActionReader{}, stubEventReader{})
+	}, stubActionReader{})
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/vto/front_vto/intercom/reset", nil)
 	rec := httptest.NewRecorder()
@@ -2374,7 +2340,7 @@ func TestVTOIntercomUplinkToggleEndpoints(t *testing.T) {
 				ExternalUplinkEnabled: enabled,
 			}
 		},
-	}, stubActionReader{}, stubEventReader{})
+	}, stubActionReader{})
 
 	enableReq := httptest.NewRequest(http.MethodPost, "/api/v1/vto/front_vto/intercom/uplink/enable", nil)
 	enableRec := httptest.NewRecorder()
@@ -2420,7 +2386,7 @@ func TestMediaWebRTCOfferEndpoint(t *testing.T) {
 				SDP:  "v=0\r\nm=video 9 UDP/TLS/RTP/SAVPF 96\r\n",
 			}, nil
 		},
-	}, stubActionReader{}, stubEventReader{})
+	}, stubActionReader{})
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/media/webrtc/front_vto/stable/offer", strings.NewReader(`{"type":"offer","sdp":"v=0\r\nm=video 9 UDP/TLS/RTP/SAVPF 96\r\n"}`))
 	req.Header.Set("Content-Type", "application/json")
@@ -2460,7 +2426,7 @@ func TestMediaHLSSegmentEndpoint(t *testing.T) {
 			}
 			return []byte("fake-ts"), "video/mp2t", nil
 		},
-	}, stubActionReader{}, stubEventReader{})
+	}, stubActionReader{})
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/media/hls/front_vto/stable/segment_000.ts", nil)
 	rec := httptest.NewRecorder()
@@ -2484,7 +2450,7 @@ func TestMediaHLSEndpointRateLimited(t *testing.T) {
 		MediaRateLimitBurst:     1,
 	}, stubSnapshotReader{}, stubMediaReader{
 		enabled: true,
-	}, stubActionReader{}, stubEventReader{})
+	}, stubActionReader{})
 
 	req1 := httptest.NewRequest(http.MethodGet, "/api/v1/media/hls/front_vto/stable/index.m3u8", nil)
 	req1.RemoteAddr = "192.168.1.40:4444"
@@ -2523,7 +2489,7 @@ func TestMediaSnapshotEndpoint(t *testing.T) {
 			}
 			return []byte("jpeg-bytes"), "image/jpeg", nil
 		},
-	}, stubActionReader{}, stubEventReader{})
+	}, stubActionReader{})
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/media/snapshot/front_vto?profile=stable&width=640", nil)
 	rec := httptest.NewRecorder()
@@ -2615,7 +2581,7 @@ func TestMediaRecordingEndpoints(t *testing.T) {
 			deletedClipID = clipID
 			return nil
 		},
-	}, stubActionReader{}, stubEventReader{})
+	}, stubActionReader{})
 
 	startReq := httptest.NewRequest(http.MethodPost, "/api/v1/media/streams/west20_nvr_channel_05/recordings", strings.NewReader(`{"profile":"stable","duration_seconds":15}`))
 	startReq.Header.Set("Content-Type", "application/json")
@@ -2728,7 +2694,7 @@ func TestMediaRecordingDownloadEndpoint(t *testing.T) {
 			}
 			return clipPath, nil
 		},
-	}, stubActionReader{}, stubEventReader{})
+	}, stubActionReader{})
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/media/recordings/clip_test/download", nil)
 	rec := httptest.NewRecorder()
@@ -2783,7 +2749,7 @@ func TestMediaRecordingPlayEndpoint(t *testing.T) {
 				FileName:      "clip_test.mp4",
 			}, nil
 		},
-	}, stubActionReader{}, stubEventReader{})
+	}, stubActionReader{})
 
 	metaReq := httptest.NewRequest(http.MethodGet, "/api/v1/media/recordings/clip_test", nil)
 	metaReq.Host = "example.com"
@@ -2863,7 +2829,7 @@ func TestNVRRecordingsEndpoint(t *testing.T) {
 				}},
 			}, nil
 		},
-	}, nil, stubActionReader{}, stubEventReader{})
+	}, nil, stubActionReader{})
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/nvr/west20_nvr/recordings?channel=1&start=2026-04-28T00:00:00Z&end=2026-04-28T01:00:00Z&limit=5&event=VideoMotion", nil)
 	rec := httptest.NewRecorder()
@@ -2920,7 +2886,7 @@ func TestNVRRecordingsEndpointParsesEventOnlyQuery(t *testing.T) {
 				}},
 			}, nil
 		},
-	}, nil, stubActionReader{}, stubEventReader{})
+	}, nil, stubActionReader{})
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/nvr/west20_nvr/recordings?channel=1&start=2026-04-28T00:00:00Z&end=2026-04-28T01:00:00Z&event_only=true&event=all", nil)
 	rec := httptest.NewRecorder()
@@ -2970,7 +2936,7 @@ func TestNVRSMDIVSEndpointSkipsAssetEnrichment(t *testing.T) {
 				Items:         []dahua.NVRRecording{},
 			}, nil
 		},
-	}, nil, stubActionReader{}, stubEventReader{})
+	}, nil, stubActionReader{})
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/nvr/west20_nvr/smd-ivs?channel=1&start=2026-05-01T00:00:00Z&end=2026-05-02T00:00:00Z&limit=20", nil)
 	rec := httptest.NewRecorder()
@@ -3024,7 +2990,7 @@ func TestNVRSMDIVSEndpointParsesAliasesAndRedactsPlaybackURLs(t *testing.T) {
 				}},
 			}, nil
 		},
-	}, nil, stubActionReader{}, stubEventReader{})
+	}, nil, stubActionReader{})
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/nvr/west20_nvr/smd-ivs?channel=1&start_time=2026-05-03T21:00:00Z&end_time=2026-05-04T21:00:00Z&limit=20&event=smdTypeHuman&db_only=true", nil)
 	rec := httptest.NewRecorder()
@@ -3066,7 +3032,7 @@ func TestNVRSMDIVSEndpointIncludesPlaybackURLsWhenRequested(t *testing.T) {
 				}},
 			}, nil
 		},
-	}, nil, stubActionReader{}, stubEventReader{})
+	}, nil, stubActionReader{})
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/nvr/west20_nvr/smd-ivs?channel=1&start=2026-05-03T21:00:00Z&end=2026-05-04T21:00:00Z&include_credentials=true", nil)
 	rec := httptest.NewRecorder()
@@ -3133,7 +3099,7 @@ func TestNVRRecordingsEndpointAttachesArchiveAssetURLsByState(t *testing.T) {
 				},
 			}, nil
 		},
-	}, nil, stubActionReader{}, stubEventReader{})
+	}, nil, stubActionReader{})
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/nvr/west20_nvr/recordings?channel=1&start=2026-04-28T00:00:00Z&end=2026-04-28T01:00:00Z&limit=5", nil)
 	rec := httptest.NewRecorder()
@@ -3176,7 +3142,7 @@ func TestNVRRecordingsEndpointSerializesEmptyItemsArray(t *testing.T) {
 				Items:         nil,
 			}, nil
 		},
-	}, nil, stubActionReader{}, stubEventReader{})
+	}, nil, stubActionReader{})
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/nvr/west20_nvr/recordings?channel=1&start=2026-04-28T00:00:00Z&end=2026-04-28T01:00:00Z&event_only=true&event=all", nil)
 	rec := httptest.NewRecorder()
@@ -3239,7 +3205,7 @@ func TestNVREventSummaryEndpoint(t *testing.T) {
 				},
 			}, nil
 		},
-	}, nil, stubActionReader{}, stubEventReader{})
+	}, nil, stubActionReader{})
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/nvr/west20_nvr/events/summary?start=2026-05-01T00:00:00Z&end=2026-05-02T00:00:00Z&event=all", nil)
 	rec := httptest.NewRecorder()
@@ -3345,7 +3311,7 @@ func TestNVRArchiveCoverageEndpoint(t *testing.T) {
 				},
 			}, nil
 		},
-	}, nil, stubActionReader{}, stubEventReader{})
+	}, nil, stubActionReader{})
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/nvr/west20_nvr/recordings/coverage?channel=1", nil)
 	rec := httptest.NewRecorder()
@@ -3373,7 +3339,7 @@ func TestNVRRecordingsEndpointRejectsInvalidQuery(t *testing.T) {
 		ListenAddress: ":0",
 		MetricsPath:   "/metrics",
 		HealthPath:    "/healthz",
-	}, stubSnapshotReader{}, nil, stubActionReader{}, stubEventReader{})
+	}, stubSnapshotReader{}, nil, stubActionReader{})
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/nvr/west20_nvr/recordings?channel=0&start=2026-04-28T00:00:00Z&end=2026-04-28T01:00:00Z", nil)
 	rec := httptest.NewRecorder()
@@ -3438,7 +3404,7 @@ func TestNVRRecordingExportEndpointCreatesPlaybackClip(t *testing.T) {
 				FileName:  "clip_archive.mp4",
 			}, nil
 		},
-	}, stubActionReader{}, stubEventReader{})
+	}, stubActionReader{})
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/nvr/west20_nvr/recordings/export?channel=5&start_time=2026-04-29T00:00:00Z&end_time=2026-04-29T00:00:04Z", nil)
 	rec := httptest.NewRecorder()
@@ -3543,7 +3509,7 @@ func TestNVRRecordingExportEndpointUsesPlaybackRTSPForEvents(t *testing.T) {
 				FileName:  "clip_event.mp4",
 			}, nil
 		},
-	}, stubActionReader{}, stubEventReader{})
+	}, stubActionReader{})
 
 	req := httptest.NewRequest(
 		http.MethodPost,
@@ -3597,7 +3563,7 @@ func TestNVRChannelControlsEndpoint(t *testing.T) {
 				},
 			}, nil
 		},
-	}, stubEventReader{})
+	})
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/nvr/west20_nvr/channels/5/controls", nil)
 	rec := httptest.NewRecorder()
@@ -3639,7 +3605,7 @@ func TestNVRChannelPTZEndpoint(t *testing.T) {
 			}
 			return nil
 		},
-	}, stubEventReader{})
+	})
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/nvr/west20_nvr/channels/11/ptz", strings.NewReader(`{"action":"pulse","command":"left","speed":3,"duration_ms":250}`))
 	req.Header.Set("Content-Type", "application/json")
@@ -3664,7 +3630,7 @@ func TestNVRChannelPTZEndpointReturnsUnsupportedOperationErrorCode(t *testing.T)
 		nvrPTZ: func(_ context.Context, _ string, _ dahua.NVRPTZRequest) error {
 			return fmt.Errorf("ptz unsupported: %w", dahua.ErrUnsupportedOperation)
 		},
-	}, stubEventReader{})
+	})
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/nvr/west20_nvr/channels/11/ptz", strings.NewReader(`{"action":"pulse","command":"left","speed":3,"duration_ms":250}`))
 	req.Header.Set("Content-Type", "application/json")
@@ -3708,7 +3674,7 @@ func TestNVRChannelAuxEndpoint(t *testing.T) {
 			}
 			return nil
 		},
-	}, stubEventReader{})
+	})
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/nvr/west20_nvr/channels/5/aux", strings.NewReader(`{"action":"pulse","output":"warning_light","duration_ms":400}`))
 	req.Header.Set("Content-Type", "application/json")
@@ -3741,7 +3707,7 @@ func TestNVRChannelRecordingEndpoint(t *testing.T) {
 			actions = append(actions, request.Action)
 			return nil
 		},
-	}, stubEventReader{})
+	})
 
 	for _, action := range []dahua.NVRRecordingAction{dahua.NVRRecordingActionStart, dahua.NVRRecordingActionAuto} {
 		req := httptest.NewRequest(http.MethodPost, "/api/v1/nvr/west20_nvr/channels/11/recording", strings.NewReader(fmt.Sprintf(`{"action":%q}`, action)))
@@ -3795,7 +3761,7 @@ func TestNVRDiagnosticEndpoint(t *testing.T) {
 				Description: "Direct IPC Lighting_V2 configManager setConfig path.",
 			}, nil
 		},
-	}, stubEventReader{})
+	})
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/nvr/west20_nvr/channels/5/diagnostics", strings.NewReader(`{"method":"direct_ipc_lighting","action":"start","duration_ms":500}`))
 	req.Header.Set("Content-Type", "application/json")
@@ -3848,7 +3814,7 @@ func TestNVRPlaybackSessionCreateEndpoint(t *testing.T) {
 				},
 			}, nil
 		},
-	}, nil, stubActionReader{}, stubEventReader{})
+	}, nil, stubActionReader{})
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/nvr/west20_nvr/playback/sessions", strings.NewReader(`{"channel":2,"start_time":"2026-04-28T00:00:00Z","end_time":"2026-04-28T01:00:00Z","seek_time":"2026-04-28T00:20:00Z"}`))
 	req.Header.Set("Content-Type", "application/json")
@@ -3899,7 +3865,7 @@ func TestNVRPlaybackSessionCreateEndpointAcceptsLocalWallClockTimes(t *testing.T
 				Profiles:       map[string]dahua.NVRPlaybackProfile{},
 			}, nil
 		},
-	}, nil, stubActionReader{}, stubEventReader{})
+	}, nil, stubActionReader{})
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/nvr/west20_nvr/playback/sessions", strings.NewReader(`{"channel":2,"start_time":"2026-05-03 16:11:05","end_time":"2026_05_03_16_11_27","seek_time":"2026-05-03T16:11:05"}`))
 	req.Header.Set("Content-Type", "application/json")
@@ -3936,7 +3902,7 @@ func TestNVRPlaybackSessionGetEndpoint(t *testing.T) {
 				},
 			}, nil
 		},
-	}, nil, stubActionReader{}, stubEventReader{})
+	}, nil, stubActionReader{})
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/nvr/playback/sessions/nvrpb_test", nil)
 	rec := httptest.NewRecorder()
@@ -3980,7 +3946,7 @@ func TestNVRPlaybackSessionSeekEndpoint(t *testing.T) {
 				},
 			}, nil
 		},
-	}, nil, stubActionReader{}, stubEventReader{})
+	}, nil, stubActionReader{})
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/nvr/playback/sessions/nvrpb_test/seek", strings.NewReader(`{"seek_time":"2026-04-28T00:45:00Z"}`))
 	req.Header.Set("Content-Type", "application/json")

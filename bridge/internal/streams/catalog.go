@@ -10,7 +10,6 @@ import (
 
 	"RCooLeR/DahuaBridge/internal/config"
 	"RCooLeR/DahuaBridge/internal/dahua"
-	"RCooLeR/DahuaBridge/internal/ptr"
 )
 
 type CatalogInput struct {
@@ -980,7 +979,7 @@ func buildVTOFeatures(intercom *IntercomSummary) []FeatureSummary {
 			Kind:      "toggle",
 			URL:       intercom.RecordingURL,
 			Supported: true,
-			Active:    ptr.Bool(intercom.AutoRecordEnabled),
+			Active:    new(intercom.AutoRecordEnabled),
 		})
 	}
 	if intercom.SupportsBridgeSessionReset && strings.TrimSpace(intercom.BridgeSessionResetURL) != "" {
@@ -1080,14 +1079,14 @@ func auxFeatureActiveState(state dahua.DeviceState, key string) *bool {
 	if until != "" {
 		if parsed, err := time.Parse(time.RFC3339Nano, until); err == nil {
 			active := parsed.After(time.Now().UTC())
-			return ptr.Bool(active)
+			return new(active)
 		}
 	}
 
 	if _, ok := state.Info["control_aux_active_"+rawKey]; !ok {
 		return nil
 	}
-	return ptr.Bool(anyBool(state.Info, "control_aux_active_"+rawKey))
+	return new(anyBool(state.Info, "control_aux_active_"+rawKey))
 }
 
 func auxFeatureCurrentText(state dahua.DeviceState, key string) string {

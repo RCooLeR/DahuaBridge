@@ -51,7 +51,6 @@ MP4 delete controls are not used by the HA cards.
 - [Configuration](docs/configuration.md)
 - [Features](docs/features.md)
 - [Architecture](docs/architecture.md)
-- [Removed report](removed-report.md)
 
 ## Development
 

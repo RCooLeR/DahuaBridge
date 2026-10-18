@@ -71,14 +71,14 @@ func (s stubClipPrefetcher) EnsureNVRArchiveClip(ctx context.Context, deviceID s
 	return s.ensure(ctx, deviceID, item)
 }
 
-func TestSQLiteStoreUpsertSMDIVSEventsDoesNotCreateChunks(t *testing.T) {
+func TestSQLStoreUpsertSMDIVSEventsDoesNotCreateChunks(t *testing.T) {
 	db, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
 		t.Fatalf("open sqlite: %v", err)
 	}
 	defer db.Close()
 
-	archiveStore := NewSQLiteStore(db)
+	archiveStore := newSQLiteStore(db)
 	if err := archiveStore.InitSchema(context.Background()); err != nil {
 		t.Fatalf("init schema: %v", err)
 	}
@@ -188,14 +188,14 @@ func assertArchiveSQLiteOperationalPragmas(t *testing.T, db *sql.DB) {
 	}
 }
 
-func TestSQLiteStorePruneReturnsCompletedClipIDsAndKeepsActiveExports(t *testing.T) {
+func TestSQLStorePruneReturnsCompletedClipIDsAndKeepsActiveExports(t *testing.T) {
 	db, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
 		t.Fatalf("open sqlite: %v", err)
 	}
 	defer db.Close()
 
-	archiveStore := NewSQLiteStore(db)
+	archiveStore := newSQLiteStore(db)
 	if err := archiveStore.InitSchema(context.Background()); err != nil {
 		t.Fatalf("init schema: %v", err)
 	}
@@ -275,14 +275,14 @@ func TestSQLiteStorePruneReturnsCompletedClipIDsAndKeepsActiveExports(t *testing
 	}
 }
 
-func TestSQLiteStorePruneDoesNotReturnClipStillReferencedByRetainedEvent(t *testing.T) {
+func TestSQLStorePruneDoesNotReturnClipStillReferencedByRetainedEvent(t *testing.T) {
 	db, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
 		t.Fatalf("open sqlite: %v", err)
 	}
 	defer db.Close()
 
-	archiveStore := NewSQLiteStore(db)
+	archiveStore := newSQLiteStore(db)
 	if err := archiveStore.InitSchema(context.Background()); err != nil {
 		t.Fatalf("init schema: %v", err)
 	}
@@ -1251,14 +1251,14 @@ func TestServiceEventSummaryUsesIndexedSMDIVSRows(t *testing.T) {
 	}
 }
 
-func TestSQLiteStoreSearchRecordingsUsesIndexedAllEventScope(t *testing.T) {
+func TestSQLStoreSearchRecordingsUsesIndexedAllEventScope(t *testing.T) {
 	db, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
 		t.Fatalf("open sqlite: %v", err)
 	}
 	defer db.Close()
 
-	archiveStore := NewSQLiteStore(db)
+	archiveStore := newSQLiteStore(db)
 	if err := archiveStore.InitSchema(context.Background()); err != nil {
 		t.Fatalf("init schema: %v", err)
 	}
@@ -1306,14 +1306,14 @@ func TestSQLiteStoreSearchRecordingsUsesIndexedAllEventScope(t *testing.T) {
 	}
 }
 
-func TestSQLiteStoreSearchRecordingsFiltersEventBeforeLimit(t *testing.T) {
+func TestSQLStoreSearchRecordingsFiltersEventBeforeLimit(t *testing.T) {
 	db, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
 		t.Fatalf("open sqlite: %v", err)
 	}
 	defer db.Close()
 
-	archiveStore := NewSQLiteStore(db)
+	archiveStore := newSQLiteStore(db)
 	if err := archiveStore.InitSchema(context.Background()); err != nil {
 		t.Fatalf("init schema: %v", err)
 	}

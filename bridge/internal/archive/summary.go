@@ -12,7 +12,7 @@ type coverageChunk struct {
 	EndTime   time.Time
 }
 
-func (s *SQLiteStore) LoadArchiveCoverage(ctx context.Context, deviceID string, channel int) ([]coverageChunk, error) {
+func (s *sqlStore) LoadArchiveCoverage(ctx context.Context, deviceID string, channel int) ([]coverageChunk, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT DISTINCT start_time, end_time
 		FROM nvr_recording_chunks
 		WHERE device_id = ? AND channel = ?
@@ -47,7 +47,7 @@ func (s *SQLiteStore) LoadArchiveCoverage(ctx context.Context, deviceID string, 
 	return chunks, nil
 }
 
-func (s *SQLiteStore) LoadEventSummaryCounts(
+func (s *sqlStore) LoadEventSummaryCounts(
 	ctx context.Context,
 	deviceID string,
 	startTime time.Time,

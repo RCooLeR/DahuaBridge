@@ -11,7 +11,6 @@ import (
 	"RCooLeR/DahuaBridge/internal/config"
 	"RCooLeR/DahuaBridge/internal/dahua"
 	"RCooLeR/DahuaBridge/internal/metrics"
-	"RCooLeR/DahuaBridge/internal/ptr"
 	"RCooLeR/DahuaBridge/internal/store"
 	"github.com/rs/zerolog"
 )
@@ -315,7 +314,7 @@ func applyDeviceConfigUpdate(current config.DeviceConfig, update dahua.DeviceCon
 		next.Password = *update.Password
 	}
 	if update.OnvifEnabled != nil {
-		next.OnvifEnabled = ptr.Bool(*update.OnvifEnabled)
+		next.OnvifEnabled = new(*update.OnvifEnabled)
 	}
 	if update.OnvifUsername != nil {
 		next.OnvifUsername = strings.TrimSpace(*update.OnvifUsername)

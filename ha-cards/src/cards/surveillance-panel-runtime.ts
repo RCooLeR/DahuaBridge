@@ -1,4 +1,4 @@
-import type {PanelModel, PanelSelection} from "../domain/model";
+import type {PanelSelection} from "../domain/model";
 import {buildPanelModel} from "../domain/model";
 import {type BridgeEvent, type BridgeEventQuery, fetchBridgeEvents} from "../ha/bridge-events";
 import {fetchRegistrySnapshot, type RegistrySnapshot} from "../ha/registry";
@@ -66,9 +66,6 @@ export class SurveillancePanelRuntime {
 
     needsPollingRestartAfterHassChange(): boolean {
         return this.eventPollHandle === undefined;
-    }
-
-    logInitializedModels(_model: PanelModel): void {
     }
 
     private restartEventPolling(): void {

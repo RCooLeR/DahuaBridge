@@ -78,7 +78,7 @@ func TestMySQLArchiveSchemaAndSQLiteMigration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open sqlite source: %v", err)
 	}
-	sourceStore := NewSQLiteStore(source)
+	sourceStore := newSQLiteStore(source)
 	if err := sourceStore.InitSchema(ctx); err != nil {
 		t.Fatalf("init sqlite source: %v", err)
 	}
@@ -518,8 +518,7 @@ func waitForMySQLRetentionRowLock(t *testing.T, ctx context.Context, db interfac
 			`SELECT queued FROM archive_clip_retention WHERE clip_id = ? FOR UPDATE NOWAIT`, clipID,
 		).Scan(&queued)
 		_ = probe.Rollback()
-		var mysqlErr *mysql.MySQLError
-		if errors.As(err, &mysqlErr) && mysqlErr.Number == 3572 {
+		if mysqlErr, ok := errors.AsType[*mysql.MySQLError](err); ok && mysqlErr.Number == 3572 {
 			return
 		}
 		if err != nil {
@@ -533,7 +532,7 @@ func waitForMySQLRetentionRowLock(t *testing.T, ctx context.Context, db interfac
 	}
 }
 
-func clearMySQLArchiveTables(t *testing.T, store *SQLiteStore) {
+func clearMySQLArchiveTables(t *testing.T, store *sqlStore) {
 	t.Helper()
 	for _, table := range []string{
 		"archive_sqlite_import_receipt", "archive_clip_retention", "bridge_mp4_clips", "smd_ivs_events", "nvr_recording_chunks", "archive_event_scan_progress",

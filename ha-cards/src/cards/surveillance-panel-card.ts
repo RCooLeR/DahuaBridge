@@ -3,6 +3,8 @@ import {html, LitElement, nothing} from "lit";
 import {keyed} from "lit/directives/keyed.js";
 import {repeat} from "lit/directives/repeat.js";
 
+import {registerCustomCard} from "../register-card";
+
 import {createSurveillancePanelStubConfig} from "./card-stub-config";
 import {PlaybackLifecycle, type PlaybackOperation} from "./playback-lifecycle";
 import {liveSourceSelection, type LiveSourceSelection} from "../domain/devices";
@@ -545,7 +547,6 @@ export class DahuaBridgeSurveillancePanelCard
             this._registrySnapshot,
             this._todayEventSummary,
         );
-        this._runtime.logInitializedModels(model);
         const showInspector =
             this._inspectorOpen &&
             (model.selectedCamera !== undefined ||
@@ -4269,17 +4270,15 @@ function browserBridgeUrlFromRequestUrl(value: string): string | null {
     }
 }
 
-if (!customElements.get("dahuabridge-surveillance-panel")) {
-    customElements.define(
-        "dahuabridge-surveillance-panel",
-        DahuaBridgeSurveillancePanelCard,
-    );
-}
-
-window.customCards = window.customCards || [];
-window.customCards.push({
+registerCustomCard(
+    customElements,
+    window,
+    "dahuabridge-surveillance-panel",
+    DahuaBridgeSurveillancePanelCard,
+    {
     type: "dahuabridge-surveillance-panel",
     name: "DahuaBridge Surveillance Panel",
     description: "Full-panel surveillance dashboard for DahuaBridge devices.",
     preview: true,
-});
+    },
+);

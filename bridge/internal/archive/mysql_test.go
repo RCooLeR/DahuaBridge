@@ -138,7 +138,7 @@ func TestOpenArchiveMySQLRetryPreservesContextCancellation(t *testing.T) {
 }
 
 func TestMySQLUpsertsUseCurrentRowAliasSyntax(t *testing.T) {
-	store := &SQLiteStore{dialect: archiveDialectMySQL}
+	store := &sqlStore{dialect: archiveDialectMySQL}
 	queries := []string{
 		store.upsertArchiveFilesSQL(),
 		store.upsertArchiveEventsSQL(),

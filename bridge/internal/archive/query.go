@@ -11,7 +11,7 @@ import (
 
 const archiveTimeLayout = "2006-01-02 15:04:05"
 
-func (s *SQLiteStore) SearchRecordings(ctx context.Context, deviceID string, query dahua.NVRRecordingQuery) (dahua.NVRRecordingSearchResult, error) {
+func (s *sqlStore) SearchRecordings(ctx context.Context, deviceID string, query dahua.NVRRecordingQuery) (dahua.NVRRecordingSearchResult, error) {
 	result := dahua.NVRRecordingSearchResult{
 		DeviceID:  strings.TrimSpace(deviceID),
 		Channel:   query.Channel,
@@ -47,7 +47,7 @@ func (s *SQLiteStore) SearchRecordings(ctx context.Context, deviceID string, que
 	return result, nil
 }
 
-func (s *SQLiteStore) searchFileRows(ctx context.Context, deviceID string, query dahua.NVRRecordingQuery) ([]dahua.NVRRecording, error) {
+func (s *sqlStore) searchFileRows(ctx context.Context, deviceID string, query dahua.NVRRecordingQuery) ([]dahua.NVRRecording, error) {
 	partitionColumn := "partition"
 	if s.dialect == archiveDialectMySQL {
 		partitionColumn = "partition_number"
@@ -104,7 +104,7 @@ func (s *SQLiteStore) searchFileRows(ctx context.Context, deviceID string, query
 	return dedupeArchiveFileRows(items), nil
 }
 
-func (s *SQLiteStore) searchEventRows(ctx context.Context, deviceID string, query dahua.NVRRecordingQuery) ([]dahua.NVRRecording, error) {
+func (s *sqlStore) searchEventRows(ctx context.Context, deviceID string, query dahua.NVRRecordingQuery) ([]dahua.NVRRecording, error) {
 	where := `device_id = ? AND channel = ? AND end_time >= ? AND start_time <= ?`
 	args := []any{
 		strings.TrimSpace(deviceID),

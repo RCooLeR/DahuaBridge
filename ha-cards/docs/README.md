@@ -15,7 +15,3 @@ download/export, 30-minute recording chunks with download only, selected-camera
 RTSP archive seek, and MP4 clips created by the manual recording button.
 
 The cards do not use playback sessions or archive coverage.
-
-Related report:
-
-- [Removed functionality report](../removed-report.md)

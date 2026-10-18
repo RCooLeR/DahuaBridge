@@ -61,7 +61,7 @@ func preconnectRequest(server *Server, method, path, body, token string) *httpte
 
 func TestLivePreconnectAuthenticationAndRoundTrip(t *testing.T) {
 	reader := &livePreconnectSnapshotReader{current: streams.LivePreconnectSettings{Mode: "off", Profile: "auto"}}
-	server := newTestServerWithConfig(livePreconnectHTTPConfig(), reader, nil, nil, nil)
+	server := newTestServerWithConfig(livePreconnectHTTPConfig(), reader, nil, nil)
 	const path = "/api/v1/settings/live-preconnect"
 	for _, method := range []string{http.MethodGet, http.MethodPut} {
 		for _, token := range []string{"", "wrong-token"} {
@@ -121,7 +121,7 @@ func TestLivePreconnectRejectsInvalidBodiesWithoutChangingSettings(t *testing.T)
 		t.Run(item.name, func(t *testing.T) {
 			initial := streams.LivePreconnectSettings{Mode: "off", Profile: "auto"}
 			reader := &livePreconnectSnapshotReader{current: initial}
-			server := newTestServerWithConfig(livePreconnectHTTPConfig(), reader, nil, nil, nil)
+			server := newTestServerWithConfig(livePreconnectHTTPConfig(), reader, nil, nil)
 			response := preconnectRequest(server, http.MethodPut, "/api/v1/settings/live-preconnect", item.body, "api-secret")
 			if response.Code != http.StatusBadRequest || reader.current != initial || reader.writes != item.writes {
 				t.Fatalf("response %d %s, writes=%d, current=%+v", response.Code, response.Body.String(), reader.writes, reader.current)
@@ -129,7 +129,7 @@ func TestLivePreconnectRejectsInvalidBodiesWithoutChangingSettings(t *testing.T)
 		})
 	}
 	reader := &livePreconnectSnapshotReader{}
-	server := newTestServerWithConfig(livePreconnectHTTPConfig(), reader, nil, nil, nil)
+	server := newTestServerWithConfig(livePreconnectHTTPConfig(), reader, nil, nil)
 	response := preconnectRequest(server, http.MethodPut, "/api/v1/settings/live-preconnect", valid+strings.Repeat(" ", 4096-len(valid)), "api-secret")
 	assertPreconnectResponse(t, response, streams.LivePreconnectSettings{Mode: "recent", Profile: "stable"})
 }
@@ -147,7 +147,7 @@ func TestLivePreconnectRuntimeErrors(t *testing.T) {
 		t.Run(item.name, func(t *testing.T) {
 			initial := streams.LivePreconnectSettings{Mode: "off", Profile: "auto"}
 			reader := &livePreconnectSnapshotReader{current: initial, setErr: item.err}
-			server := newTestServerWithConfig(livePreconnectHTTPConfig(), reader, nil, nil, nil)
+			server := newTestServerWithConfig(livePreconnectHTTPConfig(), reader, nil, nil)
 			response := preconnectRequest(server, http.MethodPut, "/api/v1/settings/live-preconnect", `{"mode":"always","profile":"quality"}`, "api-secret")
 			if response.Code != item.status || reader.current != initial || reader.writes != 1 {
 				t.Fatalf("response %d %s, current=%+v", response.Code, response.Body.String(), reader.current)
@@ -157,7 +157,7 @@ func TestLivePreconnectRuntimeErrors(t *testing.T) {
 }
 
 func TestLivePreconnectUnavailableRuntime(t *testing.T) {
-	server := newTestServerWithConfig(livePreconnectHTTPConfig(), stubSnapshotReader{}, nil, nil, nil)
+	server := newTestServerWithConfig(livePreconnectHTTPConfig(), stubSnapshotReader{}, nil, nil)
 	for _, method := range []string{http.MethodGet, http.MethodPut} {
 		response := preconnectRequest(server, method, "/api/v1/settings/live-preconnect", `{"mode":"off","profile":"auto"}`, "api-secret")
 		if response.Code != http.StatusServiceUnavailable {
@@ -170,7 +170,7 @@ func TestLivePreconnectWriteUsesAdminRateLimit(t *testing.T) {
 	cfg := livePreconnectHTTPConfig()
 	cfg.AdminRateLimitPerMinute, cfg.AdminRateLimitBurst = 1, 1
 	reader := &livePreconnectSnapshotReader{}
-	server := newTestServerWithConfig(cfg, reader, nil, nil, nil)
+	server := newTestServerWithConfig(cfg, reader, nil, nil)
 	const path = "/api/v1/settings/live-preconnect"
 	first := preconnectRequest(server, http.MethodPut, path, `{"mode":"always","profile":"quality"}`, "api-secret")
 	assertPreconnectResponse(t, first, streams.LivePreconnectSettings{Mode: "always", Profile: "quality"})

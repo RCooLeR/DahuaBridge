@@ -1,6 +1,8 @@
 import { css, html, LitElement, nothing, type TemplateResult } from "lit";
 import { z } from "zod";
 
+import { registerCustomCard } from "../register-card";
+
 import { SurveillancePanelActions } from "./surveillance-panel-actions";
 import {
   cameraImageSrc,
@@ -1108,14 +1110,15 @@ function ensureTileSummaryChannel(
   };
 }
 
-if (!customElements.get("dahuabridge-surveillance-tile")) {
-  customElements.define("dahuabridge-surveillance-tile", DahuaBridgeSurveillanceTileCard);
-}
-
-window.customCards = window.customCards || [];
-window.customCards.push({
-  type: "dahuabridge-surveillance-tile",
-  name: "DahuaBridge Surveillance Tile",
-  description: "Compact single-device DahuaBridge camera or VTO tile.",
-  preview: true,
-});
+registerCustomCard(
+  customElements,
+  window,
+  "dahuabridge-surveillance-tile",
+  DahuaBridgeSurveillanceTileCard,
+  {
+    type: "dahuabridge-surveillance-tile",
+    name: "DahuaBridge Surveillance Tile",
+    description: "Compact single-device DahuaBridge camera or VTO tile.",
+    preview: true,
+  },
+);

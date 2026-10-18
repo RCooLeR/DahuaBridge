@@ -83,12 +83,6 @@ type ActionReader interface {
 	RefreshNVRInventory(context.Context, string) (*dahua.ProbeResult, error)
 }
 
-type EventReader interface {
-	ListEvents(deviceID string, childID string, deviceKind dahua.DeviceKind, code string, action string, limit int) []dahua.Event
-	EventStats() map[string]any
-	ClearEvents() int
-}
-
 type Server struct {
 	httpServer *http.Server
 	logger     zerolog.Logger
@@ -103,7 +97,6 @@ func New(
 	snapshots SnapshotReader,
 	media MediaReader,
 	actions ActionReader,
-	events EventReader,
 ) *Server {
 	adminLimiter := newPerClientRateLimiter(
 		defaultPositiveInt(cfg.AdminRateLimitPerMinute, 30),

@@ -31,7 +31,7 @@ func TestAuthenticatedManifestResourceChains(t *testing.T) {
 		},
 	}
 	cfg := config.HTTPConfig{HealthPath: "/healthz", MetricsPath: "/metrics", AuthToken: token, AuthQueryToken: true}
-	server := newTestServerWithConfig(cfg, stubSnapshotReader{}, media, stubActionReader{}, stubEventReader{})
+	server := newTestServerWithConfig(cfg, stubSnapshotReader{}, media, stubActionReader{})
 	endpoint := httptest.NewServer(server.httpServer.Handler)
 	defer endpoint.Close()
 	for _, kind := range []string{"hls", "dash"} {

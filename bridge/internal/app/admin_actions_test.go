@@ -11,7 +11,6 @@ import (
 	"RCooLeR/DahuaBridge/internal/config"
 	"RCooLeR/DahuaBridge/internal/dahua"
 	"RCooLeR/DahuaBridge/internal/metrics"
-	"RCooLeR/DahuaBridge/internal/ptr"
 	"RCooLeR/DahuaBridge/internal/store"
 	"github.com/rs/zerolog"
 )
@@ -267,7 +266,7 @@ func TestAdminActionsRotateDeviceCredentials(t *testing.T) {
 			Username:       "admin",
 			Password:       "old-secret",
 			RequestTimeout: 10 * time.Second,
-			Enabled:        ptr.Bool(true),
+			Enabled:        new(true),
 		},
 	}}
 

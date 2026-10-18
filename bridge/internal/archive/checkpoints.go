@@ -12,7 +12,7 @@ const archiveBackfillWindowsPerPass = 2
 
 type eventScanProgress struct{ recentEnd, backfillBefore time.Time }
 
-func (s *SQLiteStore) loadEventScanProgress(ctx context.Context, deviceID string, channel int, code string) (eventScanProgress, error) {
+func (s *sqlStore) loadEventScanProgress(ctx context.Context, deviceID string, channel int, code string) (eventScanProgress, error) {
 	var recent, before string
 	err := s.db.QueryRowContext(ctx, `SELECT recent_end, backfill_before FROM archive_event_scan_progress WHERE device_id=? AND channel=? AND event_code=?`, deviceID, channel, code).Scan(&recent, &before)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -29,7 +29,7 @@ func (s *SQLiteStore) loadEventScanProgress(ctx context.Context, deviceID string
 	return eventScanProgress{end, backfill}, err
 }
 
-func (s *SQLiteStore) saveEventScanProgress(ctx context.Context, deviceID string, channel int, code string, state eventScanProgress) error {
+func (s *sqlStore) saveEventScanProgress(ctx context.Context, deviceID string, channel int, code string, state eventScanProgress) error {
 	statement := `INSERT INTO archive_event_scan_progress(device_id,channel,event_code,recent_end,backfill_before) VALUES(?,?,?,?,?)
 		ON CONFLICT(device_id,channel,event_code) DO UPDATE SET recent_end=excluded.recent_end,backfill_before=excluded.backfill_before`
 	if s.dialect == archiveDialectMySQL {
