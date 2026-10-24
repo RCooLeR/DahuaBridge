@@ -17,12 +17,12 @@ concurrency:
 jobs:
   bridge:
     name: Bridge Go Tests
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 20
 
     services:
       mysql:
-        image: mysql:9.7.2@sha256:e2bde46db6563855d7177adb5f0b57b9dc663f5a20927a90f4259d3312068497
+        image: mysql:9.7.4@sha256:8fb11c38b3551e22d50adbb688f027f8ff4ea2d2445aa277c1cc97b4af85ec54
         env:
           MYSQL_ROOT_PASSWORD: ci-root-password
           MYSQL_DATABASE: dahuabridge_ci
@@ -165,7 +165,7 @@ jobs:
 
   integration:
     name: Home Assistant Integration Tests
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
 
     steps:
@@ -178,10 +178,10 @@ jobs:
         run: cp -a integration/custom_components custom_components
 
       - name: Validate with hassfest
-        uses: home-assistant/actions/hassfest@cd6f3635a740c84d8a14f6121a90068b8ece6bf6 # master 2026-08-28
+        uses: home-assistant/actions/hassfest@cd6f3635a740c84d8a14f6121a90068b8ece6bf6 # master 2026-10-17
 
       - name: Set up Python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.14"
           check-latest: true
@@ -201,7 +201,7 @@ jobs:
 
   integration-real-ha:
     name: Real Home Assistant Lifecycle Tests
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 20
     steps:
       - name: Checkout
@@ -209,7 +209,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Set up Python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.14"
           cache: pip
@@ -221,7 +221,7 @@ jobs:
 
   ha-cards:
     name: HA Cards Checks (Node ${{ matrix.node-version }})
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 15
 
     strategy:
@@ -252,12 +252,12 @@ jobs:
 
       - name: Use pinned npm
         run: |
-          npm install --global --prefix "$RUNNER_TEMP/npm12" npm@12.2.0
+          npm install --global --prefix "$RUNNER_TEMP/npm12" npm@12.2.1
           echo "$RUNNER_TEMP/npm12/bin" >> "$GITHUB_PATH"
 
       - name: Install
         run: |
-          test "$(npm --version)" = "12.2.0"
+          test "$(npm --version)" = "12.2.1"
           npm ci
 
       - name: Typecheck

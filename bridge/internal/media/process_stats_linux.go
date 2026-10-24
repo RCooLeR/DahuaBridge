@@ -33,11 +33,11 @@ func readProcessUsage(pid int) (processSample, uint64, bool) {
 
 func parseProcessUsage(body string, ticks float64, pageSize uint64, now time.Time) (processSample, uint64, bool) {
 	// The process name in parentheses may itself contain spaces or parentheses.
-	end := strings.LastIndexByte(body, ')')
-	if end < 0 || ticks <= 0 {
+	_, stats, ok := strings.CutLast(body, ")")
+	if !ok || ticks <= 0 {
 		return processSample{}, 0, false
 	}
-	fields := strings.Fields(body[end+1:])
+	fields := strings.Fields(stats)
 	// fields[0] is proc stat field 3 (state): utime/stime are 14/15,
 	// starttime is 22, and RSS is 24. RSS is in pages; CPU times are ticks.
 	if len(fields) < 22 {

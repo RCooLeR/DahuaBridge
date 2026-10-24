@@ -2,7 +2,7 @@
 # check=error=true
 
 # --- Stage 1: Build the Go binary ---
-FROM golang:1.27.2-alpine3.24@sha256:f92b6ef800e499660581efdabdf25d9d817a9d124eaf900924f0504e7e27e12d AS build
+FROM golang:1.27.3-alpine3.24@sha256:b8c9b82affbbb82a020bbcf998dad2ba9516944ac7e883524642a481a9505e9c AS build
 
 RUN apk add --no-cache git ca-certificates
 
@@ -41,7 +41,7 @@ RUN --network=none \
 
 
 # --- Stage 2: Runtime image ---
-FROM ubuntu:26.04@sha256:f144425ff09be612d6d9ad965196e9cdc23dae1f42110a8a11a3e9a8198759f7
+FROM ubuntu:26.04@sha256:c098726dd9b9733f3e885f8de0ef375206a311b0a317eadc40d347b1115fb944
 
 ARG VERSION=dev
 ARG COMMIT=unknown
