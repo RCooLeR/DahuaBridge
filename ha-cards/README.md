@@ -54,7 +54,7 @@ MP4 delete controls are not used by the HA cards.
 
 ## Development
 
-The workspace requires Node.js `^22.22.2 || ^24.15.0 || >=26.0.0` and pins npm
+The workspace requires Node.js `^22.23.4 || ^24.22.1 || >=26.12.1` and pins npm
 12.2.1 for reproducible lockfile updates. CI verifies the minimum Node 22 line,
 the active Node 24 LTS line, and the current Node 26 line.
 
