@@ -22,7 +22,7 @@ jobs:
 
     services:
       mysql:
-        image: mysql:9.7.4@sha256:8fb11c38b3551e22d50adbb688f027f8ff4ea2d2445aa277c1cc97b4af85ec54
+        image: mysql:9.7.4@sha256:df90258da46f6e7ff8574ff84f17618aba0765cac749928299c69fd4e7cb8ad8
         env:
           MYSQL_ROOT_PASSWORD: ci-root-password
           MYSQL_DATABASE: dahuabridge_ci
@@ -50,7 +50,7 @@ jobs:
           persist-credentials: false
 
       - name: Set up Go
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: bridge/go.mod
           cache-dependency-path: bridge/go.sum
@@ -75,7 +75,7 @@ jobs:
       - name: Set up Node for embedded browser tests
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: "24.22.1"
+          node-version: "24.22.3"
 
       - name: Install FFmpeg for media integration tests
         run: sudo apt-get update -qq && sudo apt-get install -y ffmpeg
@@ -178,7 +178,7 @@ jobs:
         run: cp -a integration/custom_components custom_components
 
       - name: Validate with hassfest
-        uses: home-assistant/actions/hassfest@86d4564712fa02543c808e3a693dd04f9d3f8361 # master 2026-10-26
+        uses: home-assistant/actions/hassfest@07f46fd2e19967768b5fd3000f91f857452b767c # 2026.11.0
 
       - name: Set up Python
         uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
@@ -228,9 +228,9 @@ jobs:
       fail-fast: false
       matrix:
         node-version:
-          - "22.23.4"
-          - "24.22.1"
-          - "26.12.1"
+          - "22.23.5"
+          - "24.22.3"
+          - "26.13.1"
 
     defaults:
       run:
@@ -252,12 +252,12 @@ jobs:
 
       - name: Use pinned npm
         run: |
-          npm install --global --prefix "$RUNNER_TEMP/npm12" npm@12.2.1
+          npm install --global --prefix "$RUNNER_TEMP/npm12" npm@12.2.3
           echo "$RUNNER_TEMP/npm12/bin" >> "$GITHUB_PATH"
 
       - name: Install
         run: |
-          test "$(npm --version)" = "12.2.1"
+          test "$(npm --version)" = "12.2.3"
           npm ci
 
       - name: Typecheck
@@ -270,5 +270,5 @@ jobs:
         run: npm run build
 
       - name: Browser smoke
-        if: matrix.node-version == '24.22.1'
+        if: matrix.node-version == '24.22.3'
         run: npm run test:browser -- "$(command -v google-chrome)"
